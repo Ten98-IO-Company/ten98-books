@@ -1,0 +1,127 @@
+# Local development and evaluation recipe only. Plaintext env secrets are permitted for this recipe; Compose does not
+# encrypt them. The project name and host ports differ from other Ten98 stacks so both can run side by side.
+#
+# First run:
+#   pnpm run setup:local          # generates .env (random values, refuses to overwrite)
+#   docker compose up -d --build  # the one-shot migrate service applies migrations, then web and worker start
+#
+# D-03: only the migrate service holds the owner role's credentials. Web and worker connect as the application role,
+# never receive MIGRATION_DATABASE_URL and only wait for a current schema (MIGRATE_ON_START=false).
+# PostgreSQL publishes only to loopback (POSTGRES_PORT) so host-run processes can use the same database.
+name: ten98-books
+
+x-app: &app
+  image: ${TEN98_IMAGE:-ten98-books:foundation}
+  build: .
+  init: true
+  # Least privilege: the unprivileged node user, a read-only root filesystem and writable /tmp only.
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment:
+    HOST: 0.0.0.0
+    PORT: 3000
+    # Compose injects its internal database URL; the .env URLs are for host-run processes and are overridden here.
+    DATABASE_URL: postgresql://books_app:${BOOKS_APP_PASSWORD:?Run pnpm run setup:local first}@postgres:5432/books
+    APP_URL: ${APP_URL:-http://localhost:3410}
+    AUTH_SECRET: ${AUTH_SECRET:?Run pnpm run setup:local first}
+    TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+    EMAIL_TRANSPORT: ${EMAIL_TRANSPORT:-disabled}
+    EMAIL_FROM: ${EMAIL_FROM:-}
+    EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-}
+    EMAIL_SMTP_TLS: ${EMAIL_SMTP_TLS:-starttls}
+    EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-}
+    EMAIL_SMTP_USER: ${EMAIL_SMTP_USER:-}
+    EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
+    MIGRATE_ON_START: 'false'
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  migrate:
+    image: ${TEN98_IMAGE:-ten98-books:foundation}
+    build: .
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["node", "src/server/cli.ts", "migrate"]
+    environment:
+      # The only service with the owner role's credentials; it exits after applying migrations.
+      MIGRATION_DATABASE_URL: postgresql://books_migrator:${BOOKS_MIGRATOR_PASSWORD:?Run pnpm run setup:local first}@postgres:5432/books
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_USER: books_admin
+      POSTGRES_DB: books
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run pnpm run setup:local first}
+      BOOKS_MIGRATOR_PASSWORD: ${BOOKS_MIGRATOR_PASSWORD:?Run pnpm run setup:local first}
+      BOOKS_APP_PASSWORD: ${BOOKS_APP_PASSWORD:?Run pnpm run setup:local first}
+    volumes:
+      # PG18 image mountpoint (not the pre-18 /var/lib/postgresql/data).
+      - pgdata:/var/lib/postgresql
+      - ./deploy/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U books_admin -d books"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G # dev guidance, not a capacity claim
+          pids: 512
+
+  web:
+    <<: *app
+    ports:
+      - "127.0.0.1:${APP_PORT:-3410}:3000"
+    healthcheck:
+      # Local loopback fetch of the app's own readiness route only.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          pids: 256
+
+  worker:
+    <<: *app
+    command: ["node", "src/server/cli.ts", "worker"]
+    healthcheck:
+      # diagnose exits non-zero when invalid or unready; prints no secrets.
+      test: ["CMD", "node", "src/server/cli.ts", "diagnose", "worker"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          pids: 256
+
+volumes:
+  pgdata:
