@@ -4,6 +4,9 @@ import { AppBrand } from '@ten98/ui/app'
 import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { version } from '../../package.json'
+import { CompanyPicker } from '../components/CompanyPicker'
+import { ContextActionBar } from '../components/ContextActionBar'
+import { KeyboardShell } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, type AppState, type CompanySummary, type Me } from '../lib/app-context'
@@ -39,6 +42,7 @@ function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [signOutBusy, setSignOutBusy] = useState(false)
   const [appError, setAppError] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const companiesRequest = useRef(0)
 
   const unauthorized = useCallback(() => { void navigate({ to: '/' }) }, [navigate])
@@ -88,8 +92,12 @@ function AppLayout() {
   const manager = workspace.role === 'owner' || workspace.role === 'admin'
   const canCreate = manager || workspace.role === 'editor'
   const pageTitle = current?.label ?? (pathname.startsWith('/app/account') ? 'Your account' : pathname.startsWith('/app/team') ? 'Team' : pathname.startsWith('/app/companies/new') ? 'Create company' : 'Companies')
+  // Escape goes back one level, from a company page to the company menu. The menu is the top level: /app only reopens a company.
+  const back = company && pathname.toLowerCase().replace(/\/$/, '') !== base ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } }) : undefined
+  const openCompany = (id: string) => void navigate({ to: '/app/c/$companyId', params: { companyId: id } })
 
   return <AppContext value={state}><PresentationProvider userId={me.user.id} onUnauthorized={unauthorized}>
+    <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} onSwitchCompany={companies?.length ? () => setPickerOpen(true) : undefined}>
     <AppShell sidebarLabel='Application navigation' skipLinkLabel='Skip to main content' mainLabel='Main content' navigation={{ open: menuOpen, onOpenChange: setMenuOpen }}
       sidebar={<>
         <AppBrand product='Books' href='/app' />
@@ -97,7 +105,7 @@ function AppLayout() {
           workspaces={me.workspaces.map(item => ({ id: item.id, name: item.name, initials: item.name.slice(0, 2).toUpperCase(), roleLabel: `${item.role} workspace` }))}
           projects={companies} workspaceId={workspace.id} projectId={company?.id ?? null}
           onWorkspaceChange={id => { setShownWorkspace(id); void navigate({ to: '/app', search: { workspace: id } }) }}
-          onProjectChange={id => void navigate({ to: '/app/c/$companyId', params: { companyId: id } })}
+          onProjectChange={openCompany}
           create={canCreate ? { label: 'Create company', href: '/app/companies/new' } : undefined}
           labels={{ project: 'Company', noProjects: 'No companies yet', choose: 'Choose a company', loading: 'Loading companies…', noWorkspaces: 'No workspaces yet.' }} />
         {company && <SidebarNav label='Company sections' linkComponent={ShellLink} groups={groups} />}
@@ -120,8 +128,11 @@ function AppLayout() {
       </>}>
       {appError && <Alert tone='danger'>{appError}</Alert>}
       {companiesError && <Alert tone='danger'>{companiesError}</Alert>}
+      <ContextActionBar />
       <Outlet />
     </AppShell>
+    <CompanyPicker open={pickerOpen} onOpenChange={setPickerOpen} companies={companies ?? []} currentId={company?.id} onChoose={openCompany} />
+    </KeyboardShell>
   </PresentationProvider></AppContext>
 }
 

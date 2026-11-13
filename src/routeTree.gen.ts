@@ -22,6 +22,14 @@ import { Route as AppCCompanyIdMastersRouteImport } from './routes/app/c.$compan
 import { Route as AppCCompanyIdReportsRouteImport } from './routes/app/c.$companyId.reports'
 import { Route as AppCCompanyIdSettingsRouteImport } from './routes/app/c.$companyId.settings'
 import { Route as AppCCompanyIdVouchersRouteImport } from './routes/app/c.$companyId.vouchers'
+import { Route as AppCCompanyIdMastersChartOfAccountsRouteImport } from './routes/app/c.$companyId.masters_.chart-of-accounts'
+import { Route as AppCCompanyIdMastersEditRouteImport } from './routes/app/c.$companyId.masters_.edit'
+import { Route as AppCCompanyIdMastersNewRouteImport } from './routes/app/c.$companyId.masters_.new'
+import { Route as AppCCompanyIdReportsBalanceSheetRouteImport } from './routes/app/c.$companyId.reports_.balance-sheet'
+import { Route as AppCCompanyIdReportsDayBookRouteImport } from './routes/app/c.$companyId.reports_.day-book'
+import { Route as AppCCompanyIdReportsLedgerRouteImport } from './routes/app/c.$companyId.reports_.ledger'
+import { Route as AppCCompanyIdReportsProfitAndLossRouteImport } from './routes/app/c.$companyId.reports_.profit-and-loss'
+import { Route as AppCCompanyIdReportsTrialBalanceRouteImport } from './routes/app/c.$companyId.reports_.trial-balance'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -88,6 +96,53 @@ const AppCCompanyIdVouchersRoute = AppCCompanyIdVouchersRouteImport.update({
   path: '/vouchers',
   getParentRoute: () => AppCCompanyIdRoute,
 } as any)
+const AppCCompanyIdMastersChartOfAccountsRoute =
+  AppCCompanyIdMastersChartOfAccountsRouteImport.update({
+    id: '/masters_/chart-of-accounts',
+    path: '/masters/chart-of-accounts',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersEditRoute =
+  AppCCompanyIdMastersEditRouteImport.update({
+    id: '/masters_/edit',
+    path: '/masters/edit',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersNewRoute = AppCCompanyIdMastersNewRouteImport.update({
+  id: '/masters_/new',
+  path: '/masters/new',
+  getParentRoute: () => AppCCompanyIdRoute,
+} as any)
+const AppCCompanyIdReportsBalanceSheetRoute =
+  AppCCompanyIdReportsBalanceSheetRouteImport.update({
+    id: '/reports_/balance-sheet',
+    path: '/reports/balance-sheet',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsDayBookRoute =
+  AppCCompanyIdReportsDayBookRouteImport.update({
+    id: '/reports_/day-book',
+    path: '/reports/day-book',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsLedgerRoute =
+  AppCCompanyIdReportsLedgerRouteImport.update({
+    id: '/reports_/ledger',
+    path: '/reports/ledger',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsProfitAndLossRoute =
+  AppCCompanyIdReportsProfitAndLossRouteImport.update({
+    id: '/reports_/profit-and-loss',
+    path: '/reports/profit-and-loss',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsTrialBalanceRoute =
+  AppCCompanyIdReportsTrialBalanceRouteImport.update({
+    id: '/reports_/trial-balance',
+    path: '/reports/trial-balance',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -103,6 +158,14 @@ export interface FileRoutesByFullPath {
   '/app/c/$companyId/settings': typeof AppCCompanyIdSettingsRoute
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId/': typeof AppCCompanyIdIndexRoute
+  '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
+  '/app/c/$companyId/masters/edit': typeof AppCCompanyIdMastersEditRoute
+  '/app/c/$companyId/masters/new': typeof AppCCompanyIdMastersNewRoute
+  '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
+  '/app/c/$companyId/reports/ledger': typeof AppCCompanyIdReportsLedgerRoute
+  '/app/c/$companyId/reports/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
+  '/app/c/$companyId/reports/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -116,6 +179,14 @@ export interface FileRoutesByTo {
   '/app/c/$companyId/settings': typeof AppCCompanyIdSettingsRoute
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId': typeof AppCCompanyIdIndexRoute
+  '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
+  '/app/c/$companyId/masters/edit': typeof AppCCompanyIdMastersEditRoute
+  '/app/c/$companyId/masters/new': typeof AppCCompanyIdMastersNewRoute
+  '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
+  '/app/c/$companyId/reports/ledger': typeof AppCCompanyIdReportsLedgerRoute
+  '/app/c/$companyId/reports/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
+  '/app/c/$companyId/reports/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -132,6 +203,14 @@ export interface FileRoutesById {
   '/app/c/$companyId/settings': typeof AppCCompanyIdSettingsRoute
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId/': typeof AppCCompanyIdIndexRoute
+  '/app/c/$companyId/masters_/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
+  '/app/c/$companyId/masters_/edit': typeof AppCCompanyIdMastersEditRoute
+  '/app/c/$companyId/masters_/new': typeof AppCCompanyIdMastersNewRoute
+  '/app/c/$companyId/reports_/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports_/day-book': typeof AppCCompanyIdReportsDayBookRoute
+  '/app/c/$companyId/reports_/ledger': typeof AppCCompanyIdReportsLedgerRoute
+  '/app/c/$companyId/reports_/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
+  '/app/c/$companyId/reports_/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -149,6 +228,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/settings'
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId/'
+    | '/app/c/$companyId/masters/chart-of-accounts'
+    | '/app/c/$companyId/masters/edit'
+    | '/app/c/$companyId/masters/new'
+    | '/app/c/$companyId/reports/balance-sheet'
+    | '/app/c/$companyId/reports/day-book'
+    | '/app/c/$companyId/reports/ledger'
+    | '/app/c/$companyId/reports/profit-and-loss'
+    | '/app/c/$companyId/reports/trial-balance'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -162,6 +249,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/settings'
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId'
+    | '/app/c/$companyId/masters/chart-of-accounts'
+    | '/app/c/$companyId/masters/edit'
+    | '/app/c/$companyId/masters/new'
+    | '/app/c/$companyId/reports/balance-sheet'
+    | '/app/c/$companyId/reports/day-book'
+    | '/app/c/$companyId/reports/ledger'
+    | '/app/c/$companyId/reports/profit-and-loss'
+    | '/app/c/$companyId/reports/trial-balance'
   id:
     | '__root__'
     | '/'
@@ -177,6 +272,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/settings'
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId/'
+    | '/app/c/$companyId/masters_/chart-of-accounts'
+    | '/app/c/$companyId/masters_/edit'
+    | '/app/c/$companyId/masters_/new'
+    | '/app/c/$companyId/reports_/balance-sheet'
+    | '/app/c/$companyId/reports_/day-book'
+    | '/app/c/$companyId/reports_/ledger'
+    | '/app/c/$companyId/reports_/profit-and-loss'
+    | '/app/c/$companyId/reports_/trial-balance'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -278,6 +381,62 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCCompanyIdVouchersRouteImport
       parentRoute: typeof AppCCompanyIdRoute
     }
+    '/app/c/$companyId/masters_/chart-of-accounts': {
+      id: '/app/c/$companyId/masters_/chart-of-accounts'
+      path: '/masters/chart-of-accounts'
+      fullPath: '/app/c/$companyId/masters/chart-of-accounts'
+      preLoaderRoute: typeof AppCCompanyIdMastersChartOfAccountsRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/edit': {
+      id: '/app/c/$companyId/masters_/edit'
+      path: '/masters/edit'
+      fullPath: '/app/c/$companyId/masters/edit'
+      preLoaderRoute: typeof AppCCompanyIdMastersEditRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/new': {
+      id: '/app/c/$companyId/masters_/new'
+      path: '/masters/new'
+      fullPath: '/app/c/$companyId/masters/new'
+      preLoaderRoute: typeof AppCCompanyIdMastersNewRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/balance-sheet': {
+      id: '/app/c/$companyId/reports_/balance-sheet'
+      path: '/reports/balance-sheet'
+      fullPath: '/app/c/$companyId/reports/balance-sheet'
+      preLoaderRoute: typeof AppCCompanyIdReportsBalanceSheetRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/day-book': {
+      id: '/app/c/$companyId/reports_/day-book'
+      path: '/reports/day-book'
+      fullPath: '/app/c/$companyId/reports/day-book'
+      preLoaderRoute: typeof AppCCompanyIdReportsDayBookRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/ledger': {
+      id: '/app/c/$companyId/reports_/ledger'
+      path: '/reports/ledger'
+      fullPath: '/app/c/$companyId/reports/ledger'
+      preLoaderRoute: typeof AppCCompanyIdReportsLedgerRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/profit-and-loss': {
+      id: '/app/c/$companyId/reports_/profit-and-loss'
+      path: '/reports/profit-and-loss'
+      fullPath: '/app/c/$companyId/reports/profit-and-loss'
+      preLoaderRoute: typeof AppCCompanyIdReportsProfitAndLossRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/trial-balance': {
+      id: '/app/c/$companyId/reports_/trial-balance'
+      path: '/reports/trial-balance'
+      fullPath: '/app/c/$companyId/reports/trial-balance'
+      preLoaderRoute: typeof AppCCompanyIdReportsTrialBalanceRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
   }
 }
 
@@ -287,6 +446,14 @@ interface AppCCompanyIdRouteChildren {
   AppCCompanyIdSettingsRoute: typeof AppCCompanyIdSettingsRoute
   AppCCompanyIdVouchersRoute: typeof AppCCompanyIdVouchersRoute
   AppCCompanyIdIndexRoute: typeof AppCCompanyIdIndexRoute
+  AppCCompanyIdMastersChartOfAccountsRoute: typeof AppCCompanyIdMastersChartOfAccountsRoute
+  AppCCompanyIdMastersEditRoute: typeof AppCCompanyIdMastersEditRoute
+  AppCCompanyIdMastersNewRoute: typeof AppCCompanyIdMastersNewRoute
+  AppCCompanyIdReportsBalanceSheetRoute: typeof AppCCompanyIdReportsBalanceSheetRoute
+  AppCCompanyIdReportsDayBookRoute: typeof AppCCompanyIdReportsDayBookRoute
+  AppCCompanyIdReportsLedgerRoute: typeof AppCCompanyIdReportsLedgerRoute
+  AppCCompanyIdReportsProfitAndLossRoute: typeof AppCCompanyIdReportsProfitAndLossRoute
+  AppCCompanyIdReportsTrialBalanceRoute: typeof AppCCompanyIdReportsTrialBalanceRoute
 }
 
 const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
@@ -295,6 +462,16 @@ const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
   AppCCompanyIdSettingsRoute: AppCCompanyIdSettingsRoute,
   AppCCompanyIdVouchersRoute: AppCCompanyIdVouchersRoute,
   AppCCompanyIdIndexRoute: AppCCompanyIdIndexRoute,
+  AppCCompanyIdMastersChartOfAccountsRoute:
+    AppCCompanyIdMastersChartOfAccountsRoute,
+  AppCCompanyIdMastersEditRoute: AppCCompanyIdMastersEditRoute,
+  AppCCompanyIdMastersNewRoute: AppCCompanyIdMastersNewRoute,
+  AppCCompanyIdReportsBalanceSheetRoute: AppCCompanyIdReportsBalanceSheetRoute,
+  AppCCompanyIdReportsDayBookRoute: AppCCompanyIdReportsDayBookRoute,
+  AppCCompanyIdReportsLedgerRoute: AppCCompanyIdReportsLedgerRoute,
+  AppCCompanyIdReportsProfitAndLossRoute:
+    AppCCompanyIdReportsProfitAndLossRoute,
+  AppCCompanyIdReportsTrialBalanceRoute: AppCCompanyIdReportsTrialBalanceRoute,
 }
 
 const AppCCompanyIdRouteWithChildren = AppCCompanyIdRoute._addFileChildren(
