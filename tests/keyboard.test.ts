@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
-import { commandIds, commands, type CommandContext } from '../src/lib/commands.ts';
+import { commandIds, commands, keepsEscape, type CommandContext } from '../src/lib/commands.ts';
 import { browserReservedChords, keymapNames, keymaps, type KeymapName } from '../src/lib/keymaps.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
@@ -15,10 +15,15 @@ function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): Res
   }));
 }
 
-function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other') {
+function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other', disabled: readonly string[] = []) {
   const scopes = [...contexts.map(entry => ({ id: entry.replace(':focus', ''), focus: entry.endsWith(':focus') })), { id: 'global', focus: false }];
-  return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: registered(name), target })?.command.id;
+  const commandsNow = registered(name).map(command => ({ ...command, enabled: !disabled.includes(command.id) }));
+  return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: commandsNow, target })?.command.id;
 }
+
+/** A focused element as the Escape guard sees it. */
+const element = (tagName: string, extra: { type?: string; role?: string; isContentEditable?: boolean } = {}) =>
+  ({ tagName, type: extra.type, isContentEditable: extra.isContentEditable, getAttribute: (name: string) => name === 'role' ? extra.role ?? null : null });
 
 test('both keymaps bind every command, and only commands the registry defines', () => {
   for (const name of keymapNames) {
@@ -90,5 +95,27 @@ test('menu letters and menu keys run only while the menu itself has focus', () =
     assert.equal(resolve(name, 'ArrowDown', ['company-home:focus']), 'menu.next');
     assert.equal(resolve(name, 'Enter', ['company-home:focus'], 'control'), undefined, 'a focused button keeps Enter');
     assert.equal(resolve(name, 'Shift+B', ['company-home:focus']), undefined);
+  }
+});
+
+test('Escape in a text field: the engine runs nav.back there, so the shell disables it while a field keeps Escape', () => {
+  for (const name of keymapNames) {
+    // @ten98/ui 0.37.0 lets Escape run a command from a single-line field; this is why the app-side guard exists.
+    assert.equal(resolve(name, 'Escape', [], 'text'), 'nav.back');
+    assert.equal(resolve(name, 'Escape', [], 'multiline'), 'nav.back');
+    // With the guard, nav.back is disabled while the field has focus: nothing claims the key and the field keeps it.
+    assert.equal(resolve(name, 'Escape', [], 'text', ['nav.back']), undefined);
+    assert.equal(resolve(name, 'Escape', ['entry'], 'text', ['nav.back']), 'entry.cancel', 'an entry screen still decides Escape in its fields');
+  }
+});
+
+test('the Escape guard keeps Escape for text fields, selects, editable regions and comboboxes only', () => {
+  for (const kept of [element('INPUT'), element('INPUT', { type: 'search' }), element('input', { type: 'date' }), element('TEXTAREA'), element('SELECT'),
+    element('DIV', { isContentEditable: true }), element('DIV', { role: 'combobox' }), element('SPAN', { role: 'textbox' }), element('DIV', { role: 'spinbutton' })]) {
+    assert.equal(keepsEscape(kept), true, JSON.stringify(kept));
+  }
+  for (const free of [null, undefined, element('BODY'), element('UL', { role: 'menu' }), element('BUTTON'), element('A'), element('INPUT', { type: 'checkbox' }),
+    element('INPUT', { type: 'radio' }), element('INPUT', { type: 'submit' }), element('LI', { role: 'option' })]) {
+    assert.equal(keepsEscape(free), false, JSON.stringify(free));
   }
 });

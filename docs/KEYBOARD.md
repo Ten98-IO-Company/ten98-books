@@ -62,10 +62,15 @@ The one intended overlap: Escape on an entry screen is `entry.cancel`, not `nav.
 ## Behaviour
 
 - Escape goes back one level: from any company page to the company menu, where the item last opened in this tab is highlighted again and focus returns to the menu. The menu is the top level, so Escape there does nothing; elsewhere outside a company it keeps its native meaning.
+- Escape never leaves a page while a text field, select, editable region or combobox has focus, or while a dialog, popover or popup is open: those keep Escape for themselves. This is an app-side guard (`keepsEscape` in `src/lib/commands.ts`, used in `KeyboardShell.tsx`) because the `@ten98/ui` 0.37.0 resolver runs Escape commands from text fields; delete it once the engine keeps Escape with editable targets.
+- The company menu keeps `role="menu"` with an active descendant rather than links with roving focus: a focused link is a control, and the registry leaves arrows and Enter on controls to the element, so the arrows would need a second, local key handler. A badge above the menu says whether its letter keys are live; each item carries its key in `aria-keyshortcuts`, not in its name.
 - The action bar above each page lists the enabled commands registered there, except movement keys and menu letters (`bar: false`).
 - A new user gets web-safe and a non-blocking prompt on the company home; the choice is stored per user (`user_keymap`, `GET`/`PUT /api/account/keymap`).
 
 ## Open
 
 - Cross-browser key reachability (D-05) is not settled for this keymap. The `@ten98/ui` 0.37.0 reachability matrix covers F1–F10, F12, Enter, Escape, Ctrl+A, Ctrl+Enter, Ctrl+S, Ctrl+P, Alt+C, Alt+D, Alt+E, Alt+F, Alt+G and Ctrl+K in Chromium, Firefox and WebKit at the page level. Not yet measured in any engine: `Ctrl+/`, `Alt+K`, `Alt+X`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`, `Home`, `End` and the menu letters; not measured anywhere at the browser-window level (where the browser could take the key before the page): `F1`, `F3`, `F5`, `F6`, `Alt+D`, `Ctrl+A`. The keyboard-shell branch drove the home menu in one Chromium-based browser only.
+- Menu letters on non-Latin keyboard layouts: an Arabic layout sends a different character for the same physical key, so the letters do nothing there; the arrows and Enter still work. This needs the engine to match unmodified printable keys by physical key as it already does for modified ones; requested from the design system, no local workaround.
+- Coming back to the menu highlights the last item only when it was opened from the menu. Arriving any other way (sidebar, address bar, reload) highlights the first item.
+- Apple platforms: web-safe `Alt+letter` chords for entry screens are Option+letter on macOS, which types characters and dead keys. The registry cannot yet express a per-platform keymap overlay (one platform-neutral map; only `Mod` varies), so no Apple overlay is defined; requested from the design system. These keys are unverified on Apple until then.
 - `@ten98/ui` gaps noticed: `Dialog` has no initial-focus target, so the company picker opens with focus on its close button (one Tab reaches the list).

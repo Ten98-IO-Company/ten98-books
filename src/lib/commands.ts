@@ -71,3 +71,27 @@ export function isCommandId(id: string): id is CommandId {
 
 /** The definition behind a command id, widened so optional fields read uniformly. */
 export const commandOf = (id: CommandId): CommandDefinition => commands[id]
+
+/** The parts of a focused element the Escape guard reads, so tests can pass plain objects. */
+export interface FocusedElementLike {
+  readonly tagName: string
+  readonly isContentEditable?: boolean
+  readonly type?: string
+  getAttribute(name: string): string | null
+}
+
+const nonTextInputs = new Set(['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file', 'image'])
+const editableRoles = new Set(['combobox', 'textbox', 'searchbox', 'spinbutton'])
+
+/**
+ * True when the focused element uses Escape itself (a text field, select, editable region or combobox), so `nav.back`
+ * must leave the key alone. App-side guard: the `@ten98/ui` 0.37.0 resolver lets Escape run a command in a text field.
+ * Delete it, and its use in KeyboardShell.tsx, once the engine keeps Escape with editable targets.
+ */
+export function keepsEscape(element: FocusedElementLike | null | undefined): boolean {
+  if (!element) return false
+  const tag = element.tagName.toLowerCase()
+  if (tag === 'textarea' || tag === 'select' || element.isContentEditable === true) return true
+  if (tag === 'input') return !nonTextInputs.has((element.type || 'text').toLowerCase())
+  return editableRoles.has(element.getAttribute('role') ?? '')
+}

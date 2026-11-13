@@ -1,7 +1,7 @@
 import { ShortcutProvider, useCommand } from '@ten98/ui'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { commandOf, contextTitles, type CommandId } from '../lib/commands'
+import { commandOf, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
 import { defaultKeymap, keymaps, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 
@@ -14,7 +14,8 @@ export type KeyboardState = {
   chosen: boolean | null
   saving: boolean
   error: string
-  choose: (keymap: KeymapName) => Promise<void>
+  /** Saves the choice; resolves true once it is saved, false when saving failed (the error is in `error`). */
+  choose: (keymap: KeymapName) => Promise<boolean>
   openHelp: () => void
 }
 
@@ -63,8 +64,8 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
 
   const choose = useCallback(async (keymap: KeymapName) => {
     setSaving(true); setError('')
-    try { setSetting(await api<KeymapSetting>('/api/account/keymap', { method: 'PUT', body: { keymap } })) }
-    catch (cause) { if (cause instanceof ApiError && cause.status === 401) onUnauthorized(); else setError(`Could not save your keyboard shortcuts: ${errMsg(cause)}`) }
+    try { setSetting(await api<KeymapSetting>('/api/account/keymap', { method: 'PUT', body: { keymap } })); return true }
+    catch (cause) { if (cause instanceof ApiError && cause.status === 401) onUnauthorized(); else setError(`Could not save your keyboard shortcuts: ${errMsg(cause)}`); return false }
     finally { setSaving(false) }
   }, [onUnauthorized])
   const openHelp = useCallback(() => setHelpOpen(true), [])
@@ -81,9 +82,28 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   </KeyboardContext>
 }
 
+// An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
+const popupOpen = () => document.querySelector('dialog[open], :popover-open, [aria-haspopup][aria-expanded="true"], [role="combobox"][aria-expanded="true"]') !== null
+
+/** Whether the focused element keeps Escape for itself (keepsEscape), followed through focus changes. */
+function useFocusKeepsEscape() {
+  const [keeps, setKeeps] = useState(false)
+  useEffect(() => {
+    const update = () => setKeeps(keepsEscape(document.activeElement))
+    update()
+    document.addEventListener('focusin', update)
+    document.addEventListener('focusout', update)
+    return () => { document.removeEventListener('focusin', update); document.removeEventListener('focusout', update) }
+  }, [])
+  return keeps
+}
+
 function GlobalCommands({ back, onSwitchCompany, onHelp }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void }) {
+  // A disabled command leaves the key to the browser, so a text field keeps its own Escape; the run-time check covers a
+  // key pressed before the focus change has re-rendered, and popups that do not move focus.
+  const fieldKeepsEscape = useFocusKeepsEscape()
   useAppCommand('help.keyboard', onHelp)
-  useAppCommand('nav.back', () => back?.(), { enabled: back !== undefined })
+  useAppCommand('nav.back', () => { if (!keepsEscape(document.activeElement) && !popupOpen()) back?.() }, { enabled: back !== undefined && !fieldKeepsEscape })
   useAppCommand('company.switch', () => onSwitchCompany?.(), { enabled: onSwitchCompany !== undefined })
   return null
 }

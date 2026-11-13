@@ -2,11 +2,11 @@ import { Alert, Button, Card, Inline, RadioGroup, Stack, StatusLine, Text } from
 import { isKeymapName, keymapDescriptions, keymapNames, keymapTitles, type KeymapName } from '../lib/keymaps'
 import { useKeyboard } from './KeyboardShell'
 
-/** Asks once which keymap to use. It blocks nothing: the default keys work while it is shown. `onChosen` gets focus back to the page, since the prompt and its focused button go away. */
+/** Asks once which keymap to use. It blocks nothing: the default keys work while it is shown. `onChosen` runs only after a successful save, to give focus back to the page as the prompt and its focused button go away; on failure the prompt stays, with its error, and keeps focus. */
 export function KeymapPrompt({ onChosen }: { onChosen?: () => void }) {
   const { chosen, saving, error, choose } = useKeyboard()
   if (chosen !== false) return null
-  const pick = (keymap: KeymapName) => void choose(keymap).then(onChosen)
+  const pick = (keymap: KeymapName) => void choose(keymap).then(saved => { if (saved) onChosen?.() })
   return <Alert tone='info' title='Choose your keyboard shortcuts'
     actions={<Inline gap={2}>
       <Button size='sm' loading={saving} onClick={() => pick('web-safe')}>Keep web-safe keys</Button>
