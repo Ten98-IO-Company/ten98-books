@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FoundationError } from './auth.ts';
+import { getConfig } from './config.ts';
 import { assertSchema, getDatabase } from './db.ts';
 import { handleAccountSecurity } from './account-security.ts';
 import { requireWorkspaceFactor } from './teams.ts';
@@ -29,6 +30,12 @@ export async function handleApi(request: Request): Promise<Response> {
     // D-03: never serve as a role that would make row-level security inert.
     await assertRoles();
     if (path === '/api/health/ready' && request.method === 'GET') return json({ status: 'ready' });
+    // Discover's central request-forgery gate: every state-changing request must come from the application's own origin
+    // (a missing Origin is refused too). Discover applies it to POST; this API changes state only through POST, and any
+    // other non-reading method is refused here as well.
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && request.headers.get('origin') !== getConfig().appUrl) {
+      throw new FoundationError(403, 'This action must originate from the application.');
+    }
     const context = { request, url, path };
     for (const area of publicAreas) {
       const response = await area(context);

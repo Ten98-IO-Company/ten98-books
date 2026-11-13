@@ -1,12 +1,13 @@
 import type pg from 'pg';
 import { migrateOnStart as migrateOnStartSetting } from '@ten98/runtime';
-import { getConfig } from './config.ts';
+import { postgresUrl } from './config.ts';
 import { createPool, getDatabase, migrationLedger } from './db.ts';
 import { assertDatabaseRoles, DatabaseRoleError } from './tenancy.ts';
 
-// Web and worker apply pending migrations themselves before serving or working (MIGRATE_ON_START, default on), through the
-// migrator role. The shared runner holds the database's one advisory lock, so only one process migrates at a time; the
-// others wait for the lock and then find nothing pending. No external request is made here.
+// `cli.ts migrate` applies pending migrations as the migrator role. In local development a web or worker process may do the
+// same before starting (MIGRATE_ON_START, default on) when it has MIGRATION_DATABASE_URL; deployed web and worker run with
+// MIGRATE_ON_START=false and never hold the owner role. The shared runner holds the database's one advisory lock, so only
+// one process migrates at a time. No external request is made here.
 
 /** Bound for the connect, the lock wait plus the migration, and for the opt-out schema wait. */
 export const startupMigrationTimeoutMs = 5 * 60_000;
@@ -43,7 +44,8 @@ function startupError(error: unknown, generic: string): unknown {
  * `cli.ts migrate` and both startup paths use this one routine.
  */
 export async function migrateDatabase({ pool, ledger = migrationLedger, timeoutMs = startupMigrationTimeoutMs, log = console.log }: MigrationOptions = {}): Promise<readonly string[]> {
-  const url = getConfig().migrationDatabaseUrl;
+  // The only reader of the owner role's URL; it is never part of getConfig().
+  const url = pool ? undefined : postgresUrl('MIGRATION_DATABASE_URL');
   if (!pool && !url) throw new StartupError('MIGRATION_DATABASE_URL is required to apply migrations; it connects as the migrator role that owns the tables.');
   const migrator = pool ?? createPool(url!, { max: 2 });
   try {

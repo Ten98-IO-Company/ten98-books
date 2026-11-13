@@ -29,7 +29,8 @@ export async function listCompanies(userId: string, workspaceId: string): Promis
 }
 
 export function getCompany(userId: string, companyId: string): Promise<Company> {
-  return withCompany(userId, companyId, 'read', client => readCompany(client, companyId));
+  // The scope and the read use the canonical id withCompany authorized, never the raw route text.
+  return withCompany(userId, companyId, 'read', (client, access) => readCompany(client, access.companyId));
 }
 
 /** Discover's project-create flow plus the company's books settings, in one transaction. */

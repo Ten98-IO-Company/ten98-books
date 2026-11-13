@@ -10,6 +10,7 @@ import { clientRateKey, clientRateLimit, emailLimitKey } from './client-rate-lim
 import { getDatabase } from './db.ts';
 import { getEmailStatus, sendTransactionalEmail } from './email.ts';
 import { readJson } from './validation.ts';
+import { toJson } from './api/http.ts';
 import { accountPreferencesDefaults, accountPreferencesDtoSchema, accountPreferencesInputSchema, accountPreferencesMaxRevision, type AccountPreferencesDto } from '../lib/account-preferences.ts';
 
 // Per-minute counts shared with the other Ten98 apps; `limit` counts in one-minute windows (windowSeconds).
@@ -41,10 +42,11 @@ function parsed<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   return result.data;
 }
 
+/** Copies only the identity library's cookies from `source`; the body goes through the app's one JSON writer. */
 function json(body: unknown, status = 200, source?: Response): Response {
-  const headers = new Headers({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  const headers = new Headers({ 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
   for (const cookie of source?.headers.getSetCookie() ?? []) headers.append('set-cookie', cookie);
-  return Response.json(body, { status, headers });
+  return new Response(toJson(body), { status, headers });
 }
 
 type Limit = (key: string, maximum: number) => Promise<void>;
@@ -142,7 +144,6 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       if (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0') throw new FoundationError(400, 'Read recovery availability without a request body.');
       return json({ configured: getEmailStatus().configured });
     }
-    if (request.headers.get('origin') !== getConfig().appUrl) throw new FoundationError(403, 'This action must originate from the application.');
     await limit(clientRateKey(request, `password-recovery:${asking ? 'request' : 'reset'}`), asking ? limits.resetRequestPerClient : limits.resetPerClient);
     const input = await readJson(request);
     if (asking) {
@@ -202,7 +203,6 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   const mutation = Object.hasOwn(accountInputs, path);
   if (!signIn && !challenge && !status && !mutation) return null;
   if (request.method !== (status ? 'GET' : 'POST')) return json({ error: 'Method not allowed.' }, 405);
-  if (!status && request.headers.get('origin') !== getConfig().appUrl) throw new FoundationError(403, 'This action must originate from the application.');
   const input = status ? undefined : await readJson(request);
 
   if (signIn) {
@@ -333,7 +333,6 @@ async function handleAccountPreferences(request: Request, limit: Limit): Promise
   if (!['GET', 'POST'].includes(request.method)) { const response = json({ error: 'Method not allowed.' }, 405); response.headers.set('allow', 'GET, POST'); return response; }
   if (new URL(request.url).search) throw new FoundationError(400, 'Account preferences do not accept query parameters.');
   const writing = request.method === 'POST';
-  if (writing && request.headers.get('origin') !== getConfig().appUrl) throw new FoundationError(403, 'This action must originate from the application.');
   if (!writing && (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0')) throw new FoundationError(400, 'Read account preferences without a request body.');
   const input = writing ? parsed(accountPreferencesInputSchema, await readJson(request)) : null;
   const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });

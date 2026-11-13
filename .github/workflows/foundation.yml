@@ -37,10 +37,9 @@ jobs:
       BASE_URL: http://127.0.0.1:3000
       HOST: 127.0.0.1
       PORT: '3000'
-      # The two roles of D-03: web, worker and tests connect as books_app; only migrations use books_migrator.
+      # The two roles of D-03: web, worker and tests connect as books_app. The owner role's URL is given only to the
+      # steps that migrate (the integration tests and the separate migrate step), never to the running web and worker.
       DATABASE_URL: postgres://books_app@127.0.0.1:5432/books_ci
-      MIGRATION_DATABASE_URL: postgres://books_migrator@127.0.0.1:5432/books_ci
-      TEST_ADMIN_DATABASE_URL: postgres://books_admin@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,13 +80,22 @@ jobs:
           pnpm test
       - name: Integration tests against PostgreSQL as the application role
         shell: bash
+        env:
+          MIGRATION_DATABASE_URL: postgres://books_migrator@127.0.0.1:5432/books_ci
+          TEST_ADMIN_DATABASE_URL: postgres://books_admin@127.0.0.1:5432/postgres
         run: pnpm test:integration
-      - name: Real web and worker start
+      - name: Migrate as the owner role
+        shell: bash
+        env:
+          MIGRATION_DATABASE_URL: postgres://books_migrator@127.0.0.1:5432/books_ci
+        run: pnpm migrate
+      - name: Real web and worker start without the owner role
         shell: bash
         env:
           NODE_ENV: production
+          MIGRATE_ON_START: 'false'
         run: |
-          pnpm migrate
+          test -z "${MIGRATION_DATABASE_URL:-}"
           node src/server/cli.ts start-web >"$RUNNER_TEMP/books-web.log" 2>&1 &
           web_pid=$!
           node src/server/cli.ts worker >"$RUNNER_TEMP/books-worker.log" 2>&1 &

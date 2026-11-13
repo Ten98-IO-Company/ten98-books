@@ -30,6 +30,7 @@ COPY --from=build --chown=node:node /app/src/lib ./src/lib
 COPY --from=build --chown=node:node /app/migrations ./migrations
 USER node
 EXPOSE 3000
-# start-web applies pending migrations as the migrator under the advisory lock (MIGRATE_ON_START, default true),
-# checks the application role (D-03), then loads .output/server/index.mjs; any failure exits non-zero without serving.
+# start-web waits for a current schema (Compose sets MIGRATE_ON_START=false and migrates in its one-shot migrate
+# service, the only holder of MIGRATION_DATABASE_URL), checks the application role (D-03), then loads
+# .output/server/index.mjs; any failure exits non-zero without serving.
 CMD ["node", "src/server/cli.ts", "start-web"]

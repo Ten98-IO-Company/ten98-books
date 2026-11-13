@@ -24,13 +24,17 @@ export async function setCompanyScope(client: PoolClient, companyIds: readonly s
   await client.query("SELECT set_config('app.company_ids', $1, true)", [companyIds.join(',')]);
 }
 
-/** Discover's projectAccess check, taken inside the transaction: the project row is share-locked until commit. */
+/**
+ * Discover's projectAccess check, taken inside the transaction. The project row and the caller's membership row are
+ * share-locked until commit (the team controller's caller-membership convention), so a removal or demotion waits for
+ * an in-flight company transaction and cannot commit between this check and its writes.
+ */
 async function companyAccess(client: PoolClient, userId: string, companyId: string, mode: CompanyMode): Promise<CompanyAccess> {
   if (!uuid.test(companyId)) throw new FoundationError(404, companyNotFound);
   const { rows } = await client.query<{ id: string; workspace_id: string; name: string; role: WorkspaceRole }>(
     `SELECT p.id, p.workspace_id, p.name, m.role FROM project p
      JOIN membership m ON m.workspace_id = p.workspace_id AND m.user_id = $2
-     WHERE p.id = $1 FOR SHARE OF p`, [companyId.toLowerCase(), userId],
+     WHERE p.id = $1 FOR SHARE OF p, m`, [companyId.toLowerCase(), userId],
   );
   const row = rows[0];
   if (!row || (mode === 'write' && !writers.includes(row.role))) throw new FoundationError(404, companyNotFound);
@@ -71,19 +75,33 @@ export class DatabaseRoleError extends Error {
 }
 
 /**
+ * The one company policy every accounting table must carry, as PostgreSQL stores it in pg_policies with whitespace,
+ * parentheses and `::text` casts removed (so only deparse formatting is ignored, never the expression):
+ *   company_id = ANY (string_to_array(current_setting('app.company_ids', true), ','))
+ */
+const companyPolicy = "company_id=ANYstring_to_arraycurrent_setting'app.company_ids',true,','";
+const deparseNoise = String.raw`[\s()]|::text(\[\])?`;
+
+/**
  * Boot and test assertion (D-03): the connected role is not a superuser, cannot bypass row-level security, neither owns
- * nor is a member of the owner of any application table, and every accounting table forces row-level security.
- * Without this the policies are silently inert.
+ * nor is a member of the owner of any application table, and every accounting table forces row-level security with
+ * exactly one policy, the company policy, for every command and role (USING and WITH CHECK). Without this the policies
+ * are silently inert or could be widened by an extra permissive policy.
  */
 export async function assertDatabaseRoles(pool: pg.Pool | PoolClient, tables: readonly string[] = accountingTables): Promise<void> {
-  const { rows } = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean; owned: string[]; unforced: string[] }>(
+  const { rows } = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean; owned: string[]; unforced: string[]; unpolicied: string[] }>(
     `SELECT r.rolsuper, r.rolbypassrls,
        ARRAY(SELECT c.relname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND pg_has_role(current_user, c.relowner, 'MEMBER') ORDER BY 1) AS owned,
        ARRAY(SELECT t FROM unnest($1::text[]) t WHERE NOT EXISTS (
                SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-               WHERE n.nspname = 'public' AND c.relname = t AND c.relkind = 'r' AND c.relrowsecurity AND c.relforcerowsecurity) ORDER BY 1) AS unforced
-     FROM pg_roles r WHERE r.rolname = current_user`, [tables],
+               WHERE n.nspname = 'public' AND c.relname = t AND c.relkind = 'r' AND c.relrowsecurity AND c.relforcerowsecurity) ORDER BY 1) AS unforced,
+       ARRAY(SELECT t FROM unnest($1::text[]) t WHERE NOT (
+               (SELECT count(*) FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = t) = 1
+               AND EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = t
+                 AND p.cmd = 'ALL' AND p.permissive = 'PERMISSIVE' AND p.roles = '{public}'::name[]
+                 AND regexp_replace(p.qual, $2, '', 'g') = $3 AND regexp_replace(p.with_check, $2, '', 'g') = $3)) ORDER BY 1) AS unpolicied
+     FROM pg_roles r WHERE r.rolname = current_user`, [tables, deparseNoise, companyPolicy],
   );
   const role = rows[0];
   const problems = !role ? ['the connected role was not found'] : [
@@ -91,6 +109,7 @@ export async function assertDatabaseRoles(pool: pg.Pool | PoolClient, tables: re
     ...role.rolbypassrls ? ['it bypasses row-level security'] : [],
     ...role.owned.length ? [`it owns or inherits the owner of ${role.owned.join(', ')}`] : [],
     ...role.unforced.length ? [`row-level security is not enabled and forced on ${role.unforced.join(', ')}`] : [],
+    ...role.unpolicied.length ? [`the company policy is missing, altered or accompanied by another policy on ${role.unpolicied.join(', ')}`] : [],
   ];
   if (problems.length) throw new DatabaseRoleError(problems);
 }

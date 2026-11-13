@@ -78,6 +78,7 @@ test('creating a company persists its books settings; invalid currency, time zon
   const read = await session.call(`/api/companies/${created.body.company.id}`);
   assert.equal(read.status, 200);
   assert.deepEqual(read.body, created.body);
+  assert.deepEqual(await session.call(`/api/companies/${created.body.company.id.toUpperCase()}`), read, 'an uppercase id reads the same company');
   assert.deepEqual((await session.call(`/api/workspaces/${workspaceId}/companies`)).body, { companies: [{ id: created.body.company.id, name: company.name }] });
 
   const projects = await count('SELECT count(*) FROM project');
@@ -94,4 +95,29 @@ test('creating a company persists its books settings; invalid currency, time zon
     assert.equal(refused.body.error, message);
   }
   assert.equal(await count('SELECT count(*) FROM project'), projects, 'a refused company leaves no project behind');
+});
+
+test('state-changing requests from another origin or without an Origin header are refused before any work', async () => {
+  const session = browser();
+  await session.call('/api/auth/sign-in/email', { email: owner.email, password: owner.password });
+  const workspaceId = (await session.call('/api/me')).body.workspaces[0].id as string;
+  const [projects, workspaces, invitations] = [await count('SELECT count(*) FROM project'), await count('SELECT count(*) FROM workspace'), await count('SELECT count(*) FROM workspace_invitation')];
+  for (const origin of ['https://attacker.example', 'http://localhost:1', null]) {
+    for (const [path, body] of [
+      [`/api/workspaces/${workspaceId}/companies`, company],
+      ['/api/workspaces', { name: 'Forged workspace' }],
+      [`/api/workspaces/${workspaceId}/invitations`, { email: `forged-${randomUUID()}@books.test`, role: 'viewer' }],
+      ['/api/invitations/accept', { token: 'a'.repeat(43), name: 'Forged', password: 'correct horse battery staple' }],
+      ['/api/auth/sign-in/email', { email: owner.email, password: owner.password }],
+      ['/api/auth/sign-out', {}],
+    ] as const) {
+      const refused = await session.call(path, body, origin);
+      assert.equal(refused.status, 403, `${path} from ${origin}`);
+      assert.deepEqual(refused.body, { error: 'This action must originate from the application.' });
+    }
+  }
+  assert.equal(await count('SELECT count(*) FROM project'), projects);
+  assert.equal(await count('SELECT count(*) FROM workspace'), workspaces);
+  assert.equal(await count('SELECT count(*) FROM workspace_invitation'), invitations);
+  assert.equal((await session.call('/api/me')).status, 200, 'the forged sign-out did not end the session');
 });

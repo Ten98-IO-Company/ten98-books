@@ -32,7 +32,7 @@ function appUrlOrigin(raw: string): string {
   }
 }
 
-function postgresUrl(name: string, env: NodeJS.ProcessEnv): string | undefined {
+export function postgresUrl(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const value = environmentValue(name, env);
   if (value !== undefined && !['postgres:', 'postgresql:'].includes(new URL(value).protocol)) throw new Error(`${name} must be a PostgreSQL URL`);
   return value;
@@ -44,9 +44,10 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env) {
   if (env.BETTER_AUTH_TELEMETRY && !['0', 'false'].includes(env.BETTER_AUTH_TELEMETRY.trim().toLowerCase())) throw new Error('BETTER_AUTH_TELEMETRY is not supported; Books never sends telemetry');
   trustedProxies(env);
   const appUrl = appUrlOrigin(env.APP_URL ?? 'http://localhost:3000');
-  // Two roles (D-03): DATABASE_URL is the non-owner application role used by web and worker; MIGRATION_DATABASE_URL is
-  // the owner role, used only to apply migrations. Without it the processes wait for an operator-run migration.
+  // Two roles (D-03): DATABASE_URL is the non-owner application role used by web and worker. The owner role's
+  // MIGRATION_DATABASE_URL is deliberately not part of this configuration; only migrateDatabase reads it, and the
+  // Compose web and worker services never receive it (a one-shot migrate service does).
   const databaseUrl = postgresUrl('DATABASE_URL', env);
   if (!databaseUrl) throw new Error('A PostgreSQL DATABASE_URL is required');
-  return { appUrl, databaseUrl, migrationDatabaseUrl: postgresUrl('MIGRATION_DATABASE_URL', env), authSecret: secret('AUTH_SECRET', env) };
+  return { appUrl, databaseUrl, authSecret: secret('AUTH_SECRET', env) };
 }

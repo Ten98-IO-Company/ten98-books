@@ -53,11 +53,12 @@ export class Browser {
   private readonly appUrl: string;
   constructor(handle: (request: Request) => Promise<Response>, appUrl: string) { this.handle = handle; this.appUrl = appUrl; }
 
-  async call(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<{ status: number; body: any }> {
+  /** GET without a body, POST with one. `origin` defaults to the application's own; null sends no Origin header. */
+  async call(path: string, body?: unknown, origin: string | null = this.appUrl): Promise<{ status: number; body: any }> {
     const headers = new Headers();
     if (this.cookies.size) headers.set('cookie', [...this.cookies].map(([name, value]) => `${name}=${value}`).join('; '));
-    if (body !== undefined) { headers.set('content-type', 'application/json'); headers.set('origin', this.appUrl); }
-    const response = await this.handle(new Request(new URL(path, this.appUrl), { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+    if (body !== undefined) { headers.set('content-type', 'application/json'); if (origin !== null) headers.set('origin', origin); }
+    const response = await this.handle(new Request(new URL(path, this.appUrl), { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
     for (const cookie of response.headers.getSetCookie()) {
       const [pair] = cookie.split(';');
       const index = pair.indexOf('=');

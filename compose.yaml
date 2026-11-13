@@ -3,9 +3,11 @@
 #
 # First run:
 #   pnpm run setup:local          # generates .env (random values, refuses to overwrite)
-#   docker compose up -d --build  # web and worker each apply pending migrations before starting (advisory-locked)
+#   docker compose up -d --build  # the one-shot migrate service applies migrations, then web and worker start
 #
-# PostgreSQL publishes only to loopback (POSTGRES_PORT) so host-run web and worker can use the same database.
+# D-03: only the migrate service holds the owner role's credentials. Web and worker connect as the application role,
+# never receive MIGRATION_DATABASE_URL and only wait for a current schema (MIGRATE_ON_START=false).
+# PostgreSQL publishes only to loopback (POSTGRES_PORT) so host-run processes can use the same database.
 name: ten98-books
 
 x-app: &app
@@ -21,9 +23,8 @@ x-app: &app
   environment:
     HOST: 0.0.0.0
     PORT: 3000
-    # Compose injects its internal database URLs; the .env URLs are for host-run processes and are overridden here.
+    # Compose injects its internal database URL; the .env URLs are for host-run processes and are overridden here.
     DATABASE_URL: postgresql://books_app:${BOOKS_APP_PASSWORD:?Run pnpm run setup:local first}@postgres:5432/books
-    MIGRATION_DATABASE_URL: postgresql://books_migrator:${BOOKS_MIGRATOR_PASSWORD:?Run pnpm run setup:local first}@postgres:5432/books
     APP_URL: ${APP_URL:-http://localhost:3410}
     AUTH_SECRET: ${AUTH_SECRET:?Run pnpm run setup:local first}
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
@@ -34,12 +35,30 @@ x-app: &app
     EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-}
     EMAIL_SMTP_USER: ${EMAIL_SMTP_USER:-}
     EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
-    MIGRATE_ON_START: ${MIGRATE_ON_START:-true}
+    MIGRATE_ON_START: 'false'
   depends_on:
-    postgres:
-      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
 
 services:
+  migrate:
+    image: ${TEN98_IMAGE:-ten98-books:foundation}
+    build: .
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["node", "src/server/cli.ts", "migrate"]
+    environment:
+      # The only service with the owner role's credentials; it exits after applying migrations.
+      MIGRATION_DATABASE_URL: postgresql://books_migrator:${BOOKS_MIGRATOR_PASSWORD:?Run pnpm run setup:local first}@postgres:5432/books
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   postgres:
     image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     environment:
