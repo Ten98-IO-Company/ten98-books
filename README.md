@@ -7,4 +7,8 @@ Web accounting for GCC businesses on the Ten98 stack: double-entry books, invent
 
 `main` is production, `dev` is staging; feature branches start from `dev`.
 
+## Run locally
+
+Node 24 and Docker. `corepack pnpm install`, then `pnpm setup:local` (writes a private `.env`) and `docker compose up -d --build`; open http://localhost:3410 and create the owner account. For development, run only the database (`docker compose up -d postgres`), then `pnpm migrate` and `pnpm dev` (same address). Checks: `pnpm test`, `pnpm test:integration` (needs the Compose database), `pnpm build`.
+
 MIT licensed; see [LICENSE](LICENSE).

@@ -1,0 +1,100 @@
+name: Foundation checks
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_USER: books_admin
+          POSTGRES_DB: books_ci
+          # Only this fresh hosted-runner service uses trust, bound to loopback. Not a deployment example.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U books_admin -d books_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_URL: http://localhost:3000
+      BASE_URL: http://127.0.0.1:3000
+      HOST: 127.0.0.1
+      PORT: '3000'
+      # The two roles of D-03: web, worker and tests connect as books_app; only migrations use books_migrator.
+      DATABASE_URL: postgres://books_app@127.0.0.1:5432/books_ci
+      MIGRATION_DATABASE_URL: postgres://books_migrator@127.0.0.1:5432/books_ci
+      TEST_ADMIN_DATABASE_URL: postgres://books_admin@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+          package-manager-cache: false
+      - name: Prepare isolated configuration, roles and dependencies
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto';
+          import { appendFileSync } from 'node:fs';
+          for (const key of ['AUTH_SECRET', 'BOOKS_MIGRATOR_PASSWORD', 'BOOKS_APP_PASSWORD']) {
+            const value = randomBytes(32).toString('hex');
+            console.log(`::add-mask::${value}`);
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          NODE
+      - name: Create the database roles
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          POSTGRES_USER: books_admin
+          POSTGRES_DB: books_ci
+        run: sh deploy/postgres/init-roles.sh
+      - name: Install
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.19.0 --activate
+          pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build, typecheck and unit tests
+        shell: bash
+        run: |
+          pnpm build
+          pnpm test
+      - name: Integration tests against PostgreSQL as the application role
+        shell: bash
+        run: pnpm test:integration
+      - name: Real web and worker start
+        shell: bash
+        env:
+          NODE_ENV: production
+        run: |
+          pnpm migrate
+          node src/server/cli.ts start-web >"$RUNNER_TEMP/books-web.log" 2>&1 &
+          web_pid=$!
+          node src/server/cli.ts worker >"$RUNNER_TEMP/books-worker.log" 2>&1 &
+          worker_pid=$!
+          trap 'kill $web_pid $worker_pid 2>/dev/null || true' EXIT
+          if ! timeout 60s bash -c 'until curl --fail --silent --max-time 2 "$BASE_URL/api/health/ready" >/dev/null && node src/server/cli.ts diagnose worker >/dev/null 2>&1; do sleep 1; done'; then
+            tail -n 80 "$RUNNER_TEMP/books-web.log" "$RUNNER_TEMP/books-worker.log"
+            exit 1
+          fi
+          node src/server/cli.ts diagnose worker

@@ -1,0 +1,17 @@
+node_modules
+.git
+.env
+.env.*
+data
+.output
+dist
+coverage
+test-results
+.claude
+private
+secrets
+*.dump
+*.pem
+*.key
+*.log
+docs
