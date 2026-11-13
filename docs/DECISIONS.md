@@ -31,7 +31,7 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 ## D-04 Ledger model
 
 - **Decision (L2).** `voucher` header + `voucher_line` (ledger, Dr/Cr) + `inventory_line`. Money is `BIGINT` minor units with a per-currency `minor_units` (2 or 3; changing it needs a migration). Each line stores transaction-currency and base-currency amounts already rounded, plus the FX rate. Quantities, unit rates and FX rates are `NUMERIC`. Tax is rounded where the country rule says (per line or per document), recorded on the tax configuration. Vouchers are editable and deletable, with an always-on append-only revision log and soft delete; masters are logged the same way. A voucher locks when its e-invoice is cleared/reported or its date falls in a locked period. Voucher numbers come from locked counter rows per company, voucher type and series; counters are taken last in the posting transaction, in a fixed order (voucher series, then e-invoice counter), and posting transactions stay short. Opening balances and year-end carry-forward are computed at report time; a fixture of about three years and 500,000 lines is the benchmark that decides when a maintained period-balance table is added.
-- **Disclosed flow difference.** Deleting a voucher never renumbers later vouchers; renumbering conflicts with e-invoice counter chains.
+- **Numbering (amended 2026-11-14 after observation on a licensed install).** Automatic numbering never reuses or renumbers: a deleted voucher leaves a permanent gap, an altered voucher keeps its number when its date changes, and a voucher inserted on an earlier date takes the next free number. This matches the observed default of the reference workflow, so it is no longer a disclosed difference. A cancelled voucher keeps its number and its row and has no accounting effect. An optional voucher takes no number and stays out of the books until it is made regular. Renumber-on-insert and manual numbering are not offered; renumbering conflicts with e-invoice counter chains.
 - **Rejected.** Immutable reversal-only ledger (breaks the alter/delete flow). Float or `NUMERIC` money. Sequences for numbering (not gapless).
 - **Risk.** Back-dated stock edits force revaluation of later issues: weighted average and FIFO only at first, with a recompute job and regression fixtures.
 - **Reversal trigger.** Regulator or auditor guidance requiring immutability at posting.
@@ -74,6 +74,15 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
   - **API.** JSON through `handleApi`, zod at the boundary, money as strings, an idempotency key on every create that posts.
   - **Tests.** `node --test` against a real PostgreSQL 18 connected as the non-owner role; golden accounting fixtures (debits equal credits, trial balance sums to zero); a wrong-company negative test per handler module.
 - **Confidence.** Medium-high.
+
+## D-10 Default chart of accounts and voucher types
+
+- **Decision (L2, 2026-11-14).** A new company is seeded with a default chart: 15 primary groups, each with a nature (asset, liability, income or expense), 13 sub-groups, and two ledgers (cash, and the profit and loss account), plus the eight accounting voucher types of M1 (contra, payment, receipt, journal, sales, purchase, credit note, debit note). The hierarchy and the accounting behaviour follow what accountants from desktop software expect; the names are ordinary accounting terms in our own wording. Every seeded row carries a stable `system_key`; behaviour (cash and bank handling, party ledgers, tax ledgers, stock, the profit and loss transfer, voucher-type rules) hangs on the key, never on the name, so users can rename and translate freely and seeded rows cannot be deleted. One seeding routine serves company creation and the backfill of existing companies.
+- **Ledger opening balances** are entered per ledger as of the books-beginning date and may be out of balance while a company is being set up; the trial balance shows the difference instead of blocking entry.
+- **Rationale.** Later features (bank reconciliation, receivables, tax, stock valuation, import) need to recognise groups reliably; names are user data. Functional categories are not expression (D-06), wording is.
+- **Rejected.** Matching on names. An empty chart. A country-specific statutory chart in M1.
+- **Reversal trigger.** Interview evidence that GCC accountants expect a statutory chart by default.
+- **Confidence.** Medium-high. Reviewed with the ledger core change that implements it.
 
 ## Open owner decisions (L3)
 
