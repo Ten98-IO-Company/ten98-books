@@ -46,7 +46,7 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 
 ## D-06 Clean room
 
-- **Decision (L2, binding on every session).** Reimplement behaviour, never expression. No third-party product code, help text, screenshots, icons, sample data, screen artwork or product names in source, UI copy, tests or public docs. Reference notes (requirement rows, flow notes, market and legal research) stay outside this repository. Reference products are studied only on installs the owner holds licences for, by observing ordinary use; observers write behaviour in their own words, and implementers work from those notes. Import features read only files a user exported from their own system.
+- **Decision (L2, binding on every session).** Reimplement behaviour, never expression. No third-party product code, help text, screenshots, icons, sample data, screen artwork or product names in source, UI copy, tests or public docs. Reference notes (requirement rows, flow notes, market and legal research) stay outside this repository. Reference products are studied only under licences and vendor permissions the owner holds; analysts write behaviour in their own words outside this repository, and implementers work from those notes, never from vendor code or text. Import features read only files a user exported from their own system.
 - **Rationale.** Functionality and workflows may be reimplemented; expression and marks may not.
 - **Reversal trigger.** Written advice from counsel.
 - **Confidence.** Medium (not legal advice).
