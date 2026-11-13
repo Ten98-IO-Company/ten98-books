@@ -28,7 +28,8 @@ const sections = [
 function AppLayout() {
   const navigate = useNavigate()
   const search = Route.useSearch()
-  const { companyId } = useParams({ strict: false }) as { companyId?: string }
+  // Company ids are lowercase UUIDs; a pasted uppercase address names the same company.
+  const companyId = (useParams({ strict: false }) as { companyId?: string }).companyId?.toLowerCase()
   const pathname = useRouterState({ select: state => state.location.pathname })
   const [me, setMe] = useState<Me | null>(null)
   const [loadError, setLoadError] = useState('')

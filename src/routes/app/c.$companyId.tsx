@@ -9,7 +9,8 @@ import type { Company } from '../../lib/company'
 export const Route = createFileRoute('/app/c/$companyId')({ component: CompanyLayout })
 
 function CompanyLayout() {
-  const { companyId } = Route.useParams()
+  // The server answers with the lowercase id whatever the address used, so compare in that form.
+  const companyId = Route.useParams().companyId.toLowerCase()
   const { showWorkspace, unauthorized } = useApp()
   const [company, setCompany] = useState<Company | null>(null)
   const [error, setError] = useState<{ missing: boolean; message: string } | null>(null)
