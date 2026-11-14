@@ -102,10 +102,14 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
     throw new FoundationError(400, `Debits (${formatMoney(debit, company.exponent)}) and credits (${formatMoney(credit, company.exponent)}) must be equal.`);
   }
 
+  // Key-share the ledgers in id order before anything else locks them: a concurrent nature change locks the same rows
+  // in the same order (and waits for this posting), so the two never deadlock.
+  const ledgerIds = [...new Set(lines.map(line => line.ledgerId))].sort();
+  await client.query('SELECT 1 FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR KEY SHARE', [company.companyId, ledgerIds]);
   const { rows } = await client.query<{ id: string; cash_bank: boolean }>(
     `WITH RECURSIVE ${groupTreeSql}
      SELECT l.id, coalesce(t.cash_bank, false) AS cash_bank FROM ledger l LEFT JOIN tree t ON t.id = l.group_id
-     WHERE l.company_id = $1 AND l.id = ANY($2::uuid[])`, [company.companyId, [...new Set(lines.map(line => line.ledgerId))]]);
+     WHERE l.company_id = $1 AND l.id = ANY($2::uuid[])`, [company.companyId, ledgerIds]);
   const cashBank = new Map(rows.map(row => [row.id, row.cash_bank]));
   const missing = lines.find(line => !cashBank.has(line.ledgerId));
   if (missing) throw new FoundationError(400, `The ledger on line ${missing.lineNo} was not found in this company.`);

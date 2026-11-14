@@ -106,10 +106,22 @@ async function subGroups(context: LedgerContext, groupId: string): Promise<Accou
 }
 
 /**
+ * One change to the company's group tree, or to which group a ledger is in, at a time (the database trigger takes the
+ * same lock). Taken first in a transaction, before any row lock, so concurrent changes queue instead of deadlocking.
+ */
+const lockGroupTree = (context: LedgerContext) => context.client.query('SELECT ledger_group_tree_lock($1)', [context.company.companyId]);
+
+/**
  * D-10: a group's nature cannot change while its sub-tree holds a built-in group or ledger, or a ledger with posted
- * lines or an opening balance; reclassify by moving those ledgers to another group instead.
+ * lines or an opening balance; reclassify by moving those ledgers to another group instead. The sub-tree's ledger rows
+ * are locked first, in id order (the order postings take them in): a posting still in flight holds a key-share lock
+ * on its ledgers, so this waits for it and the check below then sees its lines.
  */
 async function assertNatureChangeable(context: LedgerContext, groupId: string): Promise<void> {
+  await context.client.query(
+    `WITH RECURSIVE tree(id) AS (
+       SELECT $2::uuid UNION ALL SELECT g.id FROM account_group g JOIN tree t ON g.company_id = $1 AND g.parent_id = t.id)
+     SELECT 1 FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM tree) ORDER BY l.id FOR UPDATE OF l`, [context.company.companyId, groupId]);
   const { rows } = await context.client.query<{ held: boolean }>(
     `WITH RECURSIVE tree(id) AS (
        SELECT $2::uuid UNION ALL SELECT g.id FROM account_group g JOIN tree t ON g.company_id = $1 AND g.parent_id = t.id)
@@ -121,8 +133,7 @@ async function assertNatureChangeable(context: LedgerContext, groupId: string): 
 
 export async function alterGroup(context: LedgerContext, groupId: string, value: unknown): Promise<AccountGroup> {
   const input = parseInput(groupAlterInput, value, groupFields);
-  // One tree change per company at a time, taken before any row lock so concurrent moves queue instead of deadlocking.
-  await context.client.query('SELECT ledger_group_tree_lock($1)', [context.company.companyId]);
+  await lockGroupTree(context);
   const before = await readGroup(context, groupId, true);
   if (before.revision !== input.revision) throw conflict('group');
   const place = await placeGroup(context, input, before);
@@ -203,6 +214,7 @@ async function ledgerGroup(context: LedgerContext, groupId: string | null): Prom
 
 export async function createLedger(context: LedgerContext, value: unknown): Promise<Ledger> {
   const input = parseInput(ledgerCreateInput, value, ledgerFields);
+  await lockGroupTree(context);
   const group = await ledgerGroup(context, input.groupId);
   const opening = parseOpening(context, input.opening);
   if (opening.amount !== 0n) assertOpeningOpen(context);
@@ -216,6 +228,7 @@ export async function createLedger(context: LedgerContext, value: unknown): Prom
 
 export async function alterLedger(context: LedgerContext, ledgerId: string, value: unknown): Promise<Ledger> {
   const input = parseInput(ledgerAlterInput, value, ledgerFields);
+  await lockGroupTree(context);
   const before = await readLedger(context, ledgerId, true);
   if (before.revision !== input.revision) throw conflict('ledger');
   let groupId: string | null = null;

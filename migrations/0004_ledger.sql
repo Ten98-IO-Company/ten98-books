@@ -64,7 +64,9 @@ CREATE TABLE voucher_type (
   revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (company_id, id),
-  UNIQUE (company_id, system_key)
+  UNIQUE (company_id, system_key),
+  -- A series exists only as its voucher type's series: vouchers and counters reference the pair (C, review 2).
+  UNIQUE (company_id, id, numbering_series)
 );
 CREATE UNIQUE INDEX voucher_type_name_idx ON voucher_type (company_id, lower(name));
 
@@ -76,7 +78,7 @@ CREATE TABLE voucher_counter (
   series text NOT NULL,
   last_number integer NOT NULL CHECK (last_number > 0),
   PRIMARY KEY (company_id, voucher_type_id, series),
-  FOREIGN KEY (company_id, voucher_type_id) REFERENCES voucher_type (company_id, id) ON DELETE CASCADE
+  FOREIGN KEY (company_id, voucher_type_id, series) REFERENCES voucher_type (company_id, id, numbering_series) ON DELETE CASCADE
 );
 
 -- Vouchers are never physically deleted by the application (no DELETE grant): deletion sets deleted_at.
@@ -100,7 +102,7 @@ CREATE TABLE voucher (
   deleted_by text,
   deleted_at timestamptz,
   PRIMARY KEY (company_id, id),
-  FOREIGN KEY (company_id, voucher_type_id) REFERENCES voucher_type (company_id, id),
+  FOREIGN KEY (company_id, voucher_type_id, series) REFERENCES voucher_type (company_id, id, numbering_series),
   UNIQUE (company_id, voucher_type_id, series, number),
   UNIQUE (company_id, idempotency_key),
   CHECK ((deleted_at IS NULL) = (deleted_by IS NULL))
@@ -236,6 +238,14 @@ BEGIN
     RETURN OLD;
   END IF;
   PERFORM ledger_assert_scope(NEW.company_id);
+  -- A ledger entering or changing a group takes the company's group-tree lock, so it cannot race a move or a nature
+  -- change of that group: whichever transaction runs second waits, then checks against what the first committed.
+  IF TG_OP = 'INSERT' OR NEW.group_id IS DISTINCT FROM OLD.group_id THEN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'ledgers change group in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'ledger_cash_family';
+    END IF;
+    PERFORM ledger_group_tree_lock(NEW.company_id);
+  END IF;
   IF TG_OP = 'UPDATE' AND OLD.system_key IS NOT NULL AND NEW.group_id IS DISTINCT FROM OLD.group_id AND (
     SELECT nature FROM account_group WHERE company_id = NEW.company_id AND id = NEW.group_id) IS DISTINCT FROM (
     SELECT nature FROM account_group WHERE company_id = OLD.company_id AND id = OLD.group_id) THEN
@@ -259,6 +269,21 @@ BEGIN
   RETURN NEW;
 END $$;
 CREATE TRIGGER voucher_counter_guard BEFORE INSERT OR UPDATE ON voucher_counter FOR EACH ROW EXECUTE FUNCTION voucher_counter_guard();
+
+-- Checked at commit for every advance of a counter: the number it issued belongs to a voucher of that type and series.
+-- Each advance is its own event with its own value, so advancing twice for one voucher fails too. A counter therefore
+-- never moves past a number without a voucher row; the only gaps are numbers of deleted vouchers, whose rows remain.
+CREATE FUNCTION voucher_counter_assert_used() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF NOT EXISTS (SELECT 1 FROM voucher v WHERE v.company_id = NEW.company_id AND v.voucher_type_id = NEW.voucher_type_id
+      AND v.series = NEW.series AND v.number = NEW.last_number) THEN
+    RAISE EXCEPTION 'voucher counter advanced to % without a voucher', NEW.last_number USING ERRCODE = '23514', CONSTRAINT = 'voucher_counter_sequence';
+  END IF;
+  RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER voucher_counter_used AFTER INSERT OR UPDATE ON voucher_counter DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION voucher_counter_assert_used();
 
 -- Voucher lifecycle: a number is set only to the value its type and series counter issued in this same transaction
 -- (the counter row was written by this transaction: its xmin is ours) and never changes afterwards; a deleted voucher

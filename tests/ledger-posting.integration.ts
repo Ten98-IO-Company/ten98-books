@@ -105,28 +105,28 @@ test('the database itself refuses an unbalanced or single-line voucher and a cha
   assert.equal(Number(lines.rows[0].count), 2);
 });
 
-test('numbers are gapless under 20 concurrent posts and never reused or renumbered after delete, alter or a back-dated entry', async () => {
+test('numbers are gapless under 50 concurrent posts and never reused or renumbered after delete, alter or a back-dated entry', async () => {
   const cash = books.ledger('Cash');
   const type = books.type('receipt');
-  const posted = await Promise.all(Array.from({ length: 20 }, (_, index) =>
+  const posted = await Promise.all(Array.from({ length: 50 }, (_, index) =>
     owner.browser.call(url(), voucherBody(type, '2026-03-01', [[ids.sales, 'Cr', String(index + 1)], [cash, 'Dr', String(index + 1)]]))));
   assert.ok(posted.every(response => response.status === 201), JSON.stringify(posted.find(response => response.status !== 201)?.body));
   const numbers = posted.map(response => response.body.voucher.number as number).sort((a, b) => a - b);
-  assert.deepEqual(numbers, Array.from({ length: 20 }, (_, index) => index + 1), 'one to twenty, no duplicates, no gaps');
+  assert.deepEqual(numbers, Array.from({ length: 50 }, (_, index) => index + 1), 'one to fifty, no duplicates, no gaps');
 
-  const highest = posted.find(response => response.body.voucher.number === 20)!.body.voucher;
+  const highest = posted.find(response => response.body.voucher.number === 50)!.body.voucher;
   assert.equal((await owner.browser.call(url(`/${highest.id}/delete`), { revision: highest.revision })).status, 200);
   const afterDelete = await post(owner.browser, companyId, type, '2026-03-02', [[ids.sales, 'Cr', '5'], [cash, 'Dr', '5']]);
-  assert.equal(afterDelete.number, 21, 'the deleted number stays a gap');
+  assert.equal(afterDelete.number, 51, 'the deleted number stays a gap');
 
   const altered = await owner.browser.call(url(`/${afterDelete.id}`), { date: '2026-01-15', narration: null, status: 'regular', postDated: false, revision: afterDelete.revision, lines: [{ ledgerId: ids.sales, side: 'Cr', amount: '6' }, { ledgerId: cash, side: 'Dr', amount: '6' }] });
   assert.equal(altered.status, 200, JSON.stringify(altered.body));
-  assert.deepEqual([altered.body.voucher.number, altered.body.voucher.date, altered.body.voucher.total, altered.body.voucher.revision], [21, '2026-01-15', '6.00', 2], 'an altered voucher keeps its number when its date moves');
+  assert.deepEqual([altered.body.voucher.number, altered.body.voucher.date, altered.body.voucher.total, altered.body.voucher.revision], [51, '2026-01-15', '6.00', 2], 'an altered voucher keeps its number when its date moves');
 
   const backDated = await post(owner.browser, companyId, type, '2026-01-02', [[ids.sales, 'Cr', '7'], [cash, 'Dr', '7']]);
-  assert.equal(backDated.number, 22, 'an earlier date takes the next free number; nothing is renumbered');
+  assert.equal(backDated.number, 52, 'an earlier date takes the next free number; nothing is renumbered');
   const stored = await asAdmin(database.adminUrl, admin => admin.query<{ number: number }>(`SELECT number FROM voucher WHERE company_id = $1 AND voucher_type_id = $2 ORDER BY number`, [companyId, type]));
-  assert.deepEqual(stored.rows.map(row => row.number), Array.from({ length: 22 }, (_, index) => index + 1), 'the deleted voucher keeps its row and number');
+  assert.deepEqual(stored.rows.map(row => row.number), Array.from({ length: 52 }, (_, index) => index + 1), 'the deleted voucher keeps its row and number');
 });
 
 test('cancelled and optional vouchers have no accounting effect; a post-dated voucher counts from its date', async () => {
