@@ -539,3 +539,21 @@ test('row and record actions on the bottom bar are Alt chords, bar letters, acce
   const rowActions = classicReserved.filter(entry => /line|row:/i.test(entry.purpose)).flatMap(entry => entry.keys).filter(key => key !== 'Space');
   assert.ok(rowActions.length >= 6 && rowActions.every(key => key.startsWith('Alt+')), rowActions.join());
 });
+
+test('the cost reports open from a focused menu by their letters in both keymaps, which nothing else there holds', () => {
+  for (const name of keymapNames) {
+    assert.equal(resolve(name, 'Y', ['company-home:focus']), 'report.open.cost-category-summary', name);
+    assert.equal(resolve(name, 'U', ['company-home:focus']), 'report.open.cost-centre-breakup', name);
+    assert.equal(resolve(name, 'Y', ['company-home:focus'], 'text'), undefined, 'typing in a field never opens a report');
+    assert.equal(resolve(name, 'U', ['report']), undefined, 'a menu letter does nothing on a report');
+    const holders = (Object.keys(keymaps[name]) as CommandId[]).filter(id => commands[id].context === 'company-home' && [keymaps[name][id]].flat().some(key => key === 'Y' || key === 'U'));
+    assert.deepEqual(holders.sort(), ['report.open.cost-category-summary', 'report.open.cost-centre-breakup'], name);
+  }
+  for (const entry of classicReserved.filter(item => item.context === 'company-home')) assert.ok(!entry.keys.includes('Y') && !entry.keys.includes('U'), 'not a reserved menu letter');
+});
+
+test('docs/KEYBOARD.md states the parity counts the code has', () => {
+  const doc = readFileSync(new URL('../docs/KEYBOARD.md', import.meta.url), 'utf8');
+  const count = (status: string) => Object.values(classicParity).filter(entry => entry.status === status).length;
+  assert.ok(doc.includes(`Counts: ${count('same')} same, ${count('alternate')} alternate, ${count('ours')} ours, over ${commandIds.length} commands.`), 'the counts line matches classicParity');
+});

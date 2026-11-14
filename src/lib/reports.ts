@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { financialYearOf } from './company.ts';
 import { calendarDate, type Nature, type Side, type VoucherKind, type VoucherStatus } from './ledger.ts';
+import type { CostCategorySummary, CostCentreBreakup, CostFigures } from './cost-centres.ts';
+import type { Wire } from './money.ts';
 
 /**
  * The M1 reports' shared vocabulary: query schemas (zod at the API boundary), the shapes the server returns and pure
@@ -212,3 +214,105 @@ export const popCursor = (stack: readonly string[]): readonly string[] => stack.
 const cursorList = /^[A-Za-z0-9_-]{1,120}(\.[A-Za-z0-9_-]{1,120}){0,199}$/;
 export const readCursorStack = (text: unknown): readonly string[] => typeof text === 'string' && cursorList.test(text) ? text.split('.') : [];
 export const writeCursorStack = (stack: readonly string[]): string | undefined => stack.length ? stack.join('.') : undefined;
+
+/** A line of the cost category summary screen: each category with its figures, then its top-level centres one level in. */
+export type CostSummaryLine = {
+  key: string; kind: 'category' | 'centre'; id: string; name: string; depth: 0 | 1;
+  opening: string; debit: string; credit: string; closing: string;
+};
+
+/** The summary's categories and centres as table lines in the server's order, keyed `k:` (category) and `c:` (centre). */
+export function costSummaryLines(report: Wire<CostCategorySummary>): CostSummaryLine[] {
+  const figures = ({ opening, debit, credit, closing }: Wire<CostFigures>) => ({ opening, debit, credit, closing });
+  return report.categories.flatMap((category): CostSummaryLine[] => [
+    { key: `k:${category.categoryId}`, kind: 'category', id: category.categoryId, name: category.name, depth: 0, ...figures(category) },
+    ...category.centres.map((centre): CostSummaryLine => ({ key: `c:${centre.costCentreId}`, kind: 'centre', id: centre.costCentreId, name: centre.name, depth: 1, ...figures(centre) })),
+  ]);
+}
+
+/** The table key of a break-up line: `c:` for a sub-centre, `l:` for a ledger (ids alone could be equal across the two). */
+export const costBreakupKey = (row: { kind: 'centre' | 'ledger'; id: string }) => `${row.kind === 'centre' ? 'c' : 'l'}:${row.id}`;
+
+/** What a report screen shows apart from its period and view. Drilling to another subject on the same route is another level. */
+export const reportSubject = (search: { group?: string; ledger?: string; voucher?: string; centre?: string }) =>
+  [search.group, search.ledger, search.voucher, search.centre].map(value => value ?? '').join('|');
+
+/** A screen's highlighted line, with the subject and the address's `hl` it was last synced with. */
+export type HighlightState = { subject: string; hl: string | undefined; highlight: string | undefined };
+
+/**
+ * The highlight after the address changed. Another subject (a drill on the same route) takes the address's `hl`; so does
+ * a new `hl` on the same subject (back to a level whose highlight the drill-down trail wrote). An `hl` that only went
+ * away (a period change clears it) keeps the line the user moved to. Returns `state` itself when nothing changed, so a
+ * screen can compare by identity.
+ */
+export function syncHighlight(state: HighlightState, subject: string, hl: string | undefined): HighlightState {
+  if (subject === state.subject && hl === state.hl) return state;
+  if (subject === state.subject && hl === undefined) return { subject, hl, highlight: state.highlight };
+  return { subject, hl, highlight: hl };
+}
+
+/** Search parameters that change how a level is shown, not which level it is: a drill-down trail ignores them. */
+const transientParameters = ['hl', 'pages', 'from', 'to', 'detail', 'zeros'];
+
+/**
+ * A report address as a drill-down level: the path (any case) and its subject parameters in a stable order, without the
+ * highlight, the register page, the period or the view, so a level whose period or page changed after the drill is
+ * still found in the trail.
+ */
+export function reportLevel(href: string): string {
+  const url = new URL(href, 'http://report.invalid');
+  for (const name of transientParameters) url.searchParams.delete(name);
+  url.searchParams.sort();
+  return `${url.pathname.toLowerCase()}?${url.searchParams}`;
+}
+
+/** Loaded report data, shown only for the subject it was read for (a period change keeps it on screen while it reloads). */
+export const dataForSubject = <T>(loaded: { subject: string | undefined; data: T | null }, subject: string | undefined): T | null =>
+  loaded.subject === subject ? loaded.data : null;
+
+/** Where a line of a cost report leads, as a report route and its subject (the period carries over). */
+export type CostDrill =
+  | { report: 'cost-centre-breakup'; search: { centre: string } }
+  | { report: 'ledger-vouchers'; search: { ledger: string; fromCentre: string } };
+
+/** A summary line opens its centre's break-up; a category line leads nowhere. */
+export const costSummaryTarget = (line: Pick<CostSummaryLine, 'kind' | 'id'>): CostDrill | null =>
+  line.kind === 'centre' ? { report: 'cost-centre-breakup', search: { centre: line.id } } : null;
+
+/** A break-up line opens a sub-centre's break-up, or the ledger's vouchers marked as reached from `centreId`'s break-up. */
+export const costBreakupTarget = (row: { kind: 'centre' | 'ledger'; id: string }, centreId: string): CostDrill =>
+  row.kind === 'centre' ? { report: 'cost-centre-breakup', search: { centre: row.id } } : { report: 'ledger-vouchers', search: { ledger: row.id, fromCentre: centreId } };
+
+/** The break-up's line under the title: the category, and what a ledger's figures mean here. */
+export function costBreakupSummary(report: Pick<Wire<CostCentreBreakup>, 'centre' | 'rows'>): string {
+  if (!report.rows.length) return `Category: ${report.centre.categoryName}. No amounts in this period.`;
+  const ledgers = report.rows.some(row => row.kind === 'ledger');
+  return `Category: ${report.centre.categoryName}.${ledgers ? ' A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers for the period, for every centre.' : ''}`;
+}
+
+/** The centres the break-up's chooser lists for the typed text: a part of the name or the second-language name, any case. */
+export function matchingCentres<T extends { name: string; secondLanguageName: string | null }>(centres: readonly T[], text: string): T[] {
+  const words = text.trim().toLowerCase();
+  return centres.filter(row => !words || row.name.toLowerCase().includes(words) || (row.secondLanguageName?.toLowerCase().includes(words) ?? false));
+}
+
+/** The notice on a ledger's vouchers reached from a cost centre break-up (`fromCentre`): they are not filtered by centre. */
+export const centreOriginNotice = (search: { fromCentre?: string }): string | null => search.fromCentre
+  ? 'Opened from a cost centre break-up. These are all of the ledger’s vouchers for the period, for every cost centre and those without one, so the totals are the ledger’s, not the centre’s.'
+  : null;
+
+/** Where the voucher view goes back to without a drill-down trail: the ledger's vouchers it came from (keeping the break-up it was reached from), else its day in the day book. */
+export function voucherParent(search: { from?: string; to?: string; ledger?: string; fromCentre?: string }, date: string):
+  { report: 'ledger-vouchers'; search: { from?: string; to?: string; ledger: string; fromCentre?: string } } | { report: 'day-book'; search: { from: string; to: string } } {
+  return search.ledger
+    ? { report: 'ledger-vouchers', search: { from: search.from, to: search.to, ledger: search.ledger, ...search.fromCentre ? { fromCentre: search.fromCentre } : {} } }
+    : { report: 'day-book', search: { from: date, to: date } };
+}
+
+/** Where a ledger's vouchers go back to without a drill-down trail: the break-up they came from, else the ledger's monthly summary. */
+export function ledgerVouchersParent(search: { from?: string; to?: string; ledger?: string; fromCentre?: string }):
+  { report: 'cost-centre-breakup'; search: { from?: string; to?: string; centre: string } } | { report: 'ledger-monthly'; search: { from?: string; to?: string; ledger: string } } | null {
+  if (search.fromCentre) return { report: 'cost-centre-breakup', search: { from: search.from, to: search.to, centre: search.fromCentre } };
+  return search.ledger ? { report: 'ledger-monthly', search: { from: search.from, to: search.to, ledger: search.ledger } } : null;
+}

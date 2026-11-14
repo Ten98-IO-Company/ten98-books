@@ -85,6 +85,8 @@ export const commands = {
   'report.export': { title: 'Export as CSV', context: 'report' },
   'report.print': { title: 'Print', context: 'report' },
   'report.open.group-summary': { title: 'Group summary', context: 'company-home', bar: false },
+  'report.open.cost-category-summary': { title: 'Cost category summary', context: 'company-home', bar: false },
+  'report.open.cost-centre-breakup': { title: 'Cost centre break-up', context: 'company-home', bar: false },
 
   // Masters screens: moving through and opening a list, and the history of one master.
   'list.next': { title: 'Highlight the next row', context: 'list', bar: false },
