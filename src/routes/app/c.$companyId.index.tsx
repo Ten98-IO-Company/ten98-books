@@ -25,6 +25,8 @@ const destinations = [
   { group: 'Reports', command: 'home.profit-and-loss', to: '/app/c/$companyId/reports/profit-and-loss' },
   { group: 'Reports', command: 'home.trial-balance', to: '/app/c/$companyId/reports/trial-balance' },
   { group: 'Reports', command: 'home.ledger', to: '/app/c/$companyId/reports/ledger' },
+  { group: 'Reports', command: 'report.open.cost-category-summary', to: '/app/c/$companyId/reports/cost-category-summary' },
+  { group: 'Reports', command: 'report.open.cost-centre-breakup', to: '/app/c/$companyId/reports/cost-centre-breakup' },
 ] as const satisfies readonly { group: string; command: CommandId; to: string; write?: true }[]
 
 /** The item last opened per company in this tab, so going back highlights it again. */

@@ -25,6 +25,8 @@ import { Route as AppCCompanyIdVouchersRouteImport } from './routes/app/c.$compa
 import { Route as AppCCompanyIdMastersChartOfAccountsRouteImport } from './routes/app/c.$companyId.masters_.chart-of-accounts'
 import { Route as AppCCompanyIdMastersCostCentresRouteImport } from './routes/app/c.$companyId.masters_.cost-centres'
 import { Route as AppCCompanyIdReportsBalanceSheetRouteImport } from './routes/app/c.$companyId.reports_.balance-sheet'
+import { Route as AppCCompanyIdReportsCostCategorySummaryRouteImport } from './routes/app/c.$companyId.reports_.cost-category-summary'
+import { Route as AppCCompanyIdReportsCostCentreBreakupRouteImport } from './routes/app/c.$companyId.reports_.cost-centre-breakup'
 import { Route as AppCCompanyIdReportsDayBookRouteImport } from './routes/app/c.$companyId.reports_.day-book'
 import { Route as AppCCompanyIdReportsGroupSummaryRouteImport } from './routes/app/c.$companyId.reports_.group-summary'
 import { Route as AppCCompanyIdReportsLedgerRouteImport } from './routes/app/c.$companyId.reports_.ledger'
@@ -129,6 +131,18 @@ const AppCCompanyIdReportsBalanceSheetRoute =
   AppCCompanyIdReportsBalanceSheetRouteImport.update({
     id: '/reports_/balance-sheet',
     path: '/reports/balance-sheet',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsCostCategorySummaryRoute =
+  AppCCompanyIdReportsCostCategorySummaryRouteImport.update({
+    id: '/reports_/cost-category-summary',
+    path: '/reports/cost-category-summary',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdReportsCostCentreBreakupRoute =
+  AppCCompanyIdReportsCostCentreBreakupRouteImport.update({
+    id: '/reports_/cost-centre-breakup',
+    path: '/reports/cost-centre-breakup',
     getParentRoute: () => AppCCompanyIdRoute,
   } as any)
 const AppCCompanyIdReportsDayBookRoute =
@@ -281,6 +295,8 @@ export interface FileRoutesByFullPath {
   '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
   '/app/c/$companyId/masters/cost-centres': typeof AppCCompanyIdMastersCostCentresRoute
   '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports/cost-category-summary': typeof AppCCompanyIdReportsCostCategorySummaryRoute
+  '/app/c/$companyId/reports/cost-centre-breakup': typeof AppCCompanyIdReportsCostCentreBreakupRoute
   '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
   '/app/c/$companyId/reports/ledger': typeof AppCCompanyIdReportsLedgerRoute
@@ -319,6 +335,8 @@ export interface FileRoutesByTo {
   '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
   '/app/c/$companyId/masters/cost-centres': typeof AppCCompanyIdMastersCostCentresRoute
   '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports/cost-category-summary': typeof AppCCompanyIdReportsCostCategorySummaryRoute
+  '/app/c/$companyId/reports/cost-centre-breakup': typeof AppCCompanyIdReportsCostCentreBreakupRoute
   '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
   '/app/c/$companyId/reports/ledger': typeof AppCCompanyIdReportsLedgerRoute
@@ -360,6 +378,8 @@ export interface FileRoutesById {
   '/app/c/$companyId/masters_/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
   '/app/c/$companyId/masters_/cost-centres': typeof AppCCompanyIdMastersCostCentresRoute
   '/app/c/$companyId/reports_/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
+  '/app/c/$companyId/reports_/cost-category-summary': typeof AppCCompanyIdReportsCostCategorySummaryRoute
+  '/app/c/$companyId/reports_/cost-centre-breakup': typeof AppCCompanyIdReportsCostCentreBreakupRoute
   '/app/c/$companyId/reports_/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports_/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
   '/app/c/$companyId/reports_/ledger': typeof AppCCompanyIdReportsLedgerRoute
@@ -402,6 +422,8 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/masters/chart-of-accounts'
     | '/app/c/$companyId/masters/cost-centres'
     | '/app/c/$companyId/reports/balance-sheet'
+    | '/app/c/$companyId/reports/cost-category-summary'
+    | '/app/c/$companyId/reports/cost-centre-breakup'
     | '/app/c/$companyId/reports/day-book'
     | '/app/c/$companyId/reports/group-summary'
     | '/app/c/$companyId/reports/ledger'
@@ -440,6 +462,8 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/masters/chart-of-accounts'
     | '/app/c/$companyId/masters/cost-centres'
     | '/app/c/$companyId/reports/balance-sheet'
+    | '/app/c/$companyId/reports/cost-category-summary'
+    | '/app/c/$companyId/reports/cost-centre-breakup'
     | '/app/c/$companyId/reports/day-book'
     | '/app/c/$companyId/reports/group-summary'
     | '/app/c/$companyId/reports/ledger'
@@ -480,6 +504,8 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/masters_/chart-of-accounts'
     | '/app/c/$companyId/masters_/cost-centres'
     | '/app/c/$companyId/reports_/balance-sheet'
+    | '/app/c/$companyId/reports_/cost-category-summary'
+    | '/app/c/$companyId/reports_/cost-centre-breakup'
     | '/app/c/$companyId/reports_/day-book'
     | '/app/c/$companyId/reports_/group-summary'
     | '/app/c/$companyId/reports_/ledger'
@@ -622,6 +648,20 @@ declare module '@tanstack/react-router' {
       path: '/reports/balance-sheet'
       fullPath: '/app/c/$companyId/reports/balance-sheet'
       preLoaderRoute: typeof AppCCompanyIdReportsBalanceSheetRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/cost-category-summary': {
+      id: '/app/c/$companyId/reports_/cost-category-summary'
+      path: '/reports/cost-category-summary'
+      fullPath: '/app/c/$companyId/reports/cost-category-summary'
+      preLoaderRoute: typeof AppCCompanyIdReportsCostCategorySummaryRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/reports_/cost-centre-breakup': {
+      id: '/app/c/$companyId/reports_/cost-centre-breakup'
+      path: '/reports/cost-centre-breakup'
+      fullPath: '/app/c/$companyId/reports/cost-centre-breakup'
+      preLoaderRoute: typeof AppCCompanyIdReportsCostCentreBreakupRouteImport
       parentRoute: typeof AppCCompanyIdRoute
     }
     '/app/c/$companyId/reports_/day-book': {
@@ -790,6 +830,8 @@ interface AppCCompanyIdRouteChildren {
   AppCCompanyIdMastersChartOfAccountsRoute: typeof AppCCompanyIdMastersChartOfAccountsRoute
   AppCCompanyIdMastersCostCentresRoute: typeof AppCCompanyIdMastersCostCentresRoute
   AppCCompanyIdReportsBalanceSheetRoute: typeof AppCCompanyIdReportsBalanceSheetRoute
+  AppCCompanyIdReportsCostCategorySummaryRoute: typeof AppCCompanyIdReportsCostCategorySummaryRoute
+  AppCCompanyIdReportsCostCentreBreakupRoute: typeof AppCCompanyIdReportsCostCentreBreakupRoute
   AppCCompanyIdReportsDayBookRoute: typeof AppCCompanyIdReportsDayBookRoute
   AppCCompanyIdReportsGroupSummaryRoute: typeof AppCCompanyIdReportsGroupSummaryRoute
   AppCCompanyIdReportsLedgerRoute: typeof AppCCompanyIdReportsLedgerRoute
@@ -824,6 +866,10 @@ const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
     AppCCompanyIdMastersChartOfAccountsRoute,
   AppCCompanyIdMastersCostCentresRoute: AppCCompanyIdMastersCostCentresRoute,
   AppCCompanyIdReportsBalanceSheetRoute: AppCCompanyIdReportsBalanceSheetRoute,
+  AppCCompanyIdReportsCostCategorySummaryRoute:
+    AppCCompanyIdReportsCostCategorySummaryRoute,
+  AppCCompanyIdReportsCostCentreBreakupRoute:
+    AppCCompanyIdReportsCostCentreBreakupRoute,
   AppCCompanyIdReportsDayBookRoute: AppCCompanyIdReportsDayBookRoute,
   AppCCompanyIdReportsGroupSummaryRoute: AppCCompanyIdReportsGroupSummaryRoute,
   AppCCompanyIdReportsLedgerRoute: AppCCompanyIdReportsLedgerRoute,

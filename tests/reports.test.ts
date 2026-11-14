@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -79,4 +80,90 @@ test('the cursor stack of a register round-trips through the address; anything e
   for (const text of [undefined, '', 'a..b', '.a', 'a.', 'a b', 'a/b', 7, ['a'], 'x'.repeat(121), Array.from({ length: 201 }, () => 'a').join('.')]) {
     assert.deepEqual(readCursorStack(text), [], JSON.stringify(text)?.slice(0, 40));
   }
+});
+
+test('the cost category summary becomes table lines: each category, then its top-level centres one level in, keys kept apart', () => {
+  const figures = (closing: string) => ({ opening: '0.00', debit: closing, credit: '0.00', closing });
+  const lines = costSummaryLines({ from: '2026-01-01', to: '2026-01-31', categories: [
+    { categoryId: 'a1', name: 'Area', ...figures('70.00'), centres: [{ costCentreId: 'c1', name: 'North', ...figures('50.00') }, { costCentreId: 'c2', name: 'South', ...figures('20.00') }] },
+    { categoryId: 'b1', name: 'Projects', ...figures('5.00'), centres: [{ costCentreId: 'c3', name: 'Roof', ...figures('5.00') }] },
+  ] });
+  assert.deepEqual(lines.map(line => [line.key, line.kind, line.depth, line.name, line.closing]), [
+    ['k:a1', 'category', 0, 'Area', '70.00'], ['c:c1', 'centre', 1, 'North', '50.00'], ['c:c2', 'centre', 1, 'South', '20.00'],
+    ['k:b1', 'category', 0, 'Projects', '5.00'], ['c:c3', 'centre', 1, 'Roof', '5.00'],
+  ]);
+  assert.deepEqual(costSummaryLines({ from: '2026-01-01', to: '2026-01-31', categories: [] }), []);
+  // A sub-centre and a ledger with the same id stay two lines.
+  assert.notEqual(costBreakupKey({ kind: 'centre', id: 'x' }), costBreakupKey({ kind: 'ledger', id: 'x' }));
+});
+
+test('the highlight follows the address when the subject or its hl changes, and keeps the user\'s line otherwise', () => {
+  const parent = reportSubject({ centre: 'a' }), child = reportSubject({ centre: 'b' });
+  assert.notEqual(parent, child);
+  assert.equal(reportSubject({ centre: 'a' }), reportSubject({ centre: 'a', ledger: undefined }));
+  const opened = { subject: parent, hl: undefined, highlight: undefined };
+  const moved = { ...opened, highlight: 'l:x' };
+  assert.equal(syncHighlight(moved, parent, undefined), moved, 'the same level keeps the line moved to');
+  const drilled = syncHighlight(moved, child, undefined);
+  assert.deepEqual(drilled.highlight, undefined, 'a drill on the same route starts the child at its first line');
+  const back = syncHighlight(drilled, parent, 'c:b');
+  assert.equal(back.highlight, 'c:b', 'back restores the hl the trail wrote');
+  // Down twice after coming back, then a period change clears hl from the address: the moved-to line stays.
+  const afterPeriod = syncHighlight({ ...back, highlight: 'l:y' }, parent, undefined);
+  assert.deepEqual(afterPeriod, { subject: parent, hl: undefined, highlight: 'l:y' });
+  assert.equal(syncHighlight(afterPeriod, parent, undefined), afterPeriod, 'then nothing changes');
+  assert.equal(syncHighlight({ ...back, highlight: 'l:y' }, child, undefined).highlight, undefined, 'another subject without hl starts at the top');
+  // Data read for one subject is never shown for another; a period change (same subject) keeps it.
+  assert.equal(dataForSubject({ subject: parent, data: [1] }, child), null);
+  assert.deepEqual(dataForSubject({ subject: parent, data: [1] }, parent), [1]);
+});
+
+test('cost report lines: which open, what they open, the chooser filter and the not-filtered notice', () => {
+  assert.equal(costSummaryTarget({ kind: 'category', id: 'k' }), null, 'a category leads nowhere');
+  assert.deepEqual(costSummaryTarget({ kind: 'centre', id: 'c1' }), { report: 'cost-centre-breakup', search: { centre: 'c1' } });
+  assert.deepEqual(costBreakupTarget({ kind: 'centre', id: 'c2' }, 'c1'), { report: 'cost-centre-breakup', search: { centre: 'c2' } });
+  assert.deepEqual(costBreakupTarget({ kind: 'ledger', id: 'l1' }, 'c1'), { report: 'ledger-vouchers', search: { ledger: 'l1', fromCentre: 'c1' } });
+
+  const centre = { id: 'c1', name: 'North', categoryId: 'k', categoryName: 'Area' };
+  const row = (kind: 'centre' | 'ledger') => ({ kind, id: 'x', name: 'x', opening: '0.00', debit: '1.00', credit: '0.00', closing: '1.00' });
+  assert.equal(costBreakupSummary({ centre, rows: [] }), 'Category: Area. No amounts in this period.');
+  assert.equal(costBreakupSummary({ centre, rows: [row('centre')] }), 'Category: Area.');
+  assert.match(costBreakupSummary({ centre, rows: [row('ledger')] }), /^Category: Area\. A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers/);
+
+  const centres = [{ name: 'North', secondLanguageName: 'شمال' }, { name: 'South Harbour', secondLanguageName: null }];
+  assert.deepEqual(matchingCentres(centres, '').map(item => item.name), ['North', 'South Harbour']);
+  assert.deepEqual(matchingCentres(centres, ' harb ').map(item => item.name), ['South Harbour']);
+  assert.deepEqual(matchingCentres(centres, 'شمال').map(item => item.name), ['North']);
+
+  assert.equal(centreOriginNotice({}), null);
+  assert.match(centreOriginNotice({ fromCentre: 'c1' })!, /all of the ledger’s vouchers .* not the centre’s/);
+  assert.deepEqual(ledgerVouchersParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1', fromCentre: 'c1' }), { report: 'cost-centre-breakup', search: { from: '2026-01-01', to: '2026-01-31', centre: 'c1' } });
+  assert.deepEqual(ledgerVouchersParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1' }), { report: 'ledger-monthly', search: { from: '2026-01-01', to: '2026-01-31', ledger: 'l1' } });
+  assert.equal(ledgerVouchersParent({}), null);
+});
+
+test('a drill-down level ignores the period, the page, the view and the highlight, and keeps the subject', () => {
+  const level = reportLevel('/app/c/x/Reports/Group-Summary?group=g1&from=2026-01-01&to=2026-01-31&hl=l%3Aa&pages=abc&detail=true&zeros=true');
+  assert.equal(level, '/app/c/x/reports/group-summary?group=g1');
+  assert.equal(reportLevel('/app/c/x/reports/group-summary?to=2026-02-28&from=2026-02-01&group=g1'), level, 'a period changed after the drill is the same level');
+  assert.notEqual(reportLevel('/app/c/x/reports/group-summary?group=g2'), level);
+  assert.equal(reportLevel('/r/ledger-vouchers?ledger=l1&fromCentre=c1&from=2026-01-01'), '/r/ledger-vouchers?fromCentre=c1&ledger=l1');
+});
+
+test('the voucher view goes back to the ledger vouchers it came from, keeping the break-up origin, else to its day', () => {
+  assert.deepEqual(voucherParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1', fromCentre: 'c1' }, '2026-01-09'),
+    { report: 'ledger-vouchers', search: { from: '2026-01-01', to: '2026-01-31', ledger: 'l1', fromCentre: 'c1' } });
+  assert.deepEqual(voucherParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1' }, '2026-01-09'),
+    { report: 'ledger-vouchers', search: { from: '2026-01-01', to: '2026-01-31', ledger: 'l1' } });
+  assert.deepEqual(voucherParent({}, '2026-01-09'), { report: 'day-book', search: { from: '2026-01-09', to: '2026-01-09' } });
+});
+
+test('report screens take their highlight through syncHighlight and their data per subject (source check: no hook renderer in the tests)', () => {
+  const hook = readFileSync(new URL('../src/components/reports/useReportScreen.ts', import.meta.url), 'utf8');
+  assert.ok(hook.includes('syncHighlight(tracked, subject, search.hl)'), 'the highlight follows the address on every render');
+  assert.ok(hook.includes("'report', subject)"), 'the report is read per subject');
+  assert.ok(!hook.includes('useState(search.hl)'), 'the address is not read once');
+  const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8');
+  assert.ok(navigation.includes('data: dataForSubject(state, subject)'));
+  assert.ok(navigation.includes('const levelOf = reportLevel'));
 });
