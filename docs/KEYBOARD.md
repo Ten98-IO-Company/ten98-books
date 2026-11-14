@@ -52,6 +52,29 @@ The one intended overlap: Escape on an entry screen is `entry.cancel`, not `nav.
 
 `Ctrl` is `Ctrl` on every platform here (the keymaps do not use `Mod`), and `Alt` is Option on Apple keyboards. `list.*` and `entry.*` are reserved for the masters, vouchers and reports screens; nothing registers them yet.
 
+## Reports
+
+Report screens (`src/routes/app/c.$companyId.reports*.tsx`, with their frame in `src/components/reports/`) mount the `report` context (titled Reports) as a mounted `ShortcutScope`. The highlighted line is the table's current row and holds focus, so the table's own Up, Down, Home, End and Enter act on the focused row, and the commands below do the same from anywhere else on the page. Escape stays `nav.back`: on a report it goes back one drill-down level (`useBackOverride` in `KeyboardShell.tsx`) and highlights the line it left from, and from a statement it returns to the company menu. The "open another report" dialog is a `KeyboardMenu`, so while it has focus the company-menu letters open a report there, and `G` opens the group summary.
+
+| Id | Title | Context | Web-safe | Classic |
+|---|---|---|---|---|
+| `report.next` | Highlight the next line | Reports | `ArrowDown` | `ArrowDown` |
+| `report.previous` | Highlight the previous line | Reports | `ArrowUp` | `ArrowUp` |
+| `report.page-down` | Move one page down (ten lines; past the last line of a register, its next page) | Reports | `PageDown` | `PageDown` |
+| `report.page-up` | Move one page up | Reports | `PageUp` | `PageUp` |
+| `report.first` | Highlight the first line | Reports | `Home` | `Home` |
+| `report.last` | Highlight the last line | Reports | `End` | `End` |
+| `report.drill` | Open the highlighted line | Reports | `Enter` | `Enter` |
+| `report.period` | Change the period (the date, on the balance sheet) | Reports | `Alt+P` | `F2` |
+| `report.detail` | Show more or less detail | Reports | `Alt+M` | `Alt+F5` |
+| `report.zero-lines` | Show or hide lines without amounts | Reports | `Alt+N` | `Alt+N` |
+| `report.export` | Export as CSV | Reports | `Alt+O` | `Alt+E` |
+| `report.print` | Print | Reports | `Alt+I` | `Alt+P` |
+| `report.go-to` | Open another report | Reports | `Alt+G` | `Alt+G` |
+| `report.open.group-summary` | Group summary (a menu letter) | Company menu | `G` | `G` |
+
+Web-safe letters follow the existing convention of a letter from inside the word (Period, More, expOrt, prInt). Classic keeps the conventional period, detail, export and print keys of desktop accounting software (D-11); `Alt+E` opens the browser menu bar on Windows and Linux, and the registry takes it while a report is open. None of these keys is measured by the cross-browser reachability test yet (see Open); they were driven in one Chromium-based browser. In the period dialog the date fields keep the arrow keys, Enter applies the period and Escape closes the dialog without leaving the report.
+
 ## Rules the tests enforce
 
 - Both keymaps bind every command, and no two commands share a key in one context.

@@ -12,35 +12,40 @@ import { decodeCursor, encodeCursor, exportLimit, exportTooLarge } from './curso
 const budgetSeconds = 15;
 const pageFields = (path: readonly PropertyKey[]) => ({ from: 'the start date', to: 'the end date', limit: 'the page size', after: 'the page cursor' } as Record<string, string>)[String(path[0])] ?? 'the period';
 
-/** Per voucher: its first line (ledger name and side) and its amount (the sum of its debit lines). */
-const voucherFacts = `
-  CROSS JOIN LATERAL (
-    SELECT led.name, l.side FROM voucher_line l JOIN ledger led ON led.company_id = l.company_id AND led.id = l.ledger_id
-    WHERE l.company_id = v.company_id AND l.voucher_id = v.id ORDER BY l.line_no LIMIT 1) f
-  CROSS JOIN LATERAL (
-    SELECT coalesce(sum(x.amount), 0)::bigint AS total FROM voucher_line x
-    WHERE x.company_id = v.company_id AND x.voucher_id = v.id AND x.side = 'Dr') s`;
-
 export async function dayBookReport(context: LedgerContext, query: unknown, all = false): Promise<DayBookReport> {
   const page = parseInput(reportPageQuery, query, pageFields);
   const [afterDate, afterId] = all ? [null, null] : decodeCursor(page.after);
   const limit = all ? exportLimit : page.limit;
   const { client, company } = context;
   await reportBudget(context, budgetSeconds);
+  // The page is chosen first; only its vouchers then look up their first line and amount.
   const { rows } = await client.query<DayBookRow>(
-    `SELECT v.id AS "voucherId", v.date, t.name AS "voucherTypeName", t.kind, v.number, v.status, v.post_dated AS "postDated",
-       v.narration, f.name AS particulars, f.side, s.total AS amount
-     FROM voucher v JOIN voucher_type t ON t.company_id = v.company_id AND t.id = v.voucher_type_id ${voucherFacts}
-     WHERE v.company_id = $1 AND v.deleted_at IS NULL AND v.date BETWEEN $2 AND $3
-       AND ($4::date IS NULL OR (v.date, v.id) > ($4::date, $5::uuid))
-     ORDER BY v.date, v.id LIMIT $6`,
+    `WITH page AS (
+       SELECT v.id, v.date, v.voucher_type_id, v.number, v.status, v.post_dated, v.narration FROM voucher v
+       WHERE v.company_id = $1 AND v.deleted_at IS NULL AND v.date BETWEEN $2 AND $3
+         AND ($4::date IS NULL OR (v.date, v.id) > ($4::date, $5::uuid))
+       ORDER BY v.date, v.id LIMIT $6)
+     SELECT p.id AS "voucherId", p.date, t.name AS "voucherTypeName", t.kind, p.number, p.status, p.post_dated AS "postDated",
+       p.narration, f.name AS particulars, f.side, s.total AS amount
+     FROM page p JOIN voucher_type t ON t.company_id = $1 AND t.id = p.voucher_type_id
+       CROSS JOIN LATERAL (
+         SELECT led.name, l.side FROM voucher_line l JOIN ledger led ON led.company_id = l.company_id AND led.id = l.ledger_id
+         WHERE l.company_id = $1 AND l.voucher_id = p.id ORDER BY l.line_no LIMIT 1) f
+       CROSS JOIN LATERAL (
+         SELECT coalesce(sum(x.amount), 0)::bigint AS total FROM voucher_line x
+         WHERE x.company_id = $1 AND x.voucher_id = p.id AND x.side = 'Dr') s
+     ORDER BY p.date, p.id`,
     [company.companyId, page.from, page.to, afterDate, afterId, limit + 1]);
   if (all && rows.length > limit) throw exportTooLarge;
+  // Totals of the whole period in one grouped pass over the lines: each voucher's amount and its first line's side.
   const { rows: [totals] } = await client.query<DayBookReport['totals']>(
-    `SELECT coalesce(sum(s.total) FILTER (WHERE f.side = 'Dr'), 0)::bigint AS debit,
-       coalesce(sum(s.total) FILTER (WHERE f.side = 'Cr'), 0)::bigint AS credit, count(*)::int AS vouchers
-     FROM voucher v ${voucherFacts}
-     WHERE v.company_id = $1 AND ${countsSql} AND v.date BETWEEN $2 AND $3`,
+    `SELECT coalesce(sum(x.total) FILTER (WHERE x.side = 'Dr'), 0)::bigint AS debit,
+       coalesce(sum(x.total) FILTER (WHERE x.side = 'Cr'), 0)::bigint AS credit, count(*)::int AS vouchers
+     FROM (
+       SELECT coalesce(sum(l.amount) FILTER (WHERE l.side = 'Dr'), 0) AS total, (array_agg(l.side ORDER BY l.line_no))[1] AS side
+       FROM voucher_line l JOIN voucher v ON v.company_id = l.company_id AND v.id = l.voucher_id
+       WHERE l.company_id = $1 AND ${countsSql} AND v.date BETWEEN $2 AND $3
+       GROUP BY l.voucher_id) x`,
     [company.companyId, page.from, page.to]);
   const shown = rows.slice(0, limit);
   const last = shown[shown.length - 1];

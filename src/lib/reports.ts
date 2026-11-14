@@ -171,3 +171,12 @@ export function formatBalance(text: string, exponent: number): string {
   const amount = formatAmount(negative ? text.slice(1) : text, exponent);
   return /^-?0(\.0+)?$/.test(text) ? amount : `${amount} ${negative ? 'Cr' : 'Dr'}`;
 }
+
+const dates = new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeZone: 'UTC' });
+const months = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+/** A calendar date for reading: "3 February 2026". Dates are company calendar dates, so no time zone applies. */
+export const longDate = (date: string) => dates.format(new Date(`${date}T00:00:00Z`));
+/** A month key (YYYY-MM) for reading: "February 2026". */
+export const monthText = (month: string) => months.format(new Date(`${month}-01T00:00:00Z`));
+/** A period for reading: one day, or "1 January 2026 to 3 February 2026". */
+export const periodText = (period: ReportPeriod) => period.from === period.to ? longDate(period.from) : `${longDate(period.from)} to ${longDate(period.to)}`;
