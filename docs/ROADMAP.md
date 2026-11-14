@@ -28,7 +28,7 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides) |
-| Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
+| Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2) |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies, a masters-only seed, and bill rows posted from the datasets. Pending bills are compared with the reference installation: they match in the two companies that list them bill by bill; in the two large trading companies the payable count and total differ, because the reference lists a customer's advance under payables (fix in progress). Lines that need features not built yet (foreign currency, vouchers cancelled without lines, cost and stock figures) are reported as not yet comparable |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned. The reads the screen needs are merged (expected next number, resulting balances of a draft, proposed counter ledger: [LEDGER.md](LEDGER.md)) |
@@ -52,7 +52,7 @@ Delivered in slices, each from a design reviewed against observed behaviour.
 | Piece | Status | Notes |
 |---|---|---|
 | Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0006. No screen yet: the bill panel comes with the voucher entry screen |
-| Cost categories and cost centres: masters, allocation rows on voucher lines, category summary and centre break-up reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0008. Screens are being built. Accounting projects ride on cost centres; how they are marked awaits an owner decision |
+| Cost categories and cost centres: masters, allocation rows on voucher lines, category summary and centre break-up reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0008. The masters screens are merged (categories, centres with their tree, the company switch, the ledger setting; [KEYBOARD.md](KEYBOARD.md)); allocation on the voucher entry screen and the cost report screens are not built. Accounting projects ride on cost centres; how they are marked awaits an owner decision |
 | Currencies, rates and foreign-currency lines | not started | |
 | Exchange differences | not started | |
 
