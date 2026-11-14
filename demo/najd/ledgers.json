@@ -1,0 +1,422 @@
+[
+  {
+    "key": "cash",
+    "name": "Cash",
+    "standard": "cash"
+  },
+  {
+    "key": "profit-and-loss",
+    "name": "Profit and Loss",
+    "standard": "profit_and_loss"
+  },
+  {
+    "key": "al-masar-contracting-est",
+    "name": "Al Masar Contracting Est",
+    "group": "receivables",
+    "opening": {
+      "amount": "12600.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-AR-01",
+          "date": "2025-12-10",
+          "amount": "12600.00",
+          "side": "Dr"
+        }
+      ],
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "riyadh-tech-solutions-co",
+    "name": "Riyadh Tech Solutions Co",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "hijaz-facilities-co",
+    "name": "Hijaz Facilities Co",
+    "group": "receivables",
+    "opening": {
+      "amount": "8400.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-FF-01",
+          "date": "2025-12-18",
+          "amount": "8400.00",
+          "side": "Dr"
+        }
+      ],
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "najd-lighting-gallery",
+    "name": "Najd Lighting Gallery",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 15,
+      "billWise": true,
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "qasr-hotels-group",
+    "name": "Qasr Hotels Group",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 60,
+      "billWise": true,
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "eastern-builders-co",
+    "name": "Eastern Builders Co",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "dhahran-electrical-works",
+    "name": "Dhahran Electrical Works",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [
+        "Riyadh, Saudi Arabia"
+      ],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "shenzhen-brightline-trading-ltd",
+    "name": "Shenzhen Brightline Trading Ltd",
+    "group": "payables",
+    "opening": {
+      "amount": "25000.00",
+      "side": "Cr"
+    },
+    "extras": {
+      "creditPeriodDays": 60,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-LI-01",
+          "date": "2025-11-25",
+          "amount": "25000.00",
+          "side": "Cr"
+        }
+      ],
+      "address": [],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "hejaz-coast-cable-works",
+    "name": "Hejaz Coast Cable Works",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "dammam-switchgear-co",
+    "name": "Dammam Switchgear Co",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "gulf-fittings-supply-co",
+    "name": "Gulf Fittings Supply Co",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "najd-packaging-co",
+    "name": "Najd Packaging Co",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 15,
+      "billWise": true,
+      "address": [],
+      "country": "Saudi Arabia"
+    }
+  },
+  {
+    "key": "tuwaiq-plains-bank-current",
+    "name": "Tuwaiq Plains Bank - Current",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "450000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "SA0380000000608010167519",
+        "bankName": "Tuwaiq Plains Bank (Saudi Arabia)"
+      }
+    }
+  },
+  {
+    "key": "dune-crest-savings-account",
+    "name": "Dune Crest Savings Account",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "80000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "SA4420000001234567891234",
+        "bankName": "Dune Crest Savings (Saudi Arabia)"
+      }
+    }
+  },
+  {
+    "key": "petty-cash-showroom",
+    "name": "Petty Cash - Showroom",
+    "group": "cash_in_hand",
+    "opening": {
+      "amount": "3000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "warehouse-equipment",
+    "name": "Warehouse Equipment",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "90000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "delivery-vehicles",
+    "name": "Delivery Vehicles",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "120000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "office-furniture",
+    "name": "Office Furniture",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "25000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "accumulated-depreciation",
+    "name": "Accumulated Depreciation",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "35000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "term-loan-tuwaiq-plains-bank",
+    "name": "Term Loan - Tuwaiq Plains Bank",
+    "group": "secured_loans",
+    "opening": {
+      "amount": "200000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "staff-gratuity-provision",
+    "name": "Staff Gratuity Provision",
+    "group": "provisions",
+    "opening": {
+      "amount": "12000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "sales-local",
+    "name": "Sales - Local",
+    "group": "sales"
+  },
+  {
+    "key": "sales-export",
+    "name": "Sales - Export",
+    "group": "sales"
+  },
+  {
+    "key": "purchases-local",
+    "name": "Purchases - Local",
+    "group": "purchases"
+  },
+  {
+    "key": "purchases-import",
+    "name": "Purchases - Import",
+    "group": "purchases"
+  },
+  {
+    "key": "freight-inward",
+    "name": "Freight Inward",
+    "group": "direct_expenses"
+  },
+  {
+    "key": "clearing-charges",
+    "name": "Clearing Charges",
+    "group": "direct_expenses"
+  },
+  {
+    "key": "discount-allowed",
+    "name": "Discount Allowed",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "office-rent",
+    "name": "Office Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "warehouse-rent",
+    "name": "Warehouse Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "staff-salaries",
+    "name": "Staff Salaries",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "electricity-water",
+    "name": "Electricity & Water",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "insurance-expense",
+    "name": "Insurance Expense",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "bank-charges",
+    "name": "Bank Charges",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "depreciation",
+    "name": "Depreciation",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "vehicle-running-costs",
+    "name": "Vehicle Running Costs",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "telephone-internet",
+    "name": "Telephone & Internet",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "advertising",
+    "name": "Advertising",
+    "group": "selling-expenses"
+  },
+  {
+    "key": "showroom-fit-out-costs",
+    "name": "Showroom Fit-out Costs",
+    "group": "selling-expenses"
+  },
+  {
+    "key": "interest-on-term-loan",
+    "name": "Interest on Term Loan",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "discount-received",
+    "name": "Discount Received",
+    "group": "indirect_income"
+  },
+  {
+    "key": "interest-income",
+    "name": "Interest Income",
+    "group": "indirect_income"
+  },
+  {
+    "key": "round-off",
+    "name": "Round Off",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "share-capital",
+    "name": "Share Capital",
+    "group": "capital",
+    "opening": {
+      "amount": "886440.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "output-vat-15",
+    "name": "Output VAT 15%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "VAT"
+    }
+  },
+  {
+    "key": "input-vat-15",
+    "name": "Input VAT 15%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "VAT"
+    }
+  }
+]

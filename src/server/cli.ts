@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
 import { getConfig } from './config.ts';
+import { DemoError } from './demo/dataset.ts';
 import { assertSchema, closeDatabase, getDatabase } from './db.ts';
 import { assertApplicationRole, migrateDatabase, StartupError, startWhenDatabaseReady } from './startup-migrate.ts';
 import { startWorker, stopJobs } from './jobs.ts';
@@ -76,6 +78,36 @@ async function worker() {
   });
 }
 
+/** Options of the two demo commands; a bare `--` (pnpm forwards it) is ignored. */
+function demoOptions(args: string[], confirms: boolean) {
+  try {
+    const { values, positionals } = parseArgs({
+      args: args.filter(arg => arg !== '--'), allowPositionals: true,
+      options: { owner: { type: 'string' }, company: { type: 'string' }, all: { type: 'boolean' }, yes: { type: 'boolean' } },
+    });
+    if (positionals.length || !values.owner || (values.yes && !confirms)) throw new CliError('');
+    return { email: values.owner, company: values.company, all: values.all, yes: values.yes === true };
+  } catch (error) {
+    if (error instanceof DemoError) throw error;
+    throw new CliError('');
+  }
+}
+
+/** Demo commands read dataset files and the database; a DemoError is already a plain message naming the file and key. */
+async function demo(command: 'seed-demo' | 'demo-compare', args: string[]) {
+  const usage = command === 'seed-demo' ? 'Usage: pnpm seed:demo -- --owner <email> [--company <slug> | --all] --yes' : 'Usage: pnpm demo:compare -- --owner <email> [--company <slug> | --all]';
+  try {
+    const options = demoOptions(args, command === 'seed-demo');
+    await assertSchema();
+    if (command === 'seed-demo') await (await import('./demo/seed.ts')).seedDemo(options);
+    else if (await (await import('./demo/compare.ts')).compareDemo(options)) process.exitCode = 1;
+  } catch (error) {
+    if (error instanceof DemoError) throw new CliError(error.message);
+    if (error instanceof CliError && !error.message) throw new CliError(usage);
+    throw error;
+  }
+}
+
 // Set once the built server has loaded: it then owns the process-wide pool, which this command must not close on return.
 // A server that fails to load leaves the flag unset, so the pool is still closed and the process can exit.
 let serving = false;
@@ -92,9 +124,11 @@ async function startWeb() {
 
 try {
   const [command, option, ...extra] = process.argv.slice(2);
-  const usage = 'Usage: cli.ts setup | migrate | start-web | worker | diagnose [worker]';
-  if (extra.length || (option && !(command === 'diagnose' && option === 'worker'))) throw new CliError(usage);
+  const usage = 'Usage: cli.ts setup | migrate | start-web | worker | diagnose [worker] | seed-demo | demo-compare';
+  const demoCommand = command === 'seed-demo' || command === 'demo-compare';
+  if (!demoCommand && (extra.length || (option && !(command === 'diagnose' && option === 'worker')))) throw new CliError(usage);
   switch (command) {
+    case 'seed-demo': case 'demo-compare': await demo(command, process.argv.slice(3)); break;
     case 'setup': await setup(); break;
     case 'migrate': await migrate(); break;
     case 'start-web': await startWeb(); break;

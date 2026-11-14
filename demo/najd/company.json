@@ -1,0 +1,21 @@
+{
+  "slug": "najd",
+  "name": "Najd Electrical Supplies Co",
+  "country": "SA",
+  "baseCurrency": "SAR",
+  "minorUnits": 2,
+  "financialYearStart": {
+    "month": 1,
+    "day": 1
+  },
+  "booksBeginning": "2026-01-01",
+  "timeZone": "Asia/Riyadh",
+  "features": [
+    "accounting",
+    "inventory",
+    "orders",
+    "billWise",
+    "priceLevels",
+    "vat"
+  ]
+}

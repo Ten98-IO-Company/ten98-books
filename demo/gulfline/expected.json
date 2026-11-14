@@ -1,0 +1,245 @@
+{
+  "source": "Figures for Gulfline Trading LLC (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet is as at 2026-12-31. They were not produced by ten98-books.",
+  "period": {
+    "from": "2026-01-01",
+    "to": "2026-12-31"
+  },
+  "voucherCount": 289,
+  "vouchersByType": {
+    "sales_order": 3,
+    "delivery_note": 3,
+    "sales": 80,
+    "purchase_order": 2,
+    "receipt_note": 1,
+    "purchase": 25,
+    "payment": 62,
+    "contra": 9,
+    "receipt": 91,
+    "credit_note": 1,
+    "stock_journal": 4,
+    "journal": 5,
+    "memorandum": 2,
+    "reversing_journal": 1
+  },
+  "voucherCountNote": "vouchers dated 2027-01-01..2027-02-28 (30) are in vouchers.json but outside this period",
+  "trialBalance": {
+    "report": "Trial balance by ledger, 2026-01-01 to 2026-12-31",
+    "totalDebit": "2289180.93",
+    "totalCredit": "2289180.93",
+    "ledgers": {
+      "share-capital": {
+        "closing": "886440.00",
+        "side": "Cr"
+      },
+      "accumulated-depreciation": {
+        "closing": "44500.00",
+        "side": "Cr"
+      },
+      "delivery-vehicles": {
+        "closing": "120000.00",
+        "side": "Dr"
+      },
+      "office-furniture": {
+        "closing": "25000.00",
+        "side": "Dr"
+      },
+      "warehouse-equipment": {
+        "closing": "90000.00",
+        "side": "Dr"
+      },
+      "sales-local": {
+        "closing": "1012405.52",
+        "side": "Cr"
+      },
+      "purchases-local": {
+        "closing": "748333.90",
+        "side": "Dr"
+      },
+      "bank-charges": {
+        "closing": "1269.61",
+        "side": "Dr"
+      },
+      "depreciation": {
+        "closing": "9500.00",
+        "side": "Dr"
+      },
+      "electricity-water": {
+        "closing": "11912.60",
+        "side": "Dr"
+      },
+      "insurance-expense": {
+        "closing": "10400.00",
+        "side": "Dr"
+      },
+      "interest-on-term-loan": {
+        "closing": "14421.47",
+        "side": "Dr"
+      },
+      "office-rent": {
+        "closing": "54000.00",
+        "side": "Dr"
+      },
+      "staff-salaries": {
+        "closing": "143407.00",
+        "side": "Dr"
+      },
+      "warehouse-rent": {
+        "closing": "72000.00",
+        "side": "Dr"
+      },
+      "al-reem-contracting-llc": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "bluewave-interiors-fze": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "falcon-facilities-mgmt": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "marina-lighting-gallery": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "desert-rose-hospitality": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "skyline-developers-llc": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "noor-electrical-works": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "lumina-industries-co-ltd": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "palmgate-cable-works": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "gulf-switchgear-trading": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "techno-components-fzco": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "prime-packaging-llc": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "saffron-shore-bank-current": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "zephyr-gulf-bank-savings": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "petty-cash-showroom": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "term-loan-saffron-shore-bank": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "staff-gratuity-provision": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "sales-export": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "purchases-import": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "freight-inward": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "clearing-charges": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "discount-allowed": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "vehicle-running-costs": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "telephone-internet": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "advertising": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "showroom-fit-out-costs": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "discount-received": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "interest-income": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "round-off": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "vat-output-5": {
+        "closing": "0.00",
+        "side": "Dr"
+      },
+      "vat-input-5": {
+        "closing": "0.00",
+        "side": "Dr"
+      }
+    },
+    "note": "stock value is not a ledger: opening stock 369440.0 is carried by items.json only"
+  },
+  "profitAndLoss": {
+    "report": "Profit and loss, 2026-01-01 to 2026-12-31, including opening and closing stock",
+    "grossProfit": "402044.76",
+    "netProfit": "85134.08",
+    "grossProfitExcludingStock": "264071.62",
+    "netProfitExcludingStock": "52839.06"
+  },
+  "balanceSheet": {
+    "report": "Balance sheet as at 2026-12-31",
+    "total": "1270992.77",
+    "closingStockInAssets": "507413.14"
+  },
+  "stockSummary": {
+    "report": "Stock summary, 2026-01-01 to 2026-12-31",
+    "closingValue": "507413.14",
+    "valuationMethod": "not recorded in this dataset"
+  },
+  "receivables": {
+    "report": "Pending receivable bills at the end of 2026",
+    "pendingBills": 9,
+    "pendingTotal": "117429.85"
+  },
+  "payables": {
+    "report": "Pending payable bills at the end of 2026",
+    "pendingBills": 5,
+    "pendingTotal": "82415.06"
+  },
+  "numbersVerified": true
+}
