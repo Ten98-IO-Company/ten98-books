@@ -1,5 +1,4 @@
 import { chordFromEvent, Combobox, Stack, useShortcutCommands, type ComboboxProps } from '@ten98/ui'
-import { useRef } from 'react'
 import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
 
 /**
@@ -21,8 +20,7 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
   onTypedEnter?: (text: string, advance: boolean) => 'picked' | 'error' | 'unchanged'
 }) {
   const registered = useShortcutCommands()
-  const holder = useRef<HTMLElement>(null)
-  return <Stack as='div' ref={holder} onKeyDownCapture={event => {
+  return <Stack as='div' onKeyDownCapture={event => {
     const input = event.target as HTMLInputElement
     if (input.getAttribute('role') !== 'combobox') return
     const accept = registered.find(command => command.id === 'entry.accept' && command.enabled)
@@ -40,11 +38,8 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
   }}>
     {/* allowCustom is true only so the field's own `error` shows (the stock combobox hides it for closed lists unless its own check fails); the guard below keeps free text from ever becoming a value. */}
     <Combobox {...rest} options={[...options]} allowCustom
-      onValueChange={value => {
-        // The combobox also reports the text being typed as a value. Text that happens to equal an option's value (a typed
-        // "yes" for the value yes) is not a pick: Enter settles it, and picking it here would leave the text unresolved.
-        if (holder.current?.querySelector('input')?.value === value) return
-        if (isChoice(options, value)) onValueChange(value)
-      }} />
+      // The combobox reports typed text and a picked row's value alike, and a picked row's value can equal what was typed (a typed
+      // "no" for the value no), so a value is taken whenever it is an enabled option's.
+      onValueChange={value => { if (isChoice(options, value)) onValueChange(value) }} />
   </Stack>
 }

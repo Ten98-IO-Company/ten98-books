@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
-import { buildCostRows, categoryDeleteReason, centrePath, type CostCategoryRow, type CostListRow } from '../../lib/cost-centre-forms'
+import { buildCostRows, categoryDeleteReason, categoryUse, centrePath, type CostCategoryRow, type CostListRow } from '../../lib/cost-centre-forms'
 import { isolate } from '../../lib/masters'
 import { FailureAlert, useMasterRequest } from './entry'
 import { takeFlash } from './flash'
@@ -16,9 +16,7 @@ import { useCostData } from './useCostData'
 const lastCursor = new Map<string, string>()
 
 const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`
-const allocates = (category: CostCategoryRow) => category.allocateRevenue || category.allocateNonRevenue
-  ? `Allocates ${[category.allocateRevenue && 'revenue', category.allocateNonRevenue && 'non-revenue'].filter(Boolean).join(' and ')} items`
-  : 'Allocates no items'
+const allocates = (category: CostCategoryRow) => `Used on ${categoryUse(category)}`
 
 /** One row of the list; the accessible name says where the row sits, because a flat list cannot show nesting by structure. */
 function entryOf(row: CostListRow, centres: Parameters<typeof centrePath>[0]): ListEntry {
@@ -59,7 +57,8 @@ function ListBody() {
   const company = useCompany()
   const navigate = useNavigate()
   const { current } = useApp()
-  const canWrite = useCanWrite() === true
+  const writer = useCanWrite()
+  const canWrite = writer === true
   // Only an owner or an admin switches the feature; the server refuses anyone else as not found.
   const canSwitch = current?.role === 'owner' || current?.role === 'admin'
   const { categories, centres, enabled, error, reload } = useCostData(company.id)
@@ -72,6 +71,9 @@ function ListBody() {
   const row = rows.find(item => item.key === active) ?? rows[0]
   const latest = useRef({ row })
   latest.current = { row }
+  // A closed dialog and a reload can leave focus on the page; it returns to the list, where the cursor is.
+  const list = useRef<HTMLElement>(null)
+  const focusList = () => { window.setTimeout(() => list.current?.focus(), 0) }
 
   const move = (key: string) => { lastCursor.set(company.id, key); setActive(key) }
   const open = (kind: 'edit' | 'history' | 'move', target: CostListRow) => {
@@ -101,11 +103,13 @@ function ListBody() {
     const name = centre ? target.centre.name : target.category.name
     const revision = centre ? target.centre.revision : target.category.revision
     const noun = centre ? 'cost centre' : 'cost category'
-    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true })) return
+    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true })) { focusList(); return }
     const next = rows[rows.indexOf(target) + 1] ?? rows[rows.indexOf(target) - 1]
     setMessage('')
     const done = await run(() => api(`/api/companies/${company.id}/${centre ? 'cost-centres' : 'cost-categories'}/${target.id}/delete`, { method: 'POST', body: { revision } }))
-    if (!done) return
+    focusList()
+    // A refusal can mean the list is out of date (changed by someone else, already gone): read it again.
+    if (!done) { reload(); return }
     if (next) move(next.key)
     setMessage(`Deleted ${noun} “${name}”.`)
     reload()
@@ -114,9 +118,10 @@ function ListBody() {
   async function toggle() {
     if (!canSwitch || busy || enabled === null) return
     const next = !enabled
-    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true })) return
+    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true })) { focusList(); return }
     setMessage('')
     const done = await run(() => api(`/api/companies/${company.id}/cost-centres-setting`, { method: 'POST', body: { enabled: next } }))
+    focusList()
     if (!done) return
     setMessage(`Cost centres are now ${next ? 'on' : 'off'} for this company.`)
     reload()
@@ -143,11 +148,11 @@ function ListBody() {
       <Text tone='muted'>Cost centres are on: vouchers ask for them on ledgers that take them.</Text>
       {canSwitch && <Button size='sm' variant='ghost' onClick={() => void toggle()} disabled={busy}>Switch off <KeyHint command='list.switch' /></Button>}
     </Inline>}
-    {!canWrite && <Alert tone='info'>Viewers can read cost categories and centres but not change them.</Alert>}
+    {writer === false && <Alert tone='info'>Viewers can read cost categories and centres but not change them.</Alert>}
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
-    <FailureAlert failure={failure} />
+    <FailureAlert failure={failure} onReload={reload} />
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>Cost categories and centres could not be loaded: {error}</Alert>}
-    {categories && centres && <MasterList label='Cost categories and centres' entries={entries} active={row?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList
+    {categories && centres && <MasterList label='Cost categories and centres' entries={entries} active={row?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList listRef={list}
       onOpen={key => { const target = rows.find(item => item.key === key); if (target) open('edit', target) }} />}
     {categories && centres && centres.length === 0 && <Text tone='muted'>No cost centres yet.{canWrite && <> Create the first with the button above or <KeyHint command='list.create' />.</>}</Text>}
     {canWrite && reason && <Text tone='muted' size='sm'>Delete is unavailable for the highlighted row: {reason}</Text>}

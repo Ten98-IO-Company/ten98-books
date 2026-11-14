@@ -134,9 +134,9 @@ const revision = (entity: RevisionRow['entity'], action: RevisionRow['action'], 
 test('history says what changed on a category, a centre (resolving the parent by name) and a ledger\'s setting', () => {
   const nameOf = (value: string) => value === north.id ? 'North' : null;
   assert.deepEqual(describeCostChanges(revision('cost_category', 'create', null, { name: 'Branches', secondLanguageName: null, allocateRevenue: true, allocateNonRevenue: false }), nameOf),
-    ['Name: Branches', 'Allocates revenue items: yes', 'Allocates non-revenue items: no']);
+    ['Name: Branches', 'Used on income and expense ledgers: yes', 'Used on balance-sheet ledgers: no']);
   assert.deepEqual(describeCostChanges(revision('cost_category', 'alter', { name: 'Branches', allocateRevenue: true, allocateNonRevenue: false }, { name: 'Branches', allocateRevenue: true, allocateNonRevenue: true }), nameOf),
-    ['Allocates non-revenue items: no → yes']);
+    ['Used on balance-sheet ledgers: no → yes']);
   assert.deepEqual(describeCostChanges(revision('cost_centre', 'alter', { categoryName: 'Projects', name: 'Harbour', parentId: north.id }, { categoryName: 'Channels', name: 'Harbour', parentId: null }), nameOf),
     ['Category: Projects → Channels', 'Under: North → Top level']);
   assert.deepEqual(describeCostChanges(revision('cost_centre', 'alter', { categoryName: 'A', name: 'X', parentId: id(99) }, { categoryName: 'A', name: 'X', parentId: north.id }), nameOf),

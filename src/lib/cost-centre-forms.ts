@@ -81,7 +81,6 @@ export function centreDescendants(centres: readonly CostCentreRow[], centreId: s
 // ---- Lookup choices ----
 
 export const topLevelChoice = 'top';
-export const yesNo: readonly Choice[] = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }];
 
 export function categoryChoices(categories: readonly CostCategoryRow[]): Choice[] {
   return [...categories].sort(byName).map(category => ({ value: category.id, label: category.name, description: category.systemKey ? 'Built-in category' : undefined }));
@@ -166,7 +165,14 @@ export const centreFormOf = (centre: CostCentreRow): CentreFormValues => ({
 
 export type CategoryFormValues = { name: string; secondLanguageName: string; allocateRevenue: boolean; allocateNonRevenue: boolean };
 export type CategoryField = 'name' | 'secondLanguageName' | 'allocateRevenue' | 'allocateNonRevenue';
-/** A new category allocates revenue items and not others, the defaults the server applies too. */
+/** The two category settings in our own words: whether its centres may be allocated on income and expense ledgers, and on balance-sheet ledgers. */
+export const categoryUseLabels = { allocateRevenue: 'Used on income and expense ledgers', allocateNonRevenue: 'Used on balance-sheet ledgers' } as const;
+export function categoryUse(category: { allocateRevenue: boolean; allocateNonRevenue: boolean }): string {
+  if (category.allocateRevenue && category.allocateNonRevenue) return 'income, expense and balance-sheet ledgers';
+  return category.allocateRevenue ? 'income and expense ledgers' : category.allocateNonRevenue ? 'balance-sheet ledgers' : 'no ledgers';
+}
+
+/** A new category is for income and expense ledgers and not for balance-sheet ones, the defaults the server applies too. */
 export const emptyCategoryForm = (): CategoryFormValues => ({ name: '', secondLanguageName: '', allocateRevenue: true, allocateNonRevenue: false });
 
 export type CategoryFormAction =
@@ -249,7 +255,7 @@ export function describeCostChanges(revision: RevisionRow, centreName: (id: stri
   const before = snapshot(revision.before), after = snapshot(revision.after);
   const parent = (value: unknown) => typeof value === 'string' ? centreName(value) ?? 'a centre that was deleted since' : 'Top level';
   const facts = (side: Snapshot): [string, string][] => revision.entity === 'cost_category'
-    ? [['Name', text(side.name)], ['Second-language name', text(side.secondLanguageName)], ['Allocates revenue items', yes(side.allocateRevenue)], ['Allocates non-revenue items', yes(side.allocateNonRevenue)]]
+    ? [['Name', text(side.name)], ['Second-language name', text(side.secondLanguageName)], [categoryUseLabels.allocateRevenue, yes(side.allocateRevenue)], [categoryUseLabels.allocateNonRevenue, yes(side.allocateNonRevenue)]]
     : [['Category', text(side.categoryName)], ['Name', text(side.name)], ['Second-language name', text(side.secondLanguageName)], ['Under', parent(side.parentId)]];
   if (revision.action === 'delete') return ['Deleted'];
   if (!after) return [];

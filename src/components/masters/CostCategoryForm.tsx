@@ -5,9 +5,10 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useCompany } from '../../lib/app-context'
 import {
-  categoryDeleteReason, categoryFormOf, categoryFormReducer, categoryPayload, emptyCategoryForm, validateCategoryForm, yesNo,
+  categoryDeleteReason, categoryFormOf, categoryUseLabels, categoryFormReducer, categoryPayload, emptyCategoryForm, validateCategoryForm,
   type CategoryField, type CategoryFormAction, type CategoryFormValues, type CostCategoryRow,
 } from '../../lib/cost-centre-forms'
+import { yesNo } from '../../lib/lookup-entry'
 import { isolate } from '../../lib/masters'
 import { EntryScope, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
 import { setFlash } from './flash'
@@ -143,13 +144,13 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
         </Field>
       </Stack>
       <Stack data-entry-field='allocateRevenue'>
-        <LookupField label='Allocates revenue items' options={yesNo} value={values.allocateRevenue ? 'yes' : 'no'} disabled={readOnly} error={errors.allocateRevenue}
-          description='Whether income and expense lines may be split over this category’s centres. Saved with the category; vouchers do not check it yet.'
+        <LookupField label={categoryUseLabels.allocateRevenue} options={yesNo} value={values.allocateRevenue ? 'yes' : 'no'} disabled={readOnly} error={errors.allocateRevenue}
+          description='Whether the centres of this category can be allocated on income and expense ledgers. Saved with the category; vouchers do not check it yet.'
           onValueChange={choose('allocateRevenue')} onTypedEnter={(text, advance) => lookups.typedEnter('allocateRevenue', text, advance)} />
       </Stack>
       <Stack data-entry-field='allocateNonRevenue'>
-        <LookupField label='Allocates non-revenue items' options={yesNo} value={values.allocateNonRevenue ? 'yes' : 'no'} disabled={readOnly} error={errors.allocateNonRevenue}
-          description='The same for balance-sheet lines such as assets and liabilities. Saved with the category; vouchers do not check it yet.'
+        <LookupField label={categoryUseLabels.allocateNonRevenue} options={yesNo} value={values.allocateNonRevenue ? 'yes' : 'no'} disabled={readOnly} error={errors.allocateNonRevenue}
+          description='The same for balance-sheet ledgers, such as assets and liabilities. Saved with the category; vouchers do not check it yet.'
           onValueChange={choose('allocateNonRevenue')} onTypedEnter={(text, advance) => lookups.typedEnter('allocateNonRevenue', text, advance)} />
       </Stack>
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
