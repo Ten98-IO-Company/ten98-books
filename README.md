@@ -9,6 +9,7 @@ Web accounting for GCC businesses on the Ten98 stack: double-entry books, invent
 - [Keyboard commands](docs/KEYBOARD.md)
 - [Ledger core](docs/LEDGER.md): data model, posting rules, numbering and the HTTP API of the double-entry books
 - [Reports](docs/REPORTS.md): day book, trial balance, profit and loss, balance sheet and the drill-down to a voucher, with CSV export
+- Masters screens: the chart of accounts, create and alter group and ledger, and their history, under Masters in the company menu (keys in [docs/KEYBOARD.md](docs/KEYBOARD.md))
 
 `main` is production, `dev` is staging; feature branches start from `dev`.
 

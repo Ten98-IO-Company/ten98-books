@@ -1,0 +1,152 @@
+import { Alert, Button, ShortcutScope } from '@ten98/ui'
+import { useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { ApiError, errMsg } from '../../lib/api'
+import { useApp } from '../../lib/app-context'
+import { contextTitles } from '../../lib/commands'
+import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
+import { useAppCommand } from '../KeyboardShell'
+
+/** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
+export function EntryScope({ children }: { children: ReactNode }) {
+  return <ShortcutScope name={contextTitles.entry}>{children}</ShortcutScope>
+}
+
+// An open dialog or expanded popup (a lookup's list) owns Enter and Escape even when focus has moved outside it.
+const popupOpen = () => document.querySelector('dialog[open], :popover-open, [role="combobox"][aria-expanded="true"]') !== null
+
+const controlOf = (holder: Element | null | undefined) => holder?.querySelector<HTMLInputElement>('input:not([type="hidden"]), textarea, select') ?? null
+
+/** Fields of the form in their fixed order: every element marked `data-entry-field` that can take focus. */
+function entryFields(form: HTMLElement | null): { name: string; control: HTMLInputElement }[] {
+  if (!form) return []
+  return [...form.querySelectorAll<HTMLElement>('[data-entry-field]')].flatMap(holder => {
+    const control = controlOf(holder)
+    return control && !control.disabled ? [{ name: holder.dataset.entryField ?? '', control }] : []
+  })
+}
+
+/** The text a field's control shows right now (what a lookup displays, typed or chosen), or null when the field is not on screen. */
+export const entryText = (form: HTMLElement | null, name: string): string | null => entryFields(form).find(field => field.name === name)?.control.value ?? null
+
+/** The field after `name` in the form's order, or 'confirm' after the last one (what Enter does from a field). */
+export const nextEntryField = (form: HTMLElement | null, name: string): string => nextFieldAfter(entryFields(form).map(field => field.name), name)
+
+export function focusEntryField(form: HTMLElement | null, name: string) {
+  const control = entryFields(form).find(field => field.name === name)?.control
+  control?.focus()
+  control?.select?.()
+}
+
+/** Focuses the first field of the form in keyboard order that has an error message showing. */
+export function focusFirstInvalid(form: HTMLElement | null, errors: Partial<Record<string, string>>) {
+  const first = entryFields(form).find(field => errors[field.name])
+  if (first) focusEntryField(form, first.name)
+}
+
+/**
+ * Enter-advances-field for an entry surface (D-05): Enter moves to the next field in order and, after the last one, calls
+ * `onLastField` (which asks to save). A lookup with its list open keeps Enter for picking a row; the pick has settled by
+ * the time this runs, so the same key then moves on, as it does in desktop accounting software.
+ */
+export function useEntryCommands(options: {
+  form: RefObject<HTMLElement | null>
+  /** Called with the field being left and its text before Enter moves on; false keeps the focus there (a lookup with text that is no choice). */
+  onLeaveField?: (name: string, text: string) => boolean
+  onLastField: () => void
+  onAccept: () => void
+  onCancel: () => void
+  onDelete?: () => void
+  onHistory?: () => void
+  /** Viewers see the entry but cannot save it: the accept command is then off. */
+  readOnly?: boolean
+}) {
+  const latest = useRef(options)
+  latest.current = options
+  useAppCommand('entry.next-field', () => {
+    const { form, onLastField } = latest.current
+    const fields = entryFields(form.current)
+    const current = fields.find(field => field.control === document.activeElement)
+    if (!current) return
+    if (latest.current.onLeaveField?.(current.name, current.control.value) === false) return
+    const next = nextFieldAfter(fields.map(field => field.name), current.name)
+    if (next === 'confirm') onLastField(); else focusEntryField(form.current, next)
+  }, { allowInTextInput: true })
+  useAppCommand('entry.accept', () => latest.current.onAccept(), { allowInTextInput: true, enabled: !options.readOnly })
+  // Always enabled: a scope whose command for a key is disabled still claims that key (the registry's rule), so Escape
+  // would do nothing on a button, the Save panel or a viewer's screen. The shell's nav.back shares the key but this
+  // scope is inside it and wins; the action bar lists only the innermost (barCommands in src/lib/commands.ts).
+  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true, label: options.readOnly ? 'Go back one level' : undefined })
+  useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
+  useAppCommand('entry.history', () => latest.current.onHistory?.(), { enabled: options.onHistory !== undefined })
+}
+
+/** Leaves an entry screen one level: back to where the user came from, or to `fallback` after a direct visit. */
+export function useLeave(fallback: { to: string; params: Record<string, string> }) {
+  const router = useRouter()
+  const canGoBack = useCanGoBack()
+  const navigate = useNavigate()
+  return useCallback(() => {
+    if (canGoBack) router.history.back()
+    else void navigate({ to: fallback.to, params: fallback.params } as never)
+  }, [canGoBack, router, navigate, fallback.to, JSON.stringify(fallback.params)])
+}
+
+export type Failure = ReturnType<typeof describeFailure>
+
+/** Runs one request for an entry screen: busy while it runs, its failure kept in plain language, a lost session handled. */
+export function useMasterRequest() {
+  const { unauthorized } = useApp()
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const returnTo = useRef<Element | null>(null)
+  // One request at a time: two accept keys in one tick must not send the same change twice.
+  const flight = useRef(singleFlight())
+  const run = useCallback(<T,>(task: () => Promise<T>): Promise<T | undefined> => flight.current(async () => {
+    returnTo.current = document.activeElement
+    setBusy(true); setFailure(null)
+    try { return await task() }
+    catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) unauthorized()
+      else setFailure(describeFailure(cause instanceof ApiError ? cause.status : undefined, errMsg(cause), cause instanceof ApiError ? cause.code : undefined))
+      return undefined
+    } finally { setBusy(false) }
+  }), [unauthorized])
+  // The form locks its fields while the request runs, which drops focus to the page. Once the fields are back, focus
+  // returns to where it was, or to the first field when that control went away with a closed dialog.
+  useEffect(() => {
+    if (busy || returnTo.current === null) return
+    const previous = returnTo.current
+    returnTo.current = null
+    if (document.activeElement !== document.body) return
+    const target = previous instanceof HTMLElement && previous.isConnected ? previous : document.querySelector<HTMLElement>('[data-entry-field] input')
+    target?.focus()
+  }, [busy])
+  return { busy, failure, run, clear: () => setFailure(null) }
+}
+
+/** What went wrong, with a reload when someone else changed the master first. */
+export function FailureAlert({ failure, onReload }: { failure: Failure | null; onReload?: () => void }) {
+  if (!failure) return null
+  return <Alert tone='danger' title={failure.stale ? 'Changed by someone else' : 'Not done'}
+    actions={failure.stale && onReload ? <Button size='sm' variant='secondary' onClick={onReload}>Reload the latest</Button> : undefined}>
+    {failure.stale ? 'Someone saved a newer version while you were editing. Reload to see it; reloading replaces what you typed.' : failure.message}
+  </Alert>
+}
+
+/**
+ * "Save this?" after Enter on the last field: an inline panel whose Save button takes focus, so Enter accepts and
+ * Escape (the form's cancel command) keeps editing. Built here because the stock dialogs start on their close button.
+ */
+export function SaveConfirm({ title, description, onConfirm, onCancel }: { title: string; description: string; onConfirm: () => void; onCancel: () => void }) {
+  // Y answers yes and N returns to editing, as the accept question of desktop accounting software does.
+  const answer = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.ctrlKey || event.altKey || event.metaKey) return
+    const key = event.key.toLowerCase()
+    if (key === 'y') { event.preventDefault(); onConfirm() } else if (key === 'n') { event.preventDefault(); onCancel() }
+  }
+  return <Alert tone='info' title={title} onKeyDown={answer} actions={<>
+    <Button autoFocus onClick={onConfirm}>Save</Button>
+    <Button variant='secondary' onClick={onCancel}>Keep editing</Button>
+  </>}>{description} Press Enter or Y to save, or Escape or N to keep editing.</Alert>
+}

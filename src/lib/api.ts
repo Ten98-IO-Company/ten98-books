@@ -1,4 +1,4 @@
-export class ApiError extends Error { status = 0 }
+export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string }
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   let res: Response
@@ -18,10 +18,11 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   let data: unknown = null
   if (text !== '') { try { data = JSON.parse(text) } catch { if (res.ok) throw new ApiError('The server response could not be confirmed. Check saved data before retrying.') } }
   if (!res.ok) {
-    const d = data as { error?: unknown; message?: unknown } | null
+    const d = data as { error?: unknown; message?: unknown; code?: unknown } | null
     const fromBody = d !== null ? (typeof d.error === 'string' ? d.error : typeof d.message === 'string' ? d.message : '') : ''
     const err = new ApiError(fromBody !== '' ? fromBody : res.status === 401 ? 'Your session has expired. Sign in again.' : `Request failed with status ${res.status}.`)
     err.status = res.status
+    if (d !== null && typeof d.code === 'string') err.code = d.code
     throw err
   }
   return data as T

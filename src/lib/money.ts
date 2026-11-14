@@ -27,3 +27,15 @@ export function moneyToWire<T>(value: T, exponent: MoneyExponent): Wire<T> {
   };
   return convert(value) as Wire<T>;
 }
+
+/**
+ * Amount text typed by a person, as the plain decimal string the wire takes. Thousands separators are accepted only as
+ * a comma between exact groups of three digits (`1,250.5`, never `12,50` or `1,25`) and removed; anything else that is
+ * not digits with an optional decimal point is refused (null). The exponent is not checked here: `parseMoney` refuses
+ * extra decimal places, so nothing is ever rounded.
+ */
+export function normalizeAmountInput(text: string): string | null {
+  const value = text.trim();
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(value)) return value.replaceAll(',', '');
+  return /^\d+(\.\d+)?$/.test(value) ? value : null;
+}

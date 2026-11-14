@@ -59,6 +59,16 @@ const shared = {
   'report.zero-lines': 'Alt+N',
   'report.go-to': 'Alt+G',
   'report.open.group-summary': 'G',
+
+  // Masters screens.
+  'list.next': 'ArrowDown',
+  'list.previous': 'ArrowUp',
+  'list.first': 'Home',
+  'list.last': 'End',
+  'list.open': 'Enter',
+  'list.history': 'Alt+Y',
+  'list.cancel': 'Escape',
+  'entry.history': 'Alt+Y',
 } as const
 
 export const keymaps: Record<KeymapName, AppKeymap> = {
@@ -68,6 +78,10 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'company.switch': 'F3',
     'list.delete': 'Alt+D',
     'entry.accept': ['Ctrl+A', 'Ctrl+Enter'],
+    // Ctrl+Q goes back one level in desktop accounting software, like Escape: on every screen, and on an entry screen leaving it.
+    'nav.back': ['Escape', 'Ctrl+Q'],
+    'entry.cancel': ['Escape', 'Ctrl+Q'],
+    'list.cancel': ['Escape', 'Ctrl+Q'],
     'entry.delete': 'Alt+D',
     'entry.voucher.contra': 'F4',
     'entry.voucher.payment': 'F5',
