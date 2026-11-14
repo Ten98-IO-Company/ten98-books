@@ -38,6 +38,8 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
   }}>
     {/* allowCustom is true only so the field's own `error` shows (the stock combobox hides it for closed lists unless its own check fails); the guard below keeps free text from ever becoming a value. */}
     <Combobox {...rest} options={[...options]} allowCustom
+      // The combobox reports typed text and a picked row's value alike, and a picked row's value can equal what was typed (a typed
+      // "no" for the value no), so a value is taken whenever it is an enabled option's.
       onValueChange={value => { if (isChoice(options, value)) onValueChange(value) }} />
   </Stack>
 }

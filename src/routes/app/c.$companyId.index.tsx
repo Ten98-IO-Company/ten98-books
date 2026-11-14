@@ -18,6 +18,7 @@ const destinations = [
   { group: 'Masters', command: 'home.new-master', to: '/app/c/$companyId/masters/new', write: true },
   { group: 'Masters', command: 'home.edit-master', to: '/app/c/$companyId/masters/edit', write: true },
   { group: 'Masters', command: 'home.chart-of-accounts', to: '/app/c/$companyId/masters/chart-of-accounts' },
+  { group: 'Masters', command: 'home.cost-centres', to: '/app/c/$companyId/masters/cost-centres' },
   { group: 'Transactions', command: 'home.vouchers', to: '/app/c/$companyId/vouchers' },
   { group: 'Transactions', command: 'home.day-book', to: '/app/c/$companyId/reports/day-book' },
   { group: 'Reports', command: 'home.balance-sheet', to: '/app/c/$companyId/reports/balance-sheet' },
