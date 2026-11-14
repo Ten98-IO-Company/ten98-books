@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { costBreakupKey, costSummaryLines, defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportSubject, syncHighlight, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -94,4 +94,43 @@ test('the cost category summary becomes table lines: each category, then its top
   assert.deepEqual(costSummaryLines({ from: '2026-01-01', to: '2026-01-31', categories: [] }), []);
   // A sub-centre and a ledger with the same id stay two lines.
   assert.notEqual(costBreakupKey({ kind: 'centre', id: 'x' }), costBreakupKey({ kind: 'ledger', id: 'x' }));
+});
+
+test('the highlight follows the address when the subject or its hl changes, and keeps the user\'s line otherwise', () => {
+  const parent = reportSubject({ centre: 'a' }), child = reportSubject({ centre: 'b' });
+  assert.notEqual(parent, child);
+  assert.equal(reportSubject({ centre: 'a' }), reportSubject({ centre: 'a', ledger: undefined }));
+  const opened = syncHighlight({ level: '', highlight: undefined }, parent, undefined);
+  const moved = { ...opened, highlight: 'l:x' };
+  assert.equal(syncHighlight(moved, parent, undefined), moved, 'the same level keeps the line moved to');
+  const drilled = syncHighlight(moved, child, undefined);
+  assert.deepEqual(drilled.highlight, undefined, 'a drill on the same route starts the child at its first line');
+  assert.equal(syncHighlight(drilled, parent, 'c:b').highlight, 'c:b', 'back restores the hl the trail wrote');
+  // Data read for one subject is never shown for another; a period change (same subject) keeps it.
+  assert.equal(dataForSubject({ subject: parent, data: [1] }, child), null);
+  assert.deepEqual(dataForSubject({ subject: parent, data: [1] }, parent), [1]);
+});
+
+test('cost report lines: which open, what they open, the chooser filter and the not-filtered notice', () => {
+  assert.equal(costSummaryTarget({ kind: 'category', id: 'k' }), null, 'a category leads nowhere');
+  assert.deepEqual(costSummaryTarget({ kind: 'centre', id: 'c1' }), { report: 'cost-centre-breakup', search: { centre: 'c1' } });
+  assert.deepEqual(costBreakupTarget({ kind: 'centre', id: 'c2' }, 'c1'), { report: 'cost-centre-breakup', search: { centre: 'c2' } });
+  assert.deepEqual(costBreakupTarget({ kind: 'ledger', id: 'l1' }, 'c1'), { report: 'ledger-vouchers', search: { ledger: 'l1', fromCentre: 'c1' } });
+
+  const centre = { id: 'c1', name: 'North', categoryId: 'k', categoryName: 'Area' };
+  const row = (kind: 'centre' | 'ledger') => ({ kind, id: 'x', name: 'x', opening: '0.00', debit: '1.00', credit: '0.00', closing: '1.00' });
+  assert.equal(costBreakupSummary({ centre, rows: [] }), 'Category: Area. No amounts in this period.');
+  assert.equal(costBreakupSummary({ centre, rows: [row('centre')] }), 'Category: Area.');
+  assert.match(costBreakupSummary({ centre, rows: [row('ledger')] }), /^Category: Area\. A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers/);
+
+  const centres = [{ name: 'North', secondLanguageName: 'شمال' }, { name: 'South Harbour', secondLanguageName: null }];
+  assert.deepEqual(matchingCentres(centres, '').map(item => item.name), ['North', 'South Harbour']);
+  assert.deepEqual(matchingCentres(centres, ' harb ').map(item => item.name), ['South Harbour']);
+  assert.deepEqual(matchingCentres(centres, 'شمال').map(item => item.name), ['North']);
+
+  assert.equal(centreOriginNotice({}), null);
+  assert.match(centreOriginNotice({ fromCentre: 'c1' })!, /all of the ledger’s vouchers .* not the centre’s/);
+  assert.deepEqual(ledgerVouchersParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1', fromCentre: 'c1' }), { report: 'cost-centre-breakup', search: { from: '2026-01-01', to: '2026-01-31', centre: 'c1' } });
+  assert.deepEqual(ledgerVouchersParent({ from: '2026-01-01', to: '2026-01-31', ledger: 'l1' }), { report: 'ledger-monthly', search: { from: '2026-01-01', to: '2026-01-31', ledger: 'l1' } });
+  assert.equal(ledgerVouchersParent({}), null);
 });

@@ -90,3 +90,28 @@ test('a viewer reads both reports and their exports; switched off, the saved amo
   assert.equal((await ok(`/reports/cost-category-summary?${period}`, undefined, viewer)).report.categories[0].closing, '130.00');
   await ok('/cost-centres-setting', { enabled: true }, owner, 200);
 });
+
+test('the paths the screens call refuse a bad period (400) and an unknown or foreign subject (404), exports alike', async () => {
+  const other = await createCompany(owner.browser, { name: 'Other Cost Screens' });
+  const foreignCentre = (await owner.browser.call(`/api/companies/${other}/cost-centres`, { name: 'Elsewhere', categoryId: ((await owner.browser.call(`/api/companies/${other}/cost-categories`)).body.costCategories as any[])[0].id, parentId: null })).body.costCentre.id;
+  const cases: [string, number][] = [
+    ['/reports/cost-category-summary?from=2026-02-01&to=2026-01-01', 400],
+    ['/reports/cost-category-summary?from=2026-02-30&to=2026-03-01', 400],
+    ['/reports/cost-category-summary?from=2026-01-01', 400],
+    [`/reports/cost-category-summary?${period}&categoryId=${randomUUID()}`, 404],
+    [`/reports/cost-centre-breakup/${ids.north}?from=2026-02-01&to=2026-01-01`, 400],
+    [`/reports/cost-centre-breakup/${ids.north}?${period}&extra=1`, 400],
+    [`/reports/cost-centre-breakup/${randomUUID()}?${period}`, 404],
+    [`/reports/cost-centre-breakup/${foreignCentre}?${period}`, 404],
+    [`/reports/cost-centre-breakup/${randomUUID()}/export?${period}`, 404],
+    [`/reports/ledger-vouchers/${randomUUID()}?${period}`, 404],
+  ];
+  for (const [path, status] of cases) {
+    const answer = await call(path, undefined, viewer);
+    assert.equal(answer.status, status, `${path}: ${JSON.stringify(answer.body)}`);
+    assert.ok(typeof answer.body?.error === 'string' && answer.body.error.length > 0, `${path} says why`);
+  }
+  // Signed out, the screens are asked to sign in.
+  const stranger = (await import('./helpers/ledger.ts')).browser();
+  assert.equal((await stranger.call(`/api/companies/${company}/reports/cost-category-summary?${period}`)).status, 401);
+});

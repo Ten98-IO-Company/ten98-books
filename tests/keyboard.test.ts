@@ -438,3 +438,9 @@ test('the cost reports open from a focused menu by their letters in both keymaps
   }
   for (const entry of classicReserved.filter(item => item.context === 'company-home')) assert.ok(!entry.keys.includes('Y') && !entry.keys.includes('U'), 'not a reserved menu letter');
 });
+
+test('docs/KEYBOARD.md states the parity counts the code has', () => {
+  const doc = readFileSync(new URL('../docs/KEYBOARD.md', import.meta.url), 'utf8');
+  const count = (status: string) => Object.values(classicParity).filter(entry => entry.status === status).length;
+  assert.ok(doc.includes(`Counts: ${count('same')} same, ${count('alternate')} alternate, ${count('ours')} ours, over ${commandIds.length} commands.`), 'the counts line matches classicParity');
+});

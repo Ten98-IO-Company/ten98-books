@@ -9,13 +9,13 @@ import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { CostBreakupRow, CostCentreBreakup, CostCentreListItem } from '../../lib/cost-centres'
 import type { Wire } from '../../lib/money'
-import { costBreakupKey } from '../../lib/reports'
+import { costBreakupKey, costBreakupSummary, costBreakupTarget, matchingCentres } from '../../lib/reports'
 
 /**
  * One cost centre's break-up for the period (`centre` in the address): its direct sub-centres, each with its own
  * sub-centres folded in, and the ledgers of its own rows. Enter on a sub-centre opens its break-up, on a ledger that
- * ledger's vouchers for the period (all of them: the vouchers report has no centre filter). Without a centre the screen
- * lists the centres to choose from.
+ * ledger's vouchers for the period (all of them: the vouchers report has no centre filter, and both screens say so).
+ * Without a centre the screen lists the centres to choose from.
  */
 export const Route = createFileRoute('/app/c/$companyId/reports_/cost-centre-breakup')({ validateSearch: reportSearch, component: CostCentreBreakupScreen })
 
@@ -44,11 +44,11 @@ function Breakup({ search, centreId }: { search: ReportSearch; centreId: string 
     onRetry={screen.report.reload} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/cost-centre-breakup/${centreId}/export?${query(screen.period)}` : null}
     back={() => screen.back({ report: 'cost-category-summary', search: { from: search.from, to: search.to } })}
-    summary={centre ? `Category: ${centre.categoryName}.${rows.length ? '' : ' No amounts in this period.'}` : undefined}>
+    summary={data ? costBreakupSummary(data) : undefined}>
     <CostCentresOff companyId={screen.company.id} />
     {data && <ReportTable caption={`Sub-centres and ledgers of ${data.centre.name}`} columns={columns} rows={rows} rowKey={costBreakupKey}
       highlight={screen.highlight} onHighlight={screen.setHighlight}
-      onOpen={row => screen.open(row.kind === 'centre' ? { report: 'cost-centre-breakup', search: { centre: row.id } } : { report: 'ledger-vouchers', search: { ledger: row.id } })}
+      onOpen={row => screen.open(costBreakupTarget(row, centreId))}
       footerCells={['Total', <Balance key='opening' value={data.totals.opening} strong />, <Amount key='debit' value={data.totals.debit} strong />,
         <Amount key='credit' value={data.totals.credit} strong />, <Balance key='closing' value={data.totals.closing} strong />]} />}
   </ReportScreen>
@@ -66,10 +66,7 @@ function CentreChooser({ search }: { search: ReportSearch }) {
   const screen = useReportScreen<never>(search, 'statement', () => null)
   const centres = useReport<Centre[]>(`/api/companies/${screen.company.id}/cost-centres`, 'costCentres')
   const [filter, setFilter] = useState('')
-  const rows = useMemo(() => {
-    const words = filter.trim().toLowerCase()
-    return (centres.data ?? []).filter(row => !words || row.name.toLowerCase().includes(words) || row.secondLanguageName?.toLowerCase().includes(words))
-  }, [centres.data, filter])
+  const rows = useMemo(() => matchingCentres(centres.data ?? [], filter), [centres.data, filter])
   return <ReportScreen title='Cost centre break-up' search={search} status={centres.status} error={centres.error} onRetry={centres.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} back={() => screen.back(null)}
     summary={centres.data && !centres.data.length ? 'This company has no cost centres yet.' : undefined}>

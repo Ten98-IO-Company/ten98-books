@@ -4,7 +4,7 @@ import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { isCalendarDate } from '../../lib/company'
 import type { Wire } from '../../lib/money'
-import { readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
+import { dataForSubject, readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
 
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
@@ -14,6 +14,8 @@ import { readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type
  */
 export type ReportSearch = {
   from?: string; to?: string; detail?: boolean; zeros?: boolean; hl?: string; group?: string; ledger?: string; voucher?: string; centre?: string
+  /** On a ledger's vouchers: the cost centre whose break-up opened them (they are not filtered by it; the screen says so). */
+  fromCentre?: string
   /** A register's earlier page cursors, oldest first, joined by dots (base64url cursors contain none). */
   pages?: string
 }
@@ -29,7 +31,7 @@ export function reportSearch(search: Record<string, unknown>): ReportSearch {
     from: date(search.from), to: date(search.to),
     detail: search.detail === true ? true : undefined, zeros: search.zeros === true ? true : undefined,
     hl: typeof search.hl === 'string' && key.test(search.hl) ? search.hl : undefined,
-    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher), centre: id(search.centre),
+    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher), centre: id(search.centre), fromCentre: id(search.fromCentre),
     pages: writeCursorStack(readCursorStack(search.pages)),
   }
   return Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined)) as ReportSearch
@@ -78,27 +80,28 @@ export type Loaded<T> = { status: 'loading' | 'ready' | 'error'; data: T | null;
 
 /**
  * GETs a report (null `path` waits) and reads `field` of the response. Keeps the last result while the next one loads,
- * so the screen does not jump.
+ * so the screen does not jump, but only for the same `subject` (reportSubject): a drill to another group, ledger or centre
+ * on the same route shows nothing of the level it left while it loads or fails.
  */
-export function useReport<T>(path: string | null, field = 'report'): Loaded<T> {
+export function useReport<T>(path: string | null, field = 'report', subject?: string): Loaded<T> {
   const { unauthorized } = useApp()
-  const [state, setState] = useState<{ path: string | null; data: T | null; error: string }>({ path: null, data: null, error: '' })
+  const [state, setState] = useState<{ path: string | null; subject: string | undefined; data: T | null; error: string }>({ path: null, subject: undefined, data: null, error: '' })
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (!path) return
     const controller = new AbortController()
     api<Record<string, T>>(path, { signal: controller.signal })
-      .then(result => setState({ path, data: result[field] ?? null, error: '' }))
+      .then(result => setState({ path, subject, data: result[field] ?? null, error: '' }))
       .catch(cause => {
         if (controller.signal.aborted) return
         if (cause instanceof ApiError && cause.status === 401) unauthorized()
-        else setState(previous => ({ path, data: previous.data, error: errMsg(cause) }))
+        else setState(previous => ({ path, subject: previous.subject, data: previous.data, error: errMsg(cause) }))
       })
     return () => controller.abort()
-  }, [path, attempt])
+  }, [path, subject, attempt])
   const reload = useCallback(() => setAttempt(value => value + 1), [])
   const settled = state.path === path
-  return { status: !settled ? 'loading' : state.error ? 'error' : 'ready', data: state.data, error: settled ? state.error : '', reload }
+  return { status: !settled ? 'loading' : state.error ? 'error' : 'ready', data: dataForSubject(state, subject), error: settled ? state.error : '', reload }
 }
 
 /** A query string from defined values only. */

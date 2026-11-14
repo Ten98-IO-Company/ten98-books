@@ -1,4 +1,4 @@
-import { Text, type DataColumn } from '@ten98/ui'
+import { Alert, Text, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Blank, Balance, Particulars } from '../../components/reports/cells'
@@ -7,7 +7,7 @@ import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { longDate, type LedgerVoucherRow, type LedgerVouchersReport } from '../../lib/reports'
+import { centreOriginNotice, ledgerVouchersParent, longDate, type LedgerVoucherRow, type LedgerVouchersReport } from '../../lib/reports'
 
 /** One ledger's vouchers in the period with the running balance and the ledgers on the other side; paged. */
 export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-vouchers')({ validateSearch: reportSearch, component: LedgerVouchersScreen })
@@ -39,7 +39,8 @@ function LedgerVouchersScreen() {
     error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period && search.ledger ? `/api/companies/${screen.company.id}/reports/ledger-vouchers/${search.ledger}/export?${query(screen.period)}` : null}
-    back={() => screen.back(search.ledger ? { report: 'ledger-monthly', search: { from: search.from, to: search.to, ledger: search.ledger } } : null)}>
+    back={() => screen.back(ledgerVouchersParent(search))}>
+    {centreOriginNotice(search) && <Alert tone='info' title='Not filtered by cost centre'>{centreOriginNotice(search)}</Alert>}
     {data && <ReportTable caption={`Vouchers of ${data.ledger.name}`} columns={columns} rows={rows} rowKey={row => row.key}
       highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={row => row.entry !== null}
       onOpen={row => { if (row.entry) screen.open({ report: 'voucher', search: { voucher: row.entry.voucherId, ledger: data.ledger.id } }) }}

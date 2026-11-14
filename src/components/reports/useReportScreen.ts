@@ -1,21 +1,28 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useState } from 'react'
 import { useCompany } from '../../lib/app-context'
-import { popCursor, pushCursor, readCursorStack, writeCursorStack, type PeriodKind, type ReportPeriod } from '../../lib/reports'
+import { popCursor, pushCursor, readCursorStack, reportSubject, syncHighlight, writeCursorStack, type HighlightState, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { periodSearch, useReport, useReportNavigation, useReportPeriod, type ReportLink, type ReportSearch } from './navigation'
 
 /**
  * What every report screen needs from its route: the period (filled in when absent), the report itself, the highlighted
  * line (restored from `hl` when coming back), drill-down and back, and setters for the view switches and the period,
- * which replace the history entry because they change this level rather than open a new one.
+ * which replace the history entry because they change this level rather than open a new one. A route is not remounted
+ * when only its search changes, so the highlight follows the address whenever the subject or its `hl` changes
+ * (syncHighlight), and data read for another subject is not shown (useReport).
  */
 export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path: (period: ReportPeriod, companyId: string) => string | null) {
   const company = useCompany()
   const navigate = useNavigate()
   const { period, error: periodError } = useReportPeriod(company.id, search, kind)
-  const report = useReport<T>(period ? path(period, company.id) : null)
+  const subject = reportSubject(search)
+  const report = useReport<T>(period ? path(period, company.id) : null, 'report', subject)
   const navigation = useReportNavigation(company.id)
-  const [highlight, setHighlight] = useState(search.hl)
+  const [tracked, setTracked] = useState<HighlightState>(() => syncHighlight({ level: '', highlight: undefined }, subject, search.hl))
+  const synced = syncHighlight(tracked, subject, search.hl)
+  if (synced !== tracked) setTracked(synced)
+  const highlight = synced.highlight
+  const setHighlight = useCallback((key: string | undefined) => setTracked(previous => ({ ...previous, highlight: key })), [])
   const update = useCallback((change: (previous: ReportSearch) => ReportSearch) =>
     void navigate({ to: '.', search: change as never, replace: true }), [navigate])
   const open = useCallback((link: ReportLink) => navigation.open({ ...link, search: { ...periodSearch(search), ...link.search } }, highlight),

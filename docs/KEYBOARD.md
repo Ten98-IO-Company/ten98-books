@@ -89,7 +89,7 @@ Intended overlaps: Escape and (classic) Ctrl+Q on entry and list screens are the
 
 ## Parity with desktop accounting keys
 
-The classic key of every command, compared with the private shortcut catalogue (D-05 parity audit, D-11: the key paths are kept, the wording is ours). **same**: the catalogue's key for the same action in the same context. **alternate**: differs for a stated browser reason. **ours**: no counterpart in the catalogue. Counts: 43 same, 0 alternate, 14 ours, over 57 commands.
+The classic key of every command, compared with the private shortcut catalogue (D-05 parity audit, D-11: the key paths are kept, the wording is ours). **same**: the catalogue's key for the same action in the same context. **alternate**: differs for a stated browser reason. **ours**: no counterpart in the catalogue. Counts: 43 same, 0 alternate, 16 ours, over 59 commands.
 
 How the catalogue's button bars map to keys, as the analyst established by pressing: the bars never print the modifier; a bottom-bar button that acts on the row or record (create a master, delete, void, and on the day book duplicate, insert and add) is an Alt chord; accept, quit and the side-bar letter buttons are Ctrl chords; a bare letter never runs a button. So list create and delete are `Alt+C` and `Alt+D`, entry delete is `Alt+D`, and the reserved remove and restore line keys are `Alt+R` and `Alt+U`. On the catalogue's lists a bare letter jumps to the next row starting with it; our lists do not do that yet (not built). Every catalogue key that has a command here could be kept, because each is one a browser tab receives; the alternates are all for features still to come (next section).
 

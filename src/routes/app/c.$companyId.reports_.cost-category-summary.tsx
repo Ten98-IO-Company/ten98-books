@@ -9,7 +9,7 @@ import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { CostCategorySummary } from '../../lib/cost-centres'
 import type { Wire } from '../../lib/money'
-import { costSummaryLines, type CostSummaryLine } from '../../lib/reports'
+import { costSummaryLines, costSummaryTarget, type CostSummaryLine } from '../../lib/reports'
 
 /**
  * The cost category summary (docs/REPORTS.md, "Cost centres"): each category with its top-level centres for the
@@ -19,7 +19,7 @@ export const Route = createFileRoute('/app/c/$companyId/reports_/cost-category-s
 
 const columns: DataColumn<CostSummaryLine>[] = [
   { key: 'particulars', header: 'Particulars', rowHeader: true, wrap: true, minWidth: 'md',
-    render: row => <Particulars label={row.name} depth={row.depth} strong={row.kind === 'category'} /> },
+    render: row => <Particulars label={row.name} depth={row.depth} strong={row.kind === 'category'} extra={row.kind === 'category' ? 'Category' : 'Cost centre'} /> },
   { key: 'opening', header: 'Opening balance', numeric: true, render: row => <Balance value={row.opening} strong={row.kind === 'category'} /> },
   { key: 'debit', header: 'Debit', numeric: true, render: row => <Amount value={row.debit} blankZero strong={row.kind === 'category'} /> },
   { key: 'credit', header: 'Credit', numeric: true, render: row => <Amount value={row.credit} blankZero strong={row.kind === 'category'} /> },
@@ -40,8 +40,8 @@ function CostCategorySummaryScreen() {
     <CostCentresOff companyId={screen.company.id} />
     {data && <ReportTable caption='Cost categories and their centres' columns={columns} rows={lines} rowKey={row => row.key}
       highlight={screen.highlight ?? lines.find(row => row.kind === 'centre')?.key} onHighlight={screen.setHighlight}
-      canOpen={row => row.kind === 'centre'}
-      onOpen={row => { if (row.kind === 'centre') screen.open({ report: 'cost-centre-breakup', search: { centre: row.id } }) }} />}
+      canOpen={row => costSummaryTarget(row) !== null}
+      onOpen={row => { const target = costSummaryTarget(row); if (target) screen.open(target) }} />}
   </ReportScreen>
 }
 
