@@ -63,9 +63,9 @@ END $$;
 -- mark, apostrophe, vertical bar, percent, less-than, dollar, caret, square brackets, backtick, double quote, the
 -- non-breaking space, the en dash, leading zeros, accents, and Arabic-Indic digits against ASCII ones. Lower case is
 -- the built-in pg_c_utf8 mapping (simple Unicode case mapping, the same on every server): it folds no accents and no
--- digits. The removed characters are this one list; src/lib/bills.ts holds its twin, and a test requires both to give
--- the same key. The bill keeps its first spelling for display. The same rule merged ledger and cost-centre names on
--- import, so the name is generic; masters keep their own uniqueness until the screens confirm it.
+-- digits. The removed characters are this one list; src/lib/names.ts holds its twin, and a test requires both to give
+-- the same key. The bill keeps its first spelling for display. The same rule decides duplicate master names on the
+-- creation screens (observed), so the name is generic; masters keep their own uniqueness until a later migration.
 CREATE FUNCTION name_match_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
   RETURN lower(translate(p_name, E' \t-./,()+*;=~?{}&', '') COLLATE pg_c_utf8);
 GRANT EXECUTE ON FUNCTION name_match_key(text) TO books_app;

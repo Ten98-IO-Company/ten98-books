@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import pg from 'pg';
-import { ignoredInNames, nameMatchKey } from '../src/lib/bills.ts';
+import { ignoredInNames, nameMatchKey } from '../src/lib/names.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 
 /**
 ` * The name match key has two copies, `name_match_key` in the database (migration 0009) and `nameMatchKey` in
- * src/lib/bills.ts for the screens: every observed character, Arabic text, accented letters and both digit kinds give
+ * src/lib/names.ts for the screens: every observed character, Arabic text, accented letters and both digit kinds give
  * the same key in both.
  */
 let database: TestDatabase;
