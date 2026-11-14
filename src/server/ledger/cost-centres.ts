@@ -259,7 +259,9 @@ export async function planCost(context: LedgerContext, lines: CostLine[], stored
   const takes = (line: CostLine) => costCentresEnabled && line.costCentres;
 
   // Which stored line each line inherits its earlier rows from: the same line number and ledger first; then a line
-  // left without a match takes the first unclaimed stored line of its ledger (lines inserted or removed above it).
+  // left without a match takes the first unclaimed stored line of its ledger (lines inserted or removed above it). Among
+  // several lines of one ledger rows therefore go by position: a removed or reordered line can leave one line's centres
+  // on another (cost_kept or cost_rebalanced, the rest cost_dropped), and the warnings do not say which centres moved.
   const storedLines = [...new Set(stored.map(row => row.lineNo))];
   const ledgerOf = new Map(stored.map(row => [row.lineNo, row.ledgerId]));
   const claimed = new Set<number>(), source = new Map<CostLine, number>();
