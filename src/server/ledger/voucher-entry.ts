@@ -1,4 +1,4 @@
-import { addMoney, subtractMoney } from '@ten98/runtime';
+import { addMoney, assertMoneyInRange, subtractMoney } from '@ten98/runtime';
 import { financialYearOf } from '../../lib/company.ts';
 import {
   balancePreviewInput, counterLedgerQuery, nextNumberQuery,
@@ -33,7 +33,8 @@ export async function nextNumber(context: LedgerContext, voucherTypeId: string, 
     [company.companyId, voucherTypeId, date]);
   const row = rows[0];
   if (!row) throw ledgerError(404, 'Voucher type not found.', 'not_found');
-  if (row.periodStart === null || row.startingNumber === null) throw ledgerError(409, 'This voucher type has no numbering rule for that date.', 'validation');
+  // Every voucher type gets its restart rule from the database when it is created, so a missing rule is a broken invariant.
+  if (row.periodStart === null || row.startingNumber === null) throw new Error(`Voucher type ${voucherTypeId} has no numbering rule.`);
   // Only yearly restart exists (LEDGER.md, "Numbering"), so a period ends with the financial year containing the date.
   return { number: row.lastNumber === null ? row.startingNumber : row.lastNumber + 1, periodStart: row.periodStart, periodEnd: financialYearOf(company.financialYearStart, date).to };
 }
@@ -52,12 +53,23 @@ export async function balancePreview(context: LedgerContext, value: unknown): Pr
     if (amount <= 0n) throw ledgerError(400, `The amount on line ${index + 1} must be more than zero.`, 'validation');
     return { ...line, amount, lineNo: index + 1 };
   });
+  // The draft's totals stay inside the bigint range, as a posted voucher's must.
+  let debit = 0n, credit = 0n;
+  for (const line of lines) if (line.side === 'Dr') debit = addMoney(debit, line.amount); else credit = addMoney(credit, line.amount);
+  try { assertMoneyInRange(debit); assertMoneyInRange(credit); }
+  catch { throw ledgerError(400, 'The voucher total is too large.', 'validation'); }
   await reportBudget(context, budgetSeconds);
+  // The draft's ledgers are checked before the company-wide aggregate runs.
+  const named = [...new Set(lines.map(line => line.ledgerId))];
+  if (named.length) {
+    const { rows: found } = await client.query<{ id: string }>('SELECT id FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[])', [company.companyId, named]);
+    const known = new Set(found.map(row => row.id));
+    const missing = lines.find(line => !known.has(line.ledgerId));
+    if (missing) throw ledgerError(400, `The ledger on line ${missing.lineNo} was not found in this company.`, 'not_found');
+  }
   const yearStart = financialYearOf(company.financialYearStart, input.date).from;
   const { rows } = await ledgerRows(context, yearStart, input.date);
   const ledgers = new Map(rows.map(row => [row.ledgerId, row]));
-  const missing = lines.find(line => !ledgers.has(line.ledgerId));
-  if (missing) throw ledgerError(400, `The ledger on line ${missing.lineNo} was not found in this company.`, 'not_found');
   const balances = new Map(rows.map(row => [row.ledgerId, subtractMoney(row.closingDebit, row.closingCredit)]));
 
   if (input.voucherId) {
@@ -77,8 +89,14 @@ export async function balancePreview(context: LedgerContext, value: unknown): Pr
     }
   }
   for (const line of lines) balances.set(line.ledgerId, addMoney(balances.get(line.ledgerId)!, signed(line.side, line.amount)));
-  const named = [...new Set(lines.map(line => line.ledgerId))];
-  return { balances: named.map(ledgerId => ({ ledgerId, balance: balances.get(ledgerId)! })) };
+  return {
+    balances: named.map(ledgerId => {
+      const balance = balances.get(ledgerId)!;
+      try { assertMoneyInRange(balance); }
+      catch { throw ledgerError(400, `The balance of ${ledgers.get(ledgerId)!.name} would be too large.`, 'validation'); }
+      return { ledgerId, balance };
+    }),
+  };
 }
 
 /**

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
+import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtime';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
@@ -131,6 +132,56 @@ test('balance preview leaves out an earlier year\'s income and expense from the 
   // At a date in 2026 the 2025 rent sits in the profit and loss ledger, not in Rent.
   assert.deepEqual(await preview(), { balances: [{ ledgerId: rent, balance: '1.00' }, { ledgerId: profitAndLoss, balance: '39.00' }] });
   assert.deepEqual(await preview(earlier.id), { balances: [{ ledgerId: rent, balance: '1.00' }, { ledgerId: profitAndLoss, balance: '-1.00' }] });
+  // A balance-sheet ledger of the same earlier voucher keeps it in its own balance, so it comes off there.
+  const cash = c.books.ledger('Cash');
+  const withCash = (voucherId?: string) => ok(owner.browser.call(`${c.base}/vouchers/balance-preview`, { date: '2026-03-01', lines: [{ ledgerId: cash, side: 'Dr', amount: '2' }], ...(voucherId ? { voucherId } : {}) }));
+  assert.deepEqual(await withCash(), { balances: [{ ledgerId: cash, balance: '-38.00' }] });
+  assert.deepEqual(await withCash(earlier.id), { balances: [{ ledgerId: cash, balance: '2.00' }] });
+});
+
+test('balance preview: a post-dated stored voucher counts from its own date; amounts beyond the bigint range are refused', async () => {
+  const c = await company('Preview Post-dated');
+  const rent = await c.ledger('Rent', 'indirect_expenses');
+  const cash = c.books.ledger('Cash');
+  const postDated = await c.post('payment', '2026-01-20', [[rent, 'Dr', '25'], [cash, 'Cr', '25']], { postDated: true });
+  const preview = (date: string, voucherId?: string) => ok(owner.browser.call(`${c.base}/vouchers/balance-preview`, { date, lines: [{ ledgerId: rent, side: 'Dr', amount: '1' }], ...(voucherId ? { voucherId } : {}) }));
+  assert.deepEqual(await preview('2026-01-19'), { balances: [{ ledgerId: rent, balance: '1.00' }] }, 'not yet counted before its date');
+  assert.deepEqual(await preview('2026-01-19', postDated.id), { balances: [{ ledgerId: rent, balance: '1.00' }] });
+  assert.deepEqual(await preview('2026-01-31'), { balances: [{ ledgerId: rent, balance: '26.00' }] }, 'counted from its own date');
+  assert.deepEqual(await preview('2026-01-31', postDated.id), { balances: [{ ledgerId: rent, balance: '1.00' }] });
+
+  const largest = formatMoney(MONEY_MAX, 2);
+  const refused = async (lines: unknown[], message: string) => {
+    const answer = await owner.browser.call(`${c.base}/vouchers/balance-preview`, { date: '2026-01-31', lines });
+    assert.deepEqual([answer.status, answer.body.code, answer.body.error], [400, 'validation', message]);
+  };
+  await refused(Array.from({ length: 3 }, () => ({ ledgerId: rent, side: 'Dr', amount: largest })), 'The voucher total is too large.');
+  // Within range as a draft, but beyond it once added to the stored balance of 25.00 Dr.
+  await refused([{ ledgerId: rent, side: 'Dr', amount: largest }], 'The balance of Rent would be too large.');
+});
+
+test('balance preview minus its draft equals the ledger balance read, for every kind of ledger, in the previous year and early and late in the year', async () => {
+  const c = await company('Preview Agreement', { booksBeginning: '2025-01-01' });
+  const rent = await c.ledger('Rent', 'indirect_expenses');
+  const fees = await c.ledger('Fees', 'indirect_income', { amount: '300', side: 'Cr' });
+  const bank = await c.ledger('Harbour Bank', 'bank_accounts', { amount: '1000', side: 'Dr' });
+  const cash = c.books.ledger('Cash');
+  const profitAndLoss = ((await owner.browser.call(`${c.base}/ledgers`)).body.ledgers as { id: string; systemKey: string | null }[]).find(row => row.systemKey === 'profit_and_loss')!.id;
+  for (const [date, lines] of [
+    ['2025-03-10', [[rent, 'Dr', '40'], [bank, 'Cr', '40']]], ['2025-08-01', [[cash, 'Dr', '75'], [fees, 'Cr', '75']]],
+    ['2026-01-01', [[rent, 'Dr', '12'], [cash, 'Cr', '12']]], ['2026-05-05', [[bank, 'Dr', '90'], [fees, 'Cr', '90']]],
+    ['2026-09-30', [[rent, 'Dr', '7'], [bank, 'Cr', '7']]],
+  ] as [string, Line[]][]) await c.post('journal', date, lines);
+  const minor = (text: string) => text.startsWith('-') ? subtractMoney(0n, parseMoney(text.slice(1), 2)) : parseMoney(text, 2);
+  const signedClosing = (balance: { closingDebit: string; closingCredit: string }) => subtractMoney(minor(balance.closingDebit), minor(balance.closingCredit));
+  for (const date of ['2025-06-30', '2026-01-01', '2026-09-30']) {
+    const yearStart = `${date.slice(0, 4)}-01-01`;
+    for (const ledgerId of [rent, fees, bank, profitAndLoss, cash]) {
+      const preview = await ok(owner.browser.call(`${c.base}/vouchers/balance-preview`, { date, lines: [{ ledgerId, side: 'Dr', amount: '1' }] }));
+      const read = await ok(owner.browser.call(`${c.base}/ledgers/${ledgerId}/balance?from=${yearStart}&to=${date}`));
+      assert.equal(subtractMoney(minor(preview.balances[0].balance), 100n), signedClosing(read.balance), `${date} ${ledgerId}`);
+    }
+  }
 });
 
 test('counter ledger: the most recently entered regular voucher of the type, per side; skips cancelled, optional and deleted', async () => {
