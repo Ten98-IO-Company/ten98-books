@@ -241,6 +241,20 @@ const chordsOf = (name: KeymapName, id: CommandId): readonly string[] => { const
  */
 export const claimable = (chord: string): boolean => /(^|\+)F\d+$/.test(chord) || /(^|\+)(Ctrl|Alt|Meta)\+/.test(chord)
 
+/** Clipboard and editing chords. Text editing keeps them: see `claimSplit`. */
+export const editingChords: readonly string[] = ['Ctrl+C', 'Ctrl+X', 'Ctrl+V', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z', 'Ctrl+A']
+
+/**
+ * The one rule for what a claim may take. `always` is claimed wherever focus is. `editing` holds the clipboard and editing
+ * chords, claimed only while focus is on a non-editable target (a list row, a menu, a button) and nothing on the page is
+ * selected; in a text field, select or editable region, or over a selection, the browser keeps them whatever is
+ * reserved. Ctrl+A stays in `always` where it is the accept key (D-05): pass the accept chords of that place as `accept`.
+ */
+export function claimSplit(keys: readonly string[], accept: readonly string[] = []): { always: string[]; editing: string[] } {
+  const editing = keys.filter(key => editingChords.includes(key) && !accept.includes(key))
+  return { always: keys.filter(key => !editing.includes(key)), editing }
+}
+
 /** The reserved keys of a context that classic claims (default prevented, nothing run); none in web-safe. */
 export function reservedClaims(name: KeymapName, context: CommandContext): string[] {
   if (name !== 'classic') return []

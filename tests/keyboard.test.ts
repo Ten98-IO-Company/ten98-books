@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
 import { ariaKeyShortcuts, commandIds, commands, keepsEscape, type CommandContext, type CommandId } from '../src/lib/commands.ts';
-import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, keymapNames, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
+import { browserReservedChords, claimable, claimSplit, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, keymapNames, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
@@ -30,28 +30,41 @@ function resolve(name: KeymapName, chord: string, contexts: readonly (CommandCon
  * A dialog as DialogKeys (KeyboardShell.tsx) registers it: a modal scope holding nav.quit, help.keyboard, entry.accept
  * when the dialog applies something, and one claim of `dialogClaims` for every other classic key.
  */
-function resolveInDialog(name: KeymapName, chord: string, target: ShortcutTarget, { accept = true } = {}) {
+function resolveInDialog(name: KeymapName, chord: string, target: ShortcutTarget, { accept = true, selection = false } = {}) {
   const merged = mergeKeymaps(keymaps[name]);
   const ownIds: CommandId[] = accept ? ['nav.quit', 'help.keyboard', 'entry.accept'] : ['nav.quit', 'help.keyboard'];
   const own = ownIds.map(id => ({ id: id as string, scope: 'dialog', enabled: true, allowInTextInput: id === 'entry.accept', chords: (merged[id] ?? []).map(key => parseChord(key)!) }));
-  const claim = { id: 'claim.dialog', scope: 'dialog', enabled: true, chords: dialogClaims(name, ownIds).map(key => parseChord(key)!) };
-  return resolveShortcut({ chord: parseChord(chord)!, scopes: [{ id: 'dialog', focus: false }], commands: [...own, claim, ...registered(name)], target })?.command.id;
+  const claims = claimCommands('claim.dialog', 'dialog', dialogClaims(name, ownIds), [], editingTarget(target, selection));
+  return resolveShortcut({ chord: parseChord(chord)!, scopes: [{ id: 'dialog', focus: false }], commands: [...own, ...claims, ...registered(name)], target })?.command.id;
 }
+
+/** True where the shell's useEditingTarget is: focus in a text field or editable region, or a text selection on the page. */
+const editingTarget = (target: ShortcutTarget, selection = false) => target === 'text' || target === 'multiline' || selection;
+
+/** A claim as useClaim registers it: the editing chords in a second command, switched off while editing. */
+const claimCommands = (id: string, scope: string, keys: readonly string[], accept: readonly string[], editing: boolean) => {
+  const { always, editing: edits } = claimSplit(keys, accept);
+  return [
+    { id, scope, enabled: true, chords: always.map(key => parseChord(key)!) },
+    { id: `${id}.editing`, scope, enabled: !editing, chords: edits.map(key => parseChord(key)!) },
+  ];
+};
 
 /**
  * The registry as the screens build it in a keymap: each scope's commands, with a switched-off command replaced by its
  * claim (useAppCommand) and each context's reserved claim (ReservedKeys) registered in its scope.
  */
-function resolveScreen(name: KeymapName, chord: string, contexts: readonly CommandContext[], target: ShortcutTarget, disabled: readonly CommandId[] = []) {
-  const merged = mergeKeymaps(keymaps[name]);
-  const screen = registered(name).map(command => {
+function resolveScreen(name: KeymapName, chord: string, contexts: readonly CommandContext[], target: ShortcutTarget, disabled: readonly CommandId[] = [], selection = false) {
+  const editing = editingTarget(target, selection);
+  const screen = registered(name).flatMap(command => {
     const id = command.id as CommandId;
-    if (!disabled.includes(id)) return { ...command, allowInTextInput: inTextInput.has(id) };
+    if (!disabled.includes(id)) return [{ ...command, allowInTextInput: inTextInput.has(id) }];
     const claims = disabledClaims(name, id);
-    return claims.length ? { id: `claim.${id}`, scope: command.scope, enabled: true, chords: claims.map(key => parseChord(key)!) } : { ...command, enabled: false };
+    const { always } = claimSplit(claims, id === 'entry.accept' ? claims : []);
+    const real = always.length ? [] : [{ ...command, enabled: false }];
+    return [...real, ...claimCommands(`claim.${id}`, command.scope, claims, id === 'entry.accept' ? claims : [], editing)];
   });
-  void merged;
-  const reserved = (['global', ...contexts] as CommandContext[]).map(context => ({ id: `reserved.${context}`, scope: context, enabled: true, chords: reservedClaims(name, context).map(key => parseChord(key)!) }));
+  const reserved = (['global', ...contexts] as CommandContext[]).flatMap(context => claimCommands(`reserved.${context}`, context, reservedClaims(name, context), [], editing));
   const scopes = [...contexts.map(id => ({ id, focus: false })), { id: 'global', focus: false }];
   return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: [...screen, ...reserved], target })?.command.id;
 }
@@ -274,7 +287,8 @@ test('a dialog built by DialogKeys closes on Ctrl+Q, opens help on F1, applies o
     assert.equal(resolveInDialog('classic', 'Escape', target), undefined, 'the dialog closes itself on Escape');
   }
   assert.equal(resolveInDialog('classic', 'Ctrl+A', 'text'), 'entry.accept', 'applies from a field');
-  assert.equal(resolveInDialog('classic', 'Ctrl+A', 'text', { accept: false }), 'claim.dialog', 'with nothing to apply the key is still kept from the browser');
+  assert.equal(resolveInDialog('classic', 'Ctrl+A', 'control', { accept: false }), 'claim.dialog.editing', 'with nothing to apply, Ctrl+A off a field is kept from the browser');
+  assert.equal(resolveInDialog('classic', 'Ctrl+A', 'text', { accept: false }), undefined, 'and in a field it selects the text');
   assert.equal(resolveInDialog('classic', 'Enter', 'control'), undefined, 'a focused button keeps Enter');
   // Web-safe claims nothing: its keys are chosen to leave the browser's alone.
   assert.equal(resolveInDialog('web-safe', 'F3', 'other'), undefined);
@@ -291,7 +305,7 @@ test('classic claims every reserved key in its context, and the keys of a switch
   assert.equal(resolveScreen('classic', 'Ctrl+H', ['entry'], 'text'), 'reserved.entry');
   assert.equal(resolveScreen('classic', 'Ctrl+R', ['entry'], 'text'), 'reserved.entry');
   // A list: the disputed create and delete candidates and the list settings keys.
-  for (const chord of ['Ctrl+D', 'Ctrl+C', 'Ctrl+H', 'F10', 'F5']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), 'reserved.list', chord);
+  for (const chord of ['Ctrl+D', 'Ctrl+H', 'F10', 'F5']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), 'reserved.list', chord);
   // A built-in row: delete is switched off, and Alt+D is still claimed.
   assert.equal(resolveScreen('classic', 'Alt+D', ['list'], 'control', ['list.delete']), 'claim.list.delete');
   assert.equal(resolveScreen('classic', 'Alt+D', ['list'], 'control'), 'list.delete');
@@ -334,4 +348,28 @@ test('aria-keyshortcuts lists the keys with Control spelled out', () => {
   assert.equal(ariaKeyShortcuts(['Ctrl+A', 'Ctrl+Enter']), 'Control+A Control+Enter');
   assert.equal(ariaKeyShortcuts(['F1', 'Ctrl+/']), 'F1 Control+/');
   assert.equal(ariaKeyShortcuts([]), undefined);
+});
+
+test('a claim never takes the clipboard and editing chords from a text field or a selection; off them it does', () => {
+  const editingKeys = ['Ctrl+C', 'Ctrl+X', 'Ctrl+V', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z'];
+  // The alter list's search field (a text target in the list context): Ctrl+C is reserved there, yet copies.
+  for (const target of ['text', 'multiline'] as const) {
+    for (const chord of [...editingKeys, 'Ctrl+A']) assert.equal(resolveScreen('classic', chord, ['list'], target), undefined, `${chord} in a field`);
+    assert.equal(resolveScreen('classic', 'Ctrl+D', ['list'], target), 'reserved.list', 'other reserved keys are still claimed in a field');
+  }
+  // A list row (a non-editable control) with nothing selected: the reserved Ctrl+C is claimed.
+  assert.equal(resolveScreen('classic', 'Ctrl+C', ['list'], 'control'), 'reserved.list.editing');
+  // The same row with text selected on the page: copying works.
+  assert.equal(resolveScreen('classic', 'Ctrl+C', ['list'], 'control', [], true), undefined);
+  // A report row: the reserved column keys Ctrl+C and Ctrl+A are claimed off a field only.
+  assert.equal(resolveScreen('classic', 'Ctrl+A', ['report'], 'control'), 'reserved.report.editing');
+  assert.equal(resolveScreen('classic', 'Ctrl+A', ['report'], 'text'), undefined);
+  // Ctrl+A is the accept key on an entry screen (D-05): a viewer's switched-off accept still claims it in a field.
+  assert.equal(resolveScreen('classic', 'Ctrl+A', ['entry'], 'text', ['entry.accept']), 'claim.entry.accept');
+  assert.equal(resolveScreen('classic', 'Ctrl+A', ['entry'], 'text'), 'entry.accept');
+  // A dialog field keeps the clipboard keys too.
+  for (const chord of ['Ctrl+C', 'Ctrl+V', 'Ctrl+X']) assert.equal(resolveInDialog('classic', chord, 'text', { accept: false }), undefined, chord);
+  // The split itself.
+  assert.deepEqual(claimSplit(['Ctrl+C', 'Ctrl+D', 'Ctrl+A', 'F5']), { always: ['Ctrl+D', 'F5'], editing: ['Ctrl+C', 'Ctrl+A'] });
+  assert.deepEqual(claimSplit(['Ctrl+A', 'Ctrl+Enter'], ['Ctrl+A', 'Ctrl+Enter']), { always: ['Ctrl+A', 'Ctrl+Enter'], editing: [] });
 });
