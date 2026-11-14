@@ -243,15 +243,28 @@ test('a type change and a posting into the new type serialise on its counter; tw
   assert.deepEqual(outcomes.map(String).sort(), ['200', 'stale_revision'], 'one alter wins; the other read a revision that has moved on');
 });
 
-test('a bill name of ignored characters only is refused, typed or taken from the supplier reference', async () => {
+test('names of ignored characters only are one bill per party, shown with the first spelling; spaces only are refused (observed on screen)', async () => {
   const b = await books('Empty Keys');
   const sales = await b.ledger('Sales', 'sales'), costs = await b.ledger('Costs', 'purchases'), party = await b.ledger('Party', 'receivables'), supplier = await b.ledger('Supplier', 'payables');
-  for (const name of ['-', '.()', ' & ']) {
-    const answer = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('sales'), date: '2026-03-01',
-      lines: [line(party, 'Dr', '10', [{ kind: 'new_ref', name, amount: '10' }]), line(sales, 'Cr', '10')] });
-    assert.deepEqual([answer.status, answer.body.code], [400, 'validation'], JSON.stringify(name));
+  const warnings: string[][] = [];
+  for (const name of ['-', '.', '( )', '- -', '-']) {
+    const posted = await b.post('sales', '2026-03-01', [line(party, 'Dr', '10', [{ kind: 'new_ref', name, amount: '10' }]), line(sales, 'Cr', '10')]);
+    warnings.push(posted.warnings.map((item: { code: string }) => item.code));
   }
-  const fromReference = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('purchase'), date: '2026-03-01', reference: '--',
-    lines: [line(costs, 'Dr', '10'), line(supplier, 'Cr', '10', [{ kind: 'new_ref', amount: '10' }])] });
-  assert.deepEqual([fromReference.status, fromReference.body.code], [400, 'validation'], 'the database refuses it and the answer names the rule');
+  assert.deepEqual(warnings, [[], ['bill_attached'], ['bill_attached'], ['bill_attached'], ['bill_attached']], 'later spellings join the first bill, with our warning');
+  await b.post('sales', '2026-03-02', [line(party, 'Dr', '7', [{ kind: 'new_ref', name: 'A1', amount: '7' }]), line(sales, 'Cr', '7')]);
+  const picker = (await b.call(`/ledgers/${party}/bills?asOf=2026-03-31&sort=name`)).body.bills as { name: string; pending: string }[];
+  assert.deepEqual(picker.map(bill => [bill.name, bill.pending]), [['-', '50.00'], ['A1', '7.00']], 'one bill "-" of 50.00, first in name order (an empty key sorts first)');
+  const listed = (await b.call('/reports/bills-outstanding?side=receivable&asOf=2026-03-31')).body.report.bills as { name: string }[];
+  assert.deepEqual(listed.map(bill => bill.name), ['-', 'A1']);
+  const spaces = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('sales'), date: '2026-03-01',
+    lines: [line(party, 'Dr', '10', [{ kind: 'new_ref', name: '   ', amount: '10' }]), line(sales, 'Cr', '10')] });
+  assert.deepEqual([spaces.status, spaces.body.code], [400, 'validation'], 'a name of spaces only is refused, like an empty name');
+  // A purchase whose supplier reference is "-" names its bill "-".
+  const purchase = (await b.post('purchase', '2026-03-03', [line(costs, 'Dr', '10'), line(supplier, 'Cr', '10', [{ kind: 'new_ref', amount: '10' }])], { reference: '-' })).voucher;
+  assert.equal(purchase.lines[1].bills[0].billName, '-');
+  // Where a refusal remains, its own wording reaches the caller after the field.
+  const both = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('sales'), date: '2026-03-01',
+    lines: [line(party, 'Dr', '10', [{ kind: 'against_ref', name: '-', billId: randomUUID(), amount: '10' }]), line(sales, 'Cr', '10')] });
+  assert.deepEqual([both.status, both.body.error], [400, 'Check the bill rows on line 1 and try again. Give the bill name or the bill, not both.']);
 });

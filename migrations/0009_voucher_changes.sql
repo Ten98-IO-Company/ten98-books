@@ -70,26 +70,26 @@ CREATE FUNCTION name_match_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE 
   RETURN lower(translate(p_name, E' \t-./,()+*;=~?{}&', '') COLLATE pg_c_utf8);
 GRANT EXECUTE ON FUNCTION name_match_key(text) TO books_app;
 
--- Two bills of one party that the key makes equal are not merged silently, and a name of ignored characters only (an
--- empty key: the reference's behaviour is unobserved) is not accepted: the migration stops and names them (no released
--- installation holds bills yet; an operator renames or merges them by hand first, LEDGER.md "Known limits" has the
--- query). The scope lists every workspace for this transaction only, as in 0008.
+-- Two bills of one party that the key makes equal (an empty key included: a name of ignored characters only is a valid
+-- name, observed) are not merged silently: the migration stops and names them (no released installation holds bills
+-- yet; an operator renames or merges them by hand first, LEDGER.md "Known limits" has the query). The scope lists every
+-- workspace for this transaction only, as in 0008.
 DO $$
 DECLARE v_clash text;
 BEGIN
   PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
   SELECT string_agg(format('company %s, ledger %s: %s', company_id, ledger_id, names), '; ') INTO v_clash
   FROM (SELECT company_id, ledger_id, string_agg(name, ', ' ORDER BY name) AS names FROM bill
-        GROUP BY company_id, ledger_id, name_match_key(name) HAVING count(*) > 1 OR name_match_key(name) = '') clashes;
+        GROUP BY company_id, ledger_id, name_match_key(name) HAVING count(*) > 1) clashes;
   PERFORM set_config('app.company_ids', '', true);
   IF v_clash IS NOT NULL THEN
-    RAISE EXCEPTION 'these bills become one bill under the new name match key, or have no key; rename or merge them first: %', v_clash;
+    RAISE EXCEPTION 'these bills become one bill under the new name match key; rename or merge them first: %', v_clash;
   END IF;
 END $$;
 DROP INDEX bill_identity_idx;
 -- In plain-text order (COLLATE "C"), the order the lists read a party's bills in, so a page reads only its own bills.
+-- An empty key (a name of ignored characters only) sorts first.
 CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name) COLLATE "C");
-ALTER TABLE bill ADD CONSTRAINT bill_name_key CHECK (name_match_key(name) <> '');
 
 -- ---- Vouchers created cancelled, without lines ----
 

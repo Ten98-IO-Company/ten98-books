@@ -153,8 +153,11 @@ async function scope(context: LedgerContext, groupId: string | undefined): Promi
   const { rows } = await context.client.query<{ id: string }>(
     `WITH RECURSIVE below(id) AS (SELECT unnest($2::uuid[]) UNION SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
      SELECT l.id FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM below)
-       -- One probe of the identity index per ledger (a semi-join would read every bill of the company on every page).
-       AND (SELECT true FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
+       -- One probe of bill_identity_idx per ledger, ordered by the key alone: company and ledger are fixed, so only that index
+       -- gives the order and it is the cheap path on any statistics (unordered, or ordered from company_id, the planner read
+       -- the company's bills through the primary key, or scanned the table, for every ledger).
+       AND (SELECT true FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id
+            ORDER BY name_match_key(b.name) COLLATE "C" LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
   return { groups, ledgerIds: rows.map(row => row.id) };
 }
 

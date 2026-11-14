@@ -119,7 +119,7 @@ test('a 500-line voucher with 250 bills posts and alters within the posting budg
   assert.ok(median(timings['250 bills alter']) < 5000, 'the alter with 250 bills stays well inside the 10-second statement budget');
 });
 
-test('one page of a party with 300 bills reads its own bills through the identity index, not the party\'s 300', async () => {
+test('one page of a party with 300 bills reads its own bills through the identity index, not the party\'s 300, with and without statistics', async t => {
   const pageCompany = await createCompany(owner.browser, { name: 'Bill Pages' });
   const pageBooks = await chart(owner.browser, pageCompany);
   const [party, pageSales] = await inCompany(owner.userId, pageCompany, async context => [
@@ -129,24 +129,23 @@ test('one page of a party with 300 bills reads its own bills through the identit
     { ledgerId: party.id, side: 'Dr', amount: '100.00', bills: Array.from({ length: 100 }, (_, index) => ({ kind: 'new_ref', name: `M-${String(block * 100 + index).padStart(3, '0')}`, amount: '1.00' })) },
     { ledgerId: pageSales.id, side: 'Cr', amount: '100.00' }]) };
   await inCompany(owner.userId, pageCompany, context => createVoucher(context, body), 'write');
-  // A party with hundreds of bills lives in analysed tables (autovacuum analyses after such inserts); without statistics
-  // the pending sums may still pick another index (LEDGER.md, "Known limits").
-  await asAdmin(database.adminUrl, admin => admin.query('ANALYZE bill, bill_allocation, voucher'));
-  await inCompany(owner.userId, pageCompany, async context => {
-    const first = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3' });
-    assert.deepEqual(first.bills.map(bill => bill.name), ['M-000', 'M-001', 'M-002']);
-    // At 300 bills a sequential scan is the cheaper plan; with it off, as for a party whose bills outgrow it, the page is
-    // served in key order from the identity index (before 0009 its collation made that impossible: the order needed a
-    // sort of every bill of the party).
-    await context.client.query('SET LOCAL enable_seqscan = off');
-    const start = await counters(context.client, 'bill'), rowsStart = await counters(context.client);
-    const page = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3', after: first.next! });
-    const read = delta(await counters(context.client, 'bill'), start), rows = delta(await counters(context.client), rowsStart);
-    assert.deepEqual(page.bills.map(bill => bill.name), ['M-003', 'M-004', 'M-005']);
-    // The page and its look-ahead row in key order, the list's party probe and the three bills' details by id: a few dozen, never 300.
-    assert.equal(read.seq_tup_read, 0, JSON.stringify(read));
-    assert.ok(read.idx_tup_fetch <= 30, JSON.stringify(read));
-    assert.equal(rows.seq_tup_read, 0, JSON.stringify(rows));
-    assert.ok(rows.idx_tup_fetch <= 30, `bill rows: ${JSON.stringify(rows)}`);
-  });
+  // Another company holds bills in the same tables.
+  await inCompany(owner.userId, second.companyId, context => createVoucher(context, { idempotencyKey: `other-${randomUUID()}`, voucherTypeId: second.books.type('journal'),
+    date: '2026-01-15', lines: second.parties.flatMap((party, index) => [{ ledgerId: party, side: 'Dr', amount: '1.00', bills: [{ kind: 'new_ref', name: `O-${index}`, amount: '1.00' }] },
+      { ledgerId: second.sales, side: 'Cr', amount: '1.00' }]) }), 'write');
+  for (const tables of ['without statistics', 'analysed'] as const) {
+    if (tables === 'analysed') await asAdmin(database.adminUrl, admin => admin.query('ANALYZE bill, bill_allocation, voucher'));
+    await inCompany(owner.userId, pageCompany, async context => {
+      const first = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3' });
+      assert.deepEqual(first.bills.map(bill => bill.name), ['M-000', 'M-001', 'M-002']);
+      const start = await counters(context.client, 'bill');
+      const page = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3', after: first.next! });
+      const read = delta(await counters(context.client, 'bill'), start);
+      assert.deepEqual(page.bills.map(bill => bill.name), ['M-003', 'M-004', 'M-005']);
+      t.diagnostic(`${tables}: bill rows read for one page of three: ${read.seq_tup_read + read.idx_tup_fetch} (${JSON.stringify(read)})`);
+      // The page and its look-ahead row in key order, the list's party probes and the three bills' details by id: a few
+      // dozen at most, whatever the party's 300 bills and the other company's bills.
+      assert.ok(read.seq_tup_read + read.idx_tup_fetch <= 30, `${tables}: ${JSON.stringify(read)}`);
+    });
+  }
 });

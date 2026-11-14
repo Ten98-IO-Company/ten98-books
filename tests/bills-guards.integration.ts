@@ -124,7 +124,6 @@ test('bills and bill rows keep their keys, shapes and families; nothing is updat
     ['a bill without rows', client => client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4)', [companyId, ids.party, 'EMPTY', 'AED']), code('23514', 'bill_used')],
     ['a second bill differing only by case', client => client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4)', [companyId, ids.party, 'b-1', 'AED']), code('23505', 'bill_identity_idx')],
     ['a bill in another currency', client => client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4)', [companyId, ids.party, 'USD-1', 'USD']), code('23514', 'bill_base_currency_only')],
-    ['a bill whose name has no key', client => client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4)', [companyId, ids.party, '-/-', 'AED']), code('23514', 'bill_name_key')],
     ['a bill with an untrimmed name', client => client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4)', [companyId, ids.party, ' X ', 'AED']), code('23514')],
     ['a bill on the bank ledger', async client => {
       const { rows: [bill] } = await client.query('INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, $4) RETURNING id', [companyId, ids.bank, 'BANK', 'AED']);

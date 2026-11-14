@@ -1,6 +1,6 @@
 import { addMoney, formatMoney, subtractMoney } from '@ten98/runtime';
 import type { BillKind, BillRowInput, BillWarning, CreditPeriod, CreditUnit, OpeningBillInput, Side, VoucherKind } from '../../lib/ledger.ts';
-import { ledgerError, parseAmount, refusal, type LedgerContext } from './context.ts';
+import { ledgerError, parseAmount, type LedgerContext } from './context.ts';
 
 /**
  * Bills (M2a slice 1, base currency). A bill is one party ledger's reference name, compared without regard to case: a
@@ -217,8 +217,7 @@ export async function writeBills(context: LedgerContext, voucher: { id: string; 
          SELECT DISTINCT ON (t.ledger_id, name_match_key(t.name)) t.ledger_id, t.name FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
          ORDER BY t.ledger_id, name_match_key(t.name), t.ord) d
        ORDER BY d.ledger_id, name_match_key(d.name) COLLATE "C"
-       ON CONFLICT (company_id, ledger_id, (name_match_key(name)) COLLATE "C") DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency])
-      .catch(error => refusal(error, { bill_name_key: ledgerError(400, 'A bill name needs a character other than spaces and - . / , ( ) + * ; = ~ ? { } &.', 'validation') }));
+       ON CONFLICT (company_id, ledger_id, (name_match_key(name)) COLLATE "C") DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency]);
     const found = await billsByName(context, creating.map(row => ({ ledgerId: row.ledgerId, name: row.name! })));
     creating.forEach((row, index) => { row.billId = found[index]; });
   }

@@ -70,11 +70,16 @@ export async function readLedgerBody(request: Request, maxBytes?: number): Promi
   catch (error) { throw error instanceof InputError ? ledgerError(error.status, error.message, 'validation') : error; }
 }
 
-/** Parses `value` with `schema`, refusing with a plain-language message that names the first field at fault. */
+/**
+ * Parses `value` with `schema`, refusing with a plain-language message that names the first field at fault, followed by
+ * the rule's own wording when the schema gives one (a refinement with a message).
+ */
 export function parseInput<S extends z.ZodType>(schema: S, value: unknown, describe: (path: readonly PropertyKey[]) => string): z.output<S> {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
-  throw ledgerError(400, `Check ${describe(parsed.error.issues[0]?.path ?? [])} and try again.`, 'validation');
+  const issue = parsed.error.issues[0];
+  const rule = issue?.code === 'custom' && issue.message && issue.message !== 'Invalid input' ? ` ${issue.message}` : '';
+  throw ledgerError(400, `Check ${describe(issue?.path ?? [])} and try again.${rule}`, 'validation');
 }
 
 /** Maps a PostgreSQL refusal named by constraint (or by SQLSTATE) to a plain-language error; rethrows anything else. */
