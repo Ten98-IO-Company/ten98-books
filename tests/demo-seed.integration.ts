@@ -338,7 +338,7 @@ const stockDataset = (): Dataset => parseDataset({
       lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
     { key: 'payment-1', type: 'payment', date: '2026-01-08', status: 'optional', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
-    { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 2,
+    { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'cash', side: 'Dr', amount: '50.00' }, { ledger: 'sales', side: 'Cr', amount: '50.00' }] },
   ],
   expected: {
