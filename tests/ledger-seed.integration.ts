@@ -50,10 +50,12 @@ before(async () => {
   const scoped = new URL(admin.href); scoped.pathname = `/${name}`; adminUrl = scoped.href;
 
   const { migrateDatabase } = await import('../src/server/startup-migrate.ts');
-  const { createPool, migrationLockKey } = await import('../src/server/db.ts');
+  const { createPool, migrationFiles, migrationLockKey } = await import('../src/server/db.ts');
+  // Every migration that precedes the ledger one, so the backfill is observed on a database that predates it.
+  const beforeFiles = migrationFiles.slice(0, migrationFiles.indexOf('0004_ledger.sql'));
   const pool = createPool(process.env.MIGRATION_DATABASE_URL!, { max: 2 });
   try {
-    const beforeLedger = createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: ['0001_foundation.sql', '0002_company.sql'], lockKey: migrationLockKey });
+    const beforeLedger = createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: beforeFiles, lockKey: migrationLockKey });
     await migrateDatabase({ pool, ledger: beforeLedger, log: () => undefined });
     await asAdmin(adminUrl, async admin => {
       const workspace = randomUUID();
