@@ -5,7 +5,7 @@ import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
 import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
-import { DialogKeys, useAppCommand, useBackOverride } from '../KeyboardShell'
+import { DialogKeys, ReservedKeys, useAppCommand, useBackOverride } from '../KeyboardShell'
 import { periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
 
 /** Reports the "open another report" menu offers, by the menu letter command each one answers to. */
@@ -76,6 +76,7 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
     : period?.kind === 'date' ? (period.date ? `As at ${longDate(period.date)}` : 'Choosing the date…') : 'Read-only'
 
   return <ShortcutScope name={contextTitles.report}>
+    <ReservedKeys context='report' />
     <ReportCommands periodOpen={() => setPeriodOpen(true)} hasPeriod={period !== undefined} detail={detail} zeros={zeros}
       exportCsv={exportPath ? () => void exportCsv() : undefined} goTo={() => setGoToOpen(true)} />
     <Stack gap={4}>
@@ -95,7 +96,7 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <DialogKeys name='Open another report' open={goToOpen} onClose={() => setGoToOpen(false)}><Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
+    <DialogKeys name='Open another report' open={goToOpen}><Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
       {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={goToActive} onActiveChange={setGoToActive}
         groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodKind === 'statement' ? periodSearch(search) : {} } as never) })} />}
     </Dialog></DialogKeys>
@@ -153,7 +154,7 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
     setShownFor(open)
     if (open) { setRange({ start: initial?.from ?? '', end: initial?.to ?? '' }); setDate(control.kind === 'date' ? control.date ?? '' : ''); setProblem(null) }
   }
-  return <DialogKeys name='Period' open={open} onClose={() => onOpenChange(false)} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
+  return <DialogKeys name='Period' open={open} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
     description={control.kind === 'date' ? 'The balance sheet shows balances at the end of this day.' : 'Every report you open next uses this period until you change it.'}
     onSubmit={() => {
       if (control.kind === 'date') { if (date) { control.onChange(date); onOpenChange(false) } return }

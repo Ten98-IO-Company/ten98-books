@@ -34,6 +34,13 @@ export const classicOnly: readonly CommandId[] = [
   'nav.quit',
 ]
 
+/**
+ * The classic create and delete keys of a masters list, awaiting the analyst: the catalogue's list bar may mean Ctrl+D
+ * and C (or Ctrl+C) instead. Changing either is this one line; the parity rows say "unconfirmed" until then, and the
+ * candidates are reserved in the list context meanwhile.
+ */
+const unconfirmedListKeys = { create: 'Alt+C', delete: 'Alt+D' } as const
+
 /** Keys both keymaps share: movement, opening, the menu letters, Enter and Escape. */
 const shared = {
   'nav.back': 'Escape',
@@ -59,7 +66,6 @@ const shared = {
   'list.first': 'Home',
   'list.last': 'End',
   'list.open': 'Enter',
-  'list.create': 'Alt+C',
   'list.cancel': 'Escape',
   'entry.cancel': 'Escape',
   'entry.next-field': 'Enter',
@@ -81,9 +87,9 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'nav.quit': 'Ctrl+Q',
     'nav.go-to': ['Alt+G', 'Ctrl+G'],
     'company.switch': 'F3',
-    'list.delete': 'Alt+D',
+    'list.create': unconfirmedListKeys.create,
+    'list.delete': unconfirmedListKeys.delete,
     'list.history': 'Alt+H',
-    'list.cancel': ['Escape', 'Ctrl+Q'],
     'entry.accept': ['Ctrl+A', 'Ctrl+Enter'],
     'entry.cancel': ['Escape', 'Ctrl+Q'],
     'entry.delete': 'Ctrl+D',
@@ -104,6 +110,7 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'help.keyboard': 'Ctrl+/',
     'nav.quit': [],
     'company.switch': 'Alt+K',
+    'list.create': 'Alt+C',
     'list.delete': 'Alt+X',
     'list.history': 'Alt+Y',
     'entry.accept': 'Ctrl+Enter',
@@ -129,7 +136,7 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
  * key for the same action in the same context, `alternate` differs for a stated browser reason, `ours` has no
  * counterpart there. The notes are our own words; docs/KEYBOARD.md shows this table and a test keeps the two in step.
  */
-export type Parity = { readonly status: 'same' | 'alternate' | 'ours'; readonly note?: string }
+export type Parity = { readonly status: 'same' | 'alternate' | 'ours' | 'unconfirmed'; readonly note?: string }
 export const classicParity: Record<CommandId, Parity> = {
   'help.keyboard': { status: 'same', note: 'F1 opens help; Ctrl+/ is an extra key of ours.' },
   'nav.back': { status: 'same', note: 'A text field keeps Escape for itself, and a dialog closes on it.' },
@@ -156,10 +163,10 @@ export const classicParity: Record<CommandId, Parity> = {
   'list.first': { status: 'same' },
   'list.last': { status: 'ours' },
   'list.open': { status: 'same', note: 'Opens the highlighted row for alteration.' },
-  'list.create': { status: 'same', note: 'Alt+C creates from a list. The catalogue\'s masters list also advertises a bare C, which D-05 keeps to focused menus (WCAG 2.1.4).' },
-  'list.delete': { status: 'same', note: 'Deletes the highlighted row after a confirmation.' },
+  'list.create': { status: 'unconfirmed', note: 'Alt+C is the catalogue\'s create-from-a-lookup key during entry; on a masters list the catalogue may mean C or Ctrl+C. Awaiting the analyst; C and Ctrl+C are reserved meanwhile.' },
+  'list.delete': { status: 'unconfirmed', note: 'Alt+D deletes a day book row in the catalogue; on a masters list it may mean Ctrl+D. Awaiting the analyst; Ctrl+D is reserved meanwhile.' },
   'list.history': { status: 'ours', note: 'No history view in the catalogue. Alt+H, because Alt+Y is reserved for the data menu.' },
-  'list.cancel': { status: 'same' },
+  'list.cancel': { status: 'same', note: 'Escape only: Ctrl+Q leaves the list at once through nav.quit.' },
   'entry.accept': { status: 'same', note: 'Accepts the whole screen from anywhere, including inside a field; Ctrl+Enter is an extra key of ours.' },
   'entry.cancel': { status: 'same', note: 'Unlike the catalogue, both keys ask first when something was typed.' },
   'entry.next-field': { status: 'same' },
@@ -193,33 +200,66 @@ export const classicParity: Record<CommandId, Parity> = {
  */
 export type ReservedKey = { readonly context: CommandContext; readonly purpose: string; readonly keys: readonly string[]; readonly catalogueKey?: string; readonly reason?: string }
 export const classicReserved: readonly ReservedKey[] = [
-  { context: 'global', purpose: 'Change the working date', keys: ['F2'] },
-  { context: 'global', purpose: 'Calculator', keys: ['Alt+='], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
-  { context: 'global', purpose: 'Company features', keys: ['Ctrl+F11'], catalogueKey: 'F11', reason: 'F11 switches the browser to full screen; a page never receives it.' },
-  { context: 'global', purpose: 'Configure the screen', keys: ['F12'] },
-  { context: 'global', purpose: 'Open a company from the list of all companies; close the company', keys: ['Alt+F3', 'Ctrl+F3'] },
-  { context: 'global', purpose: 'Menus: company, data, import, export, sharing, printing', keys: ['Alt+K', 'Alt+Y', 'Alt+O', 'Alt+E', 'Alt+M', 'Alt+P'] },
-  { context: 'global', purpose: 'Currency exchange menu', keys: ['Alt+Z'] },
-  { context: 'global', purpose: 'Find in masters and transactions', keys: ['Alt+F'] },
-  { context: 'global', purpose: 'Send the screen by e-mail', keys: ['Ctrl+M'] },
-  { context: 'global', purpose: 'Send the screen through a messaging service', keys: ['Alt+W'], catalogueKey: 'Ctrl+Alt+W', reason: 'Windows reports Ctrl+Alt as AltGr, which types characters, so the registry does not run commands on it there.' },
-  { context: 'company-home', purpose: 'Menu letters: banking, stock summary, ratios, more reports, dashboard, quit', keys: ['N', 'S', 'R', 'D', 'O', 'Q'] },
-  { context: 'list', purpose: 'Select the row; remove and restore a line', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
-  { context: 'entry', purpose: 'Choose the voucher type from a list', keys: ['F10'] },
-  { context: 'entry', purpose: 'Debit note, credit note, stock journal, physical stock, sales order', keys: ['Alt+F5', 'Alt+F6', 'Alt+F7', 'Ctrl+F7', 'Ctrl+F8'] },
-  { context: 'entry', purpose: 'Voucher mode, more details, optional voucher, unused numbers, autofill, related reports', keys: ['Ctrl+H', 'Ctrl+I', 'Ctrl+L', 'Ctrl+U', 'Ctrl+F', 'Ctrl+O'] },
-  { context: 'entry', purpose: 'Post-dated voucher', keys: ['Alt+T'], catalogueKey: 'Ctrl+T', reason: 'Ctrl+T opens a new browser tab; a page never receives it.' },
-  { context: 'report', purpose: 'Report views: grouping, monthly, valuation, stock group, profit, orders', keys: ['F4', 'F5', 'F6', 'F7', 'F8', 'F9'] },
-  { context: 'report', purpose: 'Basis of values, views, exception reports, saved views, filter', keys: ['Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
-  { context: 'report', purpose: 'Add, alter and delete a column', keys: ['Ctrl+C', 'Ctrl+A', 'Ctrl+D'] },
-  { context: 'report', purpose: 'Automatic columns', keys: ['Alt+U'], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
-  { context: 'report', purpose: 'Select the line; remove and restore a line', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
-  { context: 'report', purpose: 'Day book rows: cancel, delete, duplicate, insert, add', keys: ['Alt+X', 'Alt+D', 'Alt+2', 'Alt+I', 'Alt+A'] },
+  { context: 'global', purpose: 'Set the date that new entries start from', keys: ['F2'] },
+  { context: 'global', purpose: 'Open a calculator beside the screen', keys: ['Alt+='], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
+  { context: 'global', purpose: 'Turn optional accounting features on or off', keys: ['Ctrl+F11'], catalogueKey: 'F11', reason: 'F11 switches the browser to full screen; a page never receives it.' },
+  { context: 'global', purpose: 'Choose what the screen shows', keys: ['F12'] },
+  { context: 'global', purpose: 'Pick from every company on the installation, or put the open company aside', keys: ['Alt+F3', 'Ctrl+F3'] },
+  { context: 'global', purpose: 'Menus for the company, data housekeeping, bringing data in, sending data out, sharing and printing', keys: ['Alt+K', 'Alt+Y', 'Alt+O', 'Alt+E', 'Alt+M', 'Alt+P'] },
+  { context: 'global', purpose: 'Print or export what is on the screen', keys: ['Ctrl+P', 'Ctrl+E'] },
+  { context: 'global', purpose: 'Exchange-rate tools', keys: ['Alt+Z'] },
+  { context: 'global', purpose: 'Search everything recorded in the company', keys: ['Alt+F'] },
+  { context: 'global', purpose: 'E-mail what is on the screen', keys: ['Ctrl+M'] },
+  { context: 'global', purpose: 'Send what is on the screen through a chat service', keys: ['Alt+W'], catalogueKey: 'Ctrl+Alt+W', reason: 'Windows reports Ctrl+Alt as AltGr, which types characters, so the registry does not run commands on it there.' },
+  { context: 'company-home', purpose: 'Menu letters for banking tools, a stock overview, ratio analysis, the full list of reports, an overview page and signing out', keys: ['N', 'S', 'R', 'D', 'O', 'Q'] },
+  { context: 'list', purpose: 'Mark a row; hide a row from the view and bring it back', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
+  { context: 'list', purpose: 'Candidate create and delete keys, until the analyst confirms which the list uses', keys: ['C', 'Ctrl+C', 'Ctrl+D'] },
+  { context: 'list', purpose: 'List views and settings: another grouping, other kinds of master, valuation settings, other layouts, exception lists, saved layouts and filters', keys: ['F5', 'F10', 'Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
+  { context: 'entry', purpose: 'Pick another voucher type from the full list', keys: ['F10'] },
+  { context: 'entry', purpose: 'Switch to the voucher types for returns, stock moves, stock counts and customer orders', keys: ['Alt+F5', 'Alt+F6', 'Alt+F7', 'Ctrl+F7', 'Ctrl+F8'] },
+  { context: 'entry', purpose: 'Change the entry layout, add details, mark the entry provisional, reuse a skipped number, fill from an earlier entry, open reports about it', keys: ['Ctrl+H', 'Ctrl+I', 'Ctrl+L', 'Ctrl+U', 'Ctrl+F', 'Ctrl+O'] },
+  { context: 'entry', purpose: 'Take a line out of the entry', keys: ['Ctrl+R'] },
+  { context: 'entry', purpose: 'Mark the entry as dated in the future', keys: ['Alt+T'], catalogueKey: 'Ctrl+T', reason: 'Ctrl+T opens a new browser tab; a page never receives it.' },
+  { context: 'entry', purpose: 'Close an order before everything on it has been delivered', keys: ['Alt+L'], catalogueKey: 'Ctrl+W', reason: 'Ctrl+W closes the browser tab; a page never receives it.' },
+  { context: 'report', purpose: 'Other ways to see the report: by group, by month, at another valuation, by stock group, with profit, with orders', keys: ['F4', 'F5', 'F6', 'F7', 'F8', 'F9'] },
+  { context: 'report', purpose: 'Valuation settings, other layouts, exception lists, saved layouts and filters', keys: ['Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
+  { context: 'report', purpose: 'Add, change and remove comparison columns', keys: ['Ctrl+C', 'Ctrl+A', 'Ctrl+D'] },
+  { context: 'report', purpose: 'Add comparison columns automatically', keys: ['Alt+U'], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
+  { context: 'report', purpose: 'Mark a line; hide a line from the view and bring it back', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
+  { context: 'report', purpose: 'On a day book row: void it, delete it, copy it, insert an entry before it, add one after it', keys: ['Alt+X', 'Alt+D', 'Alt+2', 'Alt+I', 'Alt+A'] },
   { context: 'report', purpose: 'Save a tax return', keys: ['Alt+B'] },
 ]
 
 /** Inner-context commands that take a global reserved key on purpose, as the catalogue does: F2 is the period on a report. */
-export const reservedShadows: readonly string[] = ['report.period on F2']
+export const reservedShadows: readonly string[] = ['report.period on F2', 'report.export on Ctrl+E', 'report.print on Ctrl+P']
+
+const chordsOf = (name: KeymapName, id: CommandId): readonly string[] => { const keys = keymaps[name][id]; return typeof keys === 'string' ? [keys] : keys }
+
+/**
+ * Whether classic takes a chord from the browser even with nothing to run: chords with Ctrl, Alt or Meta, and function
+ * keys. Escape, Enter, arrows, Tab and letters are never taken this way, so fields and controls keep them.
+ */
+export const claimable = (chord: string): boolean => /(^|\+)F\d+$/.test(chord) || /(^|\+)(Ctrl|Alt|Meta)\+/.test(chord)
+
+/** The reserved keys of a context that classic claims (default prevented, nothing run); none in web-safe. */
+export function reservedClaims(name: KeymapName, context: CommandContext): string[] {
+  if (name !== 'classic') return []
+  return [...new Set(classicReserved.filter(entry => entry.context === context).flatMap(entry => entry.keys).filter(claimable))]
+}
+
+/** The keys of a switched-off command that classic still claims in its context, so the browser does not act on them. */
+export const disabledClaims = (name: KeymapName, id: CommandId): string[] => name === 'classic' ? chordsOf(name, id).filter(claimable) : []
+
+/**
+ * Every classic chord a dialog takes from the browser: the keys of all commands and all reserved keys, less the ones the
+ * dialog runs itself (`own`). A dialog cuts off the outer scopes, so without this the browser would act on them there.
+ */
+export function dialogClaims(name: KeymapName, own: readonly CommandId[]): string[] {
+  if (name !== 'classic') return []
+  const ownKeys = new Set(own.flatMap(id => chordsOf(name, id)))
+  const every = [...(Object.keys(keymaps.classic) as CommandId[]).flatMap(id => chordsOf(name, id)), ...classicReserved.flatMap(entry => entry.keys)]
+  return [...new Set(every.filter(chord => claimable(chord) && !ownKeys.has(chord)))]
+}
 
 const functionKeys = Array.from({ length: 12 }, (_, index) => `F${index + 1}`)
 const digits = Array.from({ length: 9 }, (_, index) => String(index + 1))

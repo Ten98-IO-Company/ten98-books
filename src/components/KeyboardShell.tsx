@@ -1,9 +1,9 @@
-import { Dialog, ShortcutProvider, ShortcutScope, useCommand } from '@ten98/ui'
+import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } from '@ten98/ui'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { commandOf, commands, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
-import { defaultKeymap, keymaps, type KeymapName } from '../lib/keymaps'
+import { ariaKeyShortcuts, commandOf, commands, contextTitles, keepsEscape, type CommandContext, type CommandId } from '../lib/commands'
+import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
 import { useCanWrite } from './masters/useCanWrite'
@@ -41,7 +41,27 @@ export function useKeyboard(): KeyboardState {
  */
 export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false, label }: { enabled?: boolean; repeat?: boolean; allowInTextInput?: boolean; /** Wording for this screen when the registry title does not fit it. */ label?: string } = {}) {
   const command = commandOf(id)
-  useCommand({ id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+  // In classic a switched-off command still keeps its keys from the browser: it registers as a do-nothing claim under an
+  // id outside the registry, which the action bar and the help leave out (the registry runs nothing for a disabled one).
+  const keymap = useContext(KeyboardContext)?.keymap ?? defaultKeymap
+  const claim = enabled ? [] : disabledClaims(keymap, id)
+  useCommand(claim.length ? { id: `claim.${id}`, label: command.title, run: nothing, keys: claim }
+    : { id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+}
+
+const nothing = () => undefined
+
+/** A command's current keys as an `aria-keyshortcuts` value, for the button that runs it. */
+export const useAriaKeys = (id: CommandId) => ariaKeyShortcuts(useCommandKeys(id))
+
+/**
+ * Claims the reserved keys of a context (src/lib/keymaps.ts `classicReserved`) in classic, so a key an accountant
+ * expects never triggers a browser action before its feature exists. Mount it inside the context's ShortcutScope.
+ */
+export function ReservedKeys({ context }: { context: CommandContext }) {
+  const keys = reservedClaims(useContext(KeyboardContext)?.keymap ?? defaultKeymap, context)
+  useCommand({ id: `reserved.${context}`, label: 'Reserved for a later feature', run: nothing, keys })
+  return null
 }
 
 /**
@@ -105,6 +125,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
       <GlobalCommands back={backOverride?.run ?? back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onGoTo={() => setGoToOpen(true)} />
+      <ReservedKeys context='global' />
       {children}
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
       <GoToDialog open={goToOpen} onOpenChange={setGoToOpen} />
@@ -146,18 +167,37 @@ function GlobalCommands({ back, onSwitchCompany, onHelp, onGoTo }: { back?: () =
 }
 
 /**
- * Gives a dialog the pop-up keys of desktop accounting software: Ctrl+Q (nav.quit) closes it and, with `onAccept`, the
- * accept keys (entry.accept, Ctrl+A in classic) apply it from anywhere in it, fields included. Escape closes it as
- * every dialog does. Wrap the Dialog: a modal scope owns the keys while focus is inside it.
+ * Gives a dialog the pop-up keys of desktop accounting software: Ctrl+Q (nav.quit) closes it as Escape does, F1 opens
+ * the keyboard help, and with `onAccept` the accept keys (entry.accept, Ctrl+A in classic) apply it from anywhere in it,
+ * fields included. A dialog's modal scope cuts off every outer scope, so in classic it also claims every other classic
+ * key (`dialogClaims`) and the browser never acts on one there. Wrap the Dialog: the scope owns the keys while focus is
+ * inside it. Every dialog of the application, the stock confirmations included, is wrapped this way.
  */
-export function DialogKeys({ name, open, onClose, onAccept, children }: { name: string; open: boolean; onClose: () => void; onAccept?: () => void; children: ReactNode }) {
+export function DialogKeys({ name, open, onAccept, children }: { name: string; open: boolean; onAccept?: () => void; children: ReactNode }) {
   // Registered only while open: the action bar lists every registered command, and a closed dialog offers nothing.
-  return <ShortcutScope name={name} modal>{open && <DialogCommands onClose={onClose} onAccept={onAccept} />}{children}</ShortcutScope>
+  return <ShortcutScope name={name} modal>{open && <DialogCommands onAccept={onAccept} />}{children}</ShortcutScope>
 }
 
-function DialogCommands({ onClose, onAccept }: { onClose: () => void; onAccept?: () => void }) {
-  useAppCommand('nav.quit', onClose)
-  useAppCommand('entry.accept', () => onAccept?.(), { enabled: onAccept !== undefined, allowInTextInput: true })
+/** Closes the dialog that has focus through its own cancel handling, as Escape does (a busy or dirty dialog may ask first). */
+const closeFocusedDialog = () => { document.activeElement?.closest('dialog')?.dispatchEvent(new Event('cancel', { cancelable: true })) }
+
+function DialogCommands({ onAccept }: { onAccept?: () => void }) {
+  const { keymap, openHelp } = useKeyboard()
+  useAppCommand('nav.quit', closeFocusedDialog)
+  useAppCommand('help.keyboard', openHelp)
+  return <>
+    {onAccept && <DialogAccept onAccept={onAccept} />}
+    <DialogClaims keys={dialogClaims(keymap, onAccept ? ['nav.quit', 'help.keyboard', 'entry.accept'] : ['nav.quit', 'help.keyboard'])} />
+  </>
+}
+
+function DialogAccept({ onAccept }: { onAccept: () => void }) {
+  useAppCommand('entry.accept', onAccept, { allowInTextInput: true })
+  return null
+}
+
+function DialogClaims({ keys }: { keys: readonly string[] }) {
+  useCommand({ id: 'claim.dialog', label: 'Kept from the browser in a dialog', run: nothing, keys })
   return null
 }
 
@@ -180,7 +220,7 @@ function GoToDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open
     { id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] },
     ...reportMenuGroups(report => go(reportRoutes[report])),
   ]
-  return <DialogKeys name='Go to' open={open} onClose={() => onOpenChange(false)}>
+  return <DialogKeys name='Go to' open={open}>
     <Dialog open={open} onOpenChange={onOpenChange} title='Go to' description='Use the arrow keys and Enter, or press a letter.'>
       {open && <KeyboardMenu label='Go to' groups={groups} active={active} onActiveChange={setActive} focusRequest={focusRequest} />}
     </Dialog>

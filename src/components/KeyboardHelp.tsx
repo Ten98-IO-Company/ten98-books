@@ -6,7 +6,7 @@ import { DialogKeys } from './KeyboardShell'
 /** Every command in the registry with its keys in the active keymap, grouped by context. */
 export function KeyboardHelp({ open, onOpenChange, keymap }: { open: boolean; onOpenChange: (open: boolean) => void; keymap: KeymapName }) {
   const bound = mergeKeymaps(keymaps[keymap])
-  return <DialogKeys name='Keyboard shortcuts' open={open} onClose={() => onOpenChange(false)}><Dialog open={open} onOpenChange={onOpenChange} size='wide' title='Keyboard shortcuts'
+  return <DialogKeys name='Keyboard shortcuts' open={open}><Dialog open={open} onOpenChange={onOpenChange} size='wide' title='Keyboard shortcuts'
     description={`${keymapTitles[keymap]} keys are active. You can switch keymaps on your Account page.`}>
     <Stack gap={6}>
       {commandContexts.map(context => <Stack key={context} gap={2}>

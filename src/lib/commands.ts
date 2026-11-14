@@ -122,6 +122,10 @@ export function barCommands<T extends { id: string; enabled: boolean; keys: read
   return eligible.filter(command => !eligible.some(other => other !== command && rank(other) > rank(command) && other.keys.some(key => command.keys.includes(key))))
 }
 
+/** The `aria-keyshortcuts` value for registry chords: space-separated, with Ctrl written Control as ARIA requires. */
+export const ariaKeyShortcuts = (keys: readonly string[]): string | undefined =>
+  keys.length ? keys.map(chord => chord.split('+').map(part => part === 'Ctrl' ? 'Control' : part).join('+')).join(' ') : undefined
+
 /** The parts of a focused element the Escape guard reads, so tests can pass plain objects. */
 export interface FocusedElementLike {
   readonly tagName: string

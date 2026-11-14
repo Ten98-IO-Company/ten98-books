@@ -1,6 +1,7 @@
 import { Button, Dialog, SelectableList } from '@ten98/ui'
 import { useEffect } from 'react'
 import type { CompanySummary } from '../lib/app-context'
+import { DialogKeys } from './KeyboardShell'
 
 /** Changes company from the keyboard: arrow keys move, Enter opens. Each company is its own workspace (D-03). */
 export function CompanyPicker({ open, onOpenChange, companies, currentId, onChoose, onCreate }: {
@@ -20,14 +21,14 @@ export function CompanyPicker({ open, onOpenChange, companies, currentId, onChoo
     return () => cancelAnimationFrame(frame)
   }, [open])
 
-  return <Dialog open={open} onOpenChange={onOpenChange} title='Change company' description='Use the arrow keys to move and Enter to open a company.'>
+  return <DialogKeys name='Change company' open={open}><Dialog open={open} onOpenChange={onOpenChange} title='Change company' description='Use the arrow keys to move and Enter to open a company.'>
     {/* Keyed by `open` so each opening starts a fresh list whose tab stop is the current company, not the last one moved to. */}
     <SelectableList key={String(open)} label={listLabel} selectedId={currentId ?? null} emptyMessage='You do not belong to any company yet.'
       items={companies.map(company => ({ id: company.id, title: company.name, meta: roleLabels[company.role],
         status: company.id === currentId ? 'Open now' : company.company ? undefined : company.twoFactorLocked ? 'Needs two-factor' : 'Not set up yet' }))}
       onSelect={id => { onOpenChange(false); if (id !== currentId) onChoose(id) }}
       footer={<Button variant='secondary' onClick={() => { onOpenChange(false); onCreate() }}>Create company</Button>} />
-  </Dialog>
+  </Dialog></DialogKeys>
 }
 
 const listLabel = 'Companies'
