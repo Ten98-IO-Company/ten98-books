@@ -19,12 +19,12 @@ Node 24 and Docker. `corepack pnpm install`, then `pnpm setup:local` (writes a p
 
 ## Keyboard
 
-Every signed-in page answers to keyboard commands from one registry (D-05). Each user chooses a keymap, asked on first use of a company and changeable on the Account page:
+Every signed-in page answers to keyboard commands from one registry (D-05). Keyboard shortcuts are the product's main feature for its users, so there are two keymaps, changeable on the Account page:
 
-- **Web-safe** (default): no function keys and no key that browsers or operating systems keep for themselves; single letters work only inside a focused menu.
-- **Classic**: function keys and Alt or Ctrl chords familiar from desktop accounting software, where a browser tab can receive them.
+- **Classic** (default): the keys desktop accountants already use, such as `Ctrl+A` to accept a screen from inside a field, `Ctrl+Q` and Escape to leave, `F2` for the period, `F3` to change company and `Alt+G` to go to any screen. A key a browser tab can never receive has a documented alternate.
+- **Web-safe**: no function keys and no key that browsers or operating systems keep for themselves; single letters work only inside a focused menu.
 
-The company home is a menu: Up and Down move the highlight, Enter opens, an item's letter opens it directly, and Escape on any company page returns to the menu with the last item highlighted again. The bar above each page lists the commands available there, and `Ctrl+/` (or `F1` in classic) lists them all. Command ids and both keymaps are in [docs/KEYBOARD.md](docs/KEYBOARD.md).
+The company home is a menu: Up and Down move the highlight, Enter opens, an item's letter opens it directly, and Escape on any company page returns to the menu with the last item highlighted again. The bar above each page lists the commands available there, and `F1` (or `Ctrl+/`) lists them all. Command ids, both keymaps and the parity audit against desktop accounting keys are in [docs/KEYBOARD.md](docs/KEYBOARD.md).
 
 ## Company model
 

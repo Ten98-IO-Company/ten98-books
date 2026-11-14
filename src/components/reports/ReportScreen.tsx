@@ -5,7 +5,7 @@ import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
 import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
-import { useAppCommand, useBackOverride } from '../KeyboardShell'
+import { DialogKeys, useAppCommand, useBackOverride } from '../KeyboardShell'
 import { periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
 
 /** Reports the "open another report" menu offers, by the menu letter command each one answers to. */
@@ -50,6 +50,7 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
   const [periodOpen, setPeriodOpen] = useState(false)
   const [goToOpen, setGoToOpen] = useState(false)
   const [menuFocus, setMenuFocus] = useState(0)
+  const [goToActive, setGoToActive] = useState<CommandId>(destinations[0].command)
   useFocusOnOpen(goToOpen, () => setMenuFocus(request => request + 1))
   const [exportState, setExportState] = useState<{ busy: boolean; message: string; failed: boolean }>({ busy: false, message: '', failed: false })
 
@@ -94,10 +95,10 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
-      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={destinations[0].command} onActiveChange={() => undefined}
+    <DialogKeys name='Open another report' open={goToOpen} onClose={() => setGoToOpen(false)}><Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
+      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={goToActive} onActiveChange={setGoToActive}
         groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodKind === 'statement' ? periodSearch(search) : {} } as never) })} />}
-    </Dialog>
+    </Dialog></DialogKeys>
   </ShortcutScope>
 }
 
@@ -117,7 +118,7 @@ function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo 
   useAppCommand('report.zero-lines', () => zeros?.toggle(), { enabled: zeros !== undefined })
   useAppCommand('report.export', () => exportCsv?.(), { enabled: exportCsv !== undefined })
   useAppCommand('report.print', () => window.print())
-  useAppCommand('report.go-to', goTo)
+  useAppCommand('nav.go-to', goTo)
   return null
 }
 
@@ -125,7 +126,7 @@ function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo 
  * Moves focus into a dialog once it has opened (the dialog itself starts on its close button). A stand-in for the
  * initial-focus option the design system is adding to Dialog: replace each use with that prop when it ships.
  */
-function useFocusOnOpen(open: boolean, focus: () => void) {
+export function useFocusOnOpen(open: boolean, focus: () => void) {
   const latest = useRef(focus)
   latest.current = focus
   useEffect(() => {
@@ -152,7 +153,7 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
     setShownFor(open)
     if (open) { setRange({ start: initial?.from ?? '', end: initial?.to ?? '' }); setDate(control.kind === 'date' ? control.date ?? '' : ''); setProblem(null) }
   }
-  return <Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
+  return <DialogKeys name='Period' open={open} onClose={() => onOpenChange(false)} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
     description={control.kind === 'date' ? 'The balance sheet shows balances at the end of this day.' : 'Every report you open next uses this period until you change it.'}
     onSubmit={() => {
       if (control.kind === 'date') { if (date) { control.onChange(date); onOpenChange(false) } return }
@@ -164,5 +165,5 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
     <Stack ref={body}>{control.kind === 'range'
       ? <DateRangeField label='Period' start={range.start} end={range.end} maxDays={3660} onChange={(next, issue) => { setRange(next); setProblem(issue) }} />
       : <Field label='As at' htmlFor={`${id}date`}><Input id={`${id}date`} type='date' value={date} required onChange={event => setDate(event.target.value)} /></Field>}</Stack>
-  </Dialog>
+  </Dialog></DialogKeys>
 }

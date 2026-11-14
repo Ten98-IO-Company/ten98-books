@@ -31,7 +31,12 @@ export interface CommandDefinition {
 export const commands = {
   'help.keyboard': { title: 'Show keyboard shortcuts', context: 'global' },
   'nav.back': { title: 'Go back one level', context: 'global' },
+  // Ctrl+Q in classic. A separate command from nav.back so that it still works from a text field, where the shell turns
+  // nav.back off to leave Escape to the field (keepsEscape).
+  'nav.quit': { title: 'Leave this screen', context: 'global' },
   'company.switch': { title: 'Change company', context: 'global' },
+  // A report screen registers its own go-to in its scope (the period carries over); elsewhere the shell's dialog opens.
+  'nav.go-to': { title: 'Go to another screen or report', context: 'global' },
 
   'menu.next': { title: 'Highlight the next item', context: 'company-home', bar: false },
   'menu.previous': { title: 'Highlight the previous item', context: 'company-home', bar: false },
@@ -76,7 +81,6 @@ export const commands = {
   'report.zero-lines': { title: 'Show or hide lines without amounts', context: 'report' },
   'report.export': { title: 'Export as CSV', context: 'report' },
   'report.print': { title: 'Print', context: 'report' },
-  'report.go-to': { title: 'Open another report', context: 'report' },
   'report.open.group-summary': { title: 'Group summary', context: 'company-home', bar: false },
 
   // Masters screens: moving through and opening a list, and the history of one master.

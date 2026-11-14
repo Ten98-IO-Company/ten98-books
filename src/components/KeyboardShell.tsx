@@ -1,9 +1,14 @@
-import { ShortcutProvider, useCommand } from '@ten98/ui'
+import { Dialog, ShortcutProvider, ShortcutScope, useCommand } from '@ten98/ui'
+import { useNavigate, useParams } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { commandOf, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
+import { commandOf, commands, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
 import { defaultKeymap, keymaps, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
+import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
+import { useCanWrite } from './masters/useCanWrite'
+import { reportMenuGroups, useFocusOnOpen } from './reports/ReportScreen'
+import { reportRoutes } from './reports/navigation'
 
 type KeymapSetting = { keymap: KeymapName; chosen: boolean }
 
@@ -72,6 +77,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [goToOpen, setGoToOpen] = useState(false)
   const [backOverride, setBackOverride] = useState<{ run: () => void } | null>(null)
 
   useEffect(() => {
@@ -98,9 +104,10 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
 
   return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
-      <GlobalCommands back={backOverride?.run ?? back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} />
+      <GlobalCommands back={backOverride?.run ?? back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onGoTo={() => setGoToOpen(true)} />
       {children}
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
+      <GoToDialog open={goToOpen} onOpenChange={setGoToOpen} />
     </ShortcutProvider>
   </BackOverrideContext></KeyboardContext>
 }
@@ -121,12 +128,61 @@ function useFocusKeepsEscape() {
   return keeps
 }
 
-function GlobalCommands({ back, onSwitchCompany, onHelp }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void }) {
+/** The company open in the address, or undefined outside a company. */
+const useOpenCompanyId = () => (useParams({ strict: false }) as { companyId?: string }).companyId?.toLowerCase()
+
+function GlobalCommands({ back, onSwitchCompany, onHelp, onGoTo }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void; onGoTo: () => void }) {
   // A disabled command leaves the key to the browser, so a text field keeps its own Escape; the run-time check covers a
   // key pressed before the focus change has re-rendered, and popups that do not move focus.
   const fieldKeepsEscape = useFocusKeepsEscape()
   useAppCommand('help.keyboard', onHelp)
   useAppCommand('nav.back', () => { if (!keepsEscape(document.activeElement) && !popupOpen()) back?.() }, { enabled: back !== undefined && !fieldKeepsEscape })
+  // Ctrl+Q: the same target as Escape, but a text field does not keep it, so it leaves from inside a field too.
+  useAppCommand('nav.quit', () => { if (!popupOpen()) back?.() }, { enabled: back !== undefined })
   useAppCommand('company.switch', () => onSwitchCompany?.(), { enabled: onSwitchCompany !== undefined })
+  // A report registers its own nav.go-to in its scope, which wins there (the period carries over).
+  useAppCommand('nav.go-to', onGoTo, { enabled: useOpenCompanyId() !== undefined })
   return null
+}
+
+/**
+ * Gives a dialog the pop-up keys of desktop accounting software: Ctrl+Q (nav.quit) closes it and, with `onAccept`, the
+ * accept keys (entry.accept, Ctrl+A in classic) apply it from anywhere in it, fields included. Escape closes it as
+ * every dialog does. Wrap the Dialog: a modal scope owns the keys while focus is inside it.
+ */
+export function DialogKeys({ name, open, onClose, onAccept, children }: { name: string; open: boolean; onClose: () => void; onAccept?: () => void; children: ReactNode }) {
+  // Registered only while open: the action bar lists every registered command, and a closed dialog offers nothing.
+  return <ShortcutScope name={name} modal>{open && <DialogCommands onClose={onClose} onAccept={onAccept} />}{children}</ShortcutScope>
+}
+
+function DialogCommands({ onClose, onAccept }: { onClose: () => void; onAccept?: () => void }) {
+  useAppCommand('nav.quit', onClose)
+  useAppCommand('entry.accept', () => onAccept?.(), { enabled: onAccept !== undefined, allowInTextInput: true })
+  return null
+}
+
+/** "Go to" from any company screen: the masters, vouchers and reports, each opened by its menu letter or Enter. */
+function GoToDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const companyId = useOpenCompanyId()
+  const navigate = useNavigate()
+  const canWrite = useCanWrite()
+  const [active, setActive] = useState<CommandId>('home.chart-of-accounts')
+  const [focusRequest, setFocusRequest] = useState<number>()
+  useFocusOnOpen(open, () => setFocusRequest(value => (value ?? 0) + 1))
+  if (!companyId) return null
+  const go = (to: string) => { onOpenChange(false); void navigate({ to, params: { companyId } } as never) }
+  const item = (command: CommandId, to: string) => ({ command, label: commands[command].title, open: () => go(to) })
+  const groups: KeyboardMenuGroup[] = [
+    { id: 'masters', label: 'Masters', items: [
+      ...canWrite ? [item('home.new-master', '/app/c/$companyId/masters/new'), item('home.edit-master', '/app/c/$companyId/masters/edit')] : [],
+      item('home.chart-of-accounts', '/app/c/$companyId/masters/chart-of-accounts'),
+    ] },
+    { id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] },
+    ...reportMenuGroups(report => go(reportRoutes[report])),
+  ]
+  return <DialogKeys name='Go to' open={open} onClose={() => onOpenChange(false)}>
+    <Dialog open={open} onOpenChange={onOpenChange} title='Go to' description='Use the arrow keys and Enter, or press a letter.'>
+      {open && <KeyboardMenu label='Go to' groups={groups} active={active} onActiveChange={setActive} focusRequest={focusRequest} />}
+    </Dialog>
+  </DialogKeys>
 }
