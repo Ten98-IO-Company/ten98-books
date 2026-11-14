@@ -8,7 +8,9 @@ import { addLedger, chart, createCompany, post, setupOwner, type Line, type Memb
 /**
  * Property-style check of the trial balance: random balanced journals over two financial years, then for several
  * periods the report balances (both sides of every column pair agree, closing balances sum to zero) and every ledger's
- * figures equal an independent sum over the posted lines computed here. A fixed seed keeps failures reproducible.
+ * figures equal an independent sum over the posted lines computed here: income and expense from the period's start,
+ * everything before it in the profit and loss ledger. Profit and loss and the balance sheet are checked against the same
+ * lines. A fixed seed keeps failures reproducible.
  */
 let database: TestDatabase;
 let owner: Member & { workspaceId: string };
@@ -85,16 +87,15 @@ test('random balanced vouchers: the trial balance sums to zero and equals an ind
     assert.equal(nodes.reduce((sum: bigint, node: any) => sum + money(node.closingDebit) - money(node.closingCredit), 0n), 0n, 'closing balances sum to zero');
 
     // Independent sums over the posted lines.
-    const yearStart = financialYearOf({ month: 1, day: 1 }, from).from;
     const inPeriod = posted.filter(line => line.date >= from && line.date <= to);
     assert.equal(money(totals.debit), inPeriod.filter(line => line.side === 'Dr').reduce((sum, line) => sum + line.amount, 0n));
     let carried = 0n;
     for (const ledger of ledgers) {
       const node = nodes.find((item: any) => item.id === ledger.id);
       const profitOrLoss = ledger.nature === 'income' || ledger.nature === 'expense';
-      const counted = posted.filter(line => line.ledger === ledger.id && line.date <= to && (!profitOrLoss || line.date >= yearStart));
-      const closing = (profitOrLoss && yearStart > '2025-01-01' ? 0n : ledger.opening) + counted.reduce((sum, line) => sum + line.signed, 0n);
-      if (profitOrLoss) carried += posted.filter(line => line.ledger === ledger.id && line.date < yearStart).reduce((sum, line) => sum + line.signed, 0n);
+      const counted = posted.filter(line => line.ledger === ledger.id && line.date <= to && (!profitOrLoss || line.date >= from));
+      const closing = (profitOrLoss && from > '2025-01-01' ? 0n : ledger.opening) + counted.reduce((sum, line) => sum + line.signed, 0n);
+      if (profitOrLoss) carried += posted.filter(line => line.ledger === ledger.id && line.date < from).reduce((sum, line) => sum + line.signed, 0n);
       assert.equal(money(node.closingDebit) - money(node.closingCredit), closing, `${node.name} ${from}..${to}`);
       const moves = inPeriod.filter(line => line.ledger === ledger.id);
       assert.deepEqual([money(node.debit), money(node.credit)], [
@@ -103,6 +104,19 @@ test('random balanced vouchers: the trial balance sums to zero and equals an ind
       ], `${node.name} movements ${from}..${to}`);
     }
     const profit = nodes.find((item: any) => item.id === profitLedger);
-    assert.equal(money(profit.closingDebit) - money(profit.closingCredit), carried, `earlier years carried ${from}..${to}`);
+    assert.equal(money(profit.closingDebit) - money(profit.closingCredit), carried, `everything before the period carried ${from}..${to}`);
+
+    // Profit and loss (one financial year) is the period's income and expense; the balance sheet at the end date splits
+    // the result into the years before that date's year and the year to date. Neither depends on the period's start.
+    const result = (lines: Posted[]) => -lines.filter(line => ledgers.find(ledger => ledger.id === line.ledger)!.nature.match(/income|expense/)).reduce((sum, line) => sum + line.signed, 0n);
+    const yearStart = financialYearOf({ month: 1, day: 1 }, to).from;
+    if (financialYearOf({ month: 1, day: 1 }, from).from === yearStart) {
+      const pl = (await owner.browser.call(`/api/companies/${companyId}/reports/profit-and-loss?from=${from}&to=${to}`)).body.report;
+      assert.equal(money(pl.netProfit), result(inPeriod), `net profit ${from}..${to}`);
+    }
+    const sheet = (await owner.browser.call(`/api/companies/${companyId}/reports/balance-sheet?date=${to}`)).body.report;
+    assert.deepEqual([money(sheet.profitAndLoss.broughtForward), money(sheet.profitAndLoss.currentPeriod)],
+      [result(posted.filter(line => line.date < yearStart)), result(posted.filter(line => line.date >= yearStart && line.date <= to))], `balance sheet at ${to}`);
+    assert.equal(sheet.totals.liabilities, sheet.totals.assets);
   }
 });

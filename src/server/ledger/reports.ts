@@ -1,5 +1,4 @@
 import { addMoney, subtractMoney } from '@ten98/runtime';
-import { financialYearOf } from '../../lib/company.ts';
 import { periodQuery, type Nature, type Side, type TrialBalance, type TrialBalanceRow } from '../../lib/ledger.ts';
 import { FoundationError } from '../auth.ts';
 import { parseInput, type LedgerContext } from './context.ts';
@@ -10,8 +9,9 @@ import { groupTreeSql } from './masters.ts';
  * src/server/reports. Only regular, undeleted vouchers count; cancelled and optional vouchers have no effect and a
  * post-dated voucher counts from its own date like any other. Opening balances are computed at report time (D-04): a
  * balance-sheet ledger opens with its opening balance plus everything before the period; an income or expense ledger
- * opens with what was posted earlier in the same financial year only, and what it gathered in earlier years is carried
- * into the profit and loss ledger.
+ * opens at zero, and everything it gathered before the period (its opening balance too, once the period starts after
+ * the books begin) is closed into the profit and loss ledger, earlier years and earlier months of the same year alike
+ * (observed). A period starting on or before the books begin keeps the entered openings on their ledgers.
  */
 
 /** Report queries get their own time budget instead of the pool's 10-second default (D-02). */
@@ -26,7 +26,7 @@ export const countsSql = `v.status = 'regular' AND v.deleted_at IS NULL`;
 type Movement = {
   ledgerId: string; name: string; systemKey: string | null; groupId: string | null; primaryGroupId: string | null;
   primaryGroupName: string | null; nature: Nature | null; grossProfit: boolean;
-  opening: bigint; beforeFrom: bigint; beforeYear: bigint; debit: bigint; credit: bigint;
+  opening: bigint; beforeFrom: bigint; debit: bigint; credit: bigint;
 };
 
 /** A trial balance row plus the opening balance as entered (signed, debit positive), which statements need. */
@@ -38,27 +38,25 @@ const periodFields = (path: readonly PropertyKey[]) => path[0] === 'to' ? 'the e
 
 /**
  * One row per ledger for the period, from one set-based query. With `only`, the query reads that ledger's lines alone,
- * except for the profit and loss ledger, whose opening needs every income and expense ledger of earlier years; the
+ * except for the profit and loss ledger, whose opening needs every income and expense ledger before the period; the
  * opening difference then covers the rows returned.
  */
 export async function ledgerRows(context: LedgerContext, from: string, to: string, only?: string): Promise<LedgerRows> {
   const period = parseInput(periodQuery, { from, to }, periodFields);
   const { client, company } = context;
-  const yearStart = financialYearOf(company.financialYearStart, period.from).from;
   let filter = '';
   if (only !== undefined) {
     const { rows } = await client.query<{ systemKey: string | null }>('SELECT system_key AS "systemKey" FROM ledger WHERE company_id = $1 AND id = $2', [company.companyId, only]);
     if (!rows[0]) throw new FoundationError(404, 'Ledger not found.');
-    if (rows[0].systemKey !== 'profit_and_loss') filter = 'AND l.ledger_id = $5';
+    if (rows[0].systemKey !== 'profit_and_loss') filter = 'AND l.ledger_id = $4';
   }
-  const parameters: unknown[] = [company.companyId, period.from, period.to, yearStart];
+  const parameters: unknown[] = [company.companyId, period.from, period.to];
   if (filter) parameters.push(only);
   const { rows } = await client.query<Movement>(
     `WITH RECURSIVE ${groupTreeSql},
      moves AS (
        SELECT l.ledger_id,
          coalesce(sum(CASE l.side WHEN 'Dr' THEN l.amount ELSE -l.amount END) FILTER (WHERE v.date < $2), 0)::bigint AS before_from,
-         coalesce(sum(CASE l.side WHEN 'Dr' THEN l.amount ELSE -l.amount END) FILTER (WHERE v.date < $4), 0)::bigint AS before_year,
          coalesce(sum(l.amount) FILTER (WHERE l.side = 'Dr' AND v.date >= $2), 0)::bigint AS debit,
          coalesce(sum(l.amount) FILTER (WHERE l.side = 'Cr' AND v.date >= $2), 0)::bigint AS credit
        FROM voucher_line l JOIN voucher v ON v.company_id = l.company_id AND v.id = l.voucher_id
@@ -67,7 +65,7 @@ export async function ledgerRows(context: LedgerContext, from: string, to: strin
      SELECT led.id AS "ledgerId", led.name, led.system_key AS "systemKey", led.group_id AS "groupId", t.primary_id AS "primaryGroupId",
        t.primary_name AS "primaryGroupName", g.nature, coalesce(g.gross_profit, false) AS "grossProfit",
        CASE led.opening_side WHEN 'Dr' THEN led.opening_amount ELSE -led.opening_amount END AS opening,
-       coalesce(m.before_from, 0::bigint) AS "beforeFrom", coalesce(m.before_year, 0::bigint) AS "beforeYear",
+       coalesce(m.before_from, 0::bigint) AS "beforeFrom",
        coalesce(m.debit, 0::bigint) AS debit, coalesce(m.credit, 0::bigint) AS credit
      FROM ledger led
        LEFT JOIN account_group g ON g.company_id = led.company_id AND g.id = led.group_id
@@ -76,17 +74,18 @@ export async function ledgerRows(context: LedgerContext, from: string, to: strin
      WHERE led.company_id = $1 ${filter.replace('l.ledger_id', 'led.id')} ORDER BY lower(led.name), led.id`,
     parameters);
 
-  // Income and expense of earlier financial years, closed into the profit and loss ledger at report time.
+  // Income and expense before the period, closed into the profit and loss ledger at report time.
+  const openingCloses = company.booksBeginning < period.from;
   let carried = 0n, difference = 0n;
   const openings = rows.map(row => {
     difference = addMoney(difference, row.opening);
     const before = addMoney(row.opening, row.beforeFrom);
     if (row.nature !== 'income' && row.nature !== 'expense') return before;
-    const earlierYears = addMoney(company.booksBeginning < yearStart ? row.opening : 0n, row.beforeYear);
-    carried = addMoney(carried, earlierYears);
-    return subtractMoney(before, earlierYears);
+    const closed = addMoney(openingCloses ? row.opening : 0n, row.beforeFrom);
+    carried = addMoney(carried, closed);
+    return subtractMoney(before, closed);
   });
-  const result = rows.map(({ opening: enteredOpening, beforeFrom: _beforeFrom, beforeYear: _beforeYear, ...row }, index): LedgerRow => {
+  const result = rows.map(({ opening: enteredOpening, beforeFrom: _beforeFrom, ...row }, index): LedgerRow => {
     const opening = row.systemKey === 'profit_and_loss' ? addMoney(openings[index], carried) : openings[index];
     const closing = subtractMoney(addMoney(opening, row.debit), row.credit);
     const open = sides(opening), close = sides(closing);
