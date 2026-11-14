@@ -25,28 +25,24 @@ const queryFields = fields({ side: 'receivable or payable', groupId: 'the group'
 const ledgerNotFound = ledgerError(404, 'Ledger not found.', 'not_found');
 
 type BillState = PendingBill;
-/** The keyset of the bill lists: party name, party, bill date, bill name, bill. */
-type BillKey = [party: string, ledgerId: string, billDate: string, name: string, billId: string];
 type StateOptions = {
   /** Only bills pending on this side at the date (Dr: receivables' natural side). */
   side?: 'Dr' | 'Cr';
   /** Only bills dated on or before this date (the pending list offered for a voucher of that date). */
   datedBy?: string;
-  /** A page: rows after this key, at most this many (one more is read to tell whether a next page exists). */
-  after?: BillKey; limit?: number;
+  /** Only these bills. */
+  billIds?: string[];
 };
-type StateRows = { bills: (BillState & { key: BillKey })[]; total: bigint };
 
 /**
- * Bills of `ledgerIds` at `asOf`: pending (at the date) and final pending (all dates), with the dating row's dates.
- * Bills are kept when `keep` holds ('pending': non-zero at the date; 'final': non-zero at the date or over all dates;
- * 'all'), filtered before the dating rows are chosen. `total` is the signed sum of every kept bill, across pages.
+ * Bills of `ledgerIds` at `asOf`: pending (at the date) and final pending (all dates), with the dating row's dates, by
+ * party, bill date and name. Bills are kept when `keep` holds ('pending': non-zero at the date; 'final': non-zero at the
+ * date or over all dates; 'all'), filtered before the dating rows are chosen.
  */
-async function billStates(context: LedgerContext, ledgerIds: string[], asOf: string, keep: 'pending' | 'final' | 'all', options: StateOptions = {}): Promise<StateRows> {
-  if (!ledgerIds.length) return { bills: [], total: 0n };
-  const after = options.after ?? [null, null, null, null, null];
-  const { rows } = await context.client.query<BillState & { partyKey: string; nameKey: string; total: bigint }>(
-    `WITH live AS (${liveBillRowsSql('a.bill_id IS NOT NULL AND a.ledger_id = ANY($2::uuid[])')}),
+async function billStates(context: LedgerContext, ledgerIds: string[], asOf: string, keep: 'pending' | 'final' | 'all', options: StateOptions = {}): Promise<BillState[]> {
+  if (!ledgerIds.length) return [];
+  const { rows } = await context.client.query<BillState>(
+    `WITH live AS (${liveBillRowsSql('a.bill_id IS NOT NULL AND a.ledger_id = ANY($2::uuid[]) AND ($7::uuid[] IS NULL OR a.bill_id = ANY($7::uuid[]))')}),
      sums AS (
        SELECT bill_id, coalesce(sum(${signedSql('live')}) FILTER (WHERE opening OR row_date <= $3), 0)::bigint AS pending,
          sum(${signedSql('live')})::bigint AS final_pending
@@ -54,39 +50,69 @@ async function billStates(context: LedgerContext, ledgerIds: string[], asOf: str
      wanted AS (SELECT * FROM sums WHERE ($4 = 'all' OR pending <> 0 OR ($4 = 'final' AND final_pending <> 0))
        AND ($5::text IS NULL OR ($5 = 'Dr' AND pending > 0) OR ($5 = 'Cr' AND pending < 0))),
      chosen AS (SELECT DISTINCT ON (l.bill_id) l.bill_id, l.kind, l.row_date, ${creatorDueSql('l')} AS due_date
-       FROM live l JOIN wanted w USING (bill_id) ORDER BY l.bill_id, ${creatorOrderSql}),
-     listed AS (
-       SELECT b.id AS "billId", b.name, b.ledger_id AS "ledgerId", led.name AS "ledgerName", lower(led.name) AS "partyKey", lower(b.name) AS "nameKey",
-         ch.row_date, ch.due_date, CASE ch.kind WHEN 'advance' THEN 'advance' ELSE 'new_ref' END AS method, w.pending, w.final_pending,
-         (sum(w.pending) OVER ())::bigint AS total
-       FROM wanted w JOIN bill b ON b.company_id = $1 AND b.id = w.bill_id JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
-         JOIN chosen ch ON ch.bill_id = w.bill_id
-       WHERE $6::date IS NULL OR ch.row_date <= $6)
-     SELECT "billId", name, "ledgerId", "ledgerName", "partyKey", "nameKey", to_char(row_date, 'YYYY-MM-DD') AS "billDate",
-       to_char(due_date, 'YYYY-MM-DD') AS "dueDate", method, pending, final_pending AS "finalPending",
-       greatest(0, $3::date - due_date)::int AS "overdueDays", total
-     FROM listed
-     WHERE $7::text IS NULL OR ("partyKey", "ledgerId", row_date, "nameKey", "billId") > ($7, $8::uuid, $9::date, $10, $11::uuid)
-     ORDER BY "partyKey", "ledgerId", row_date, "nameKey", "billId"
-     LIMIT $12`,
-    [context.company.companyId, ledgerIds, asOf, keep, options.side ?? null, options.datedBy ?? null, ...after,
-      options.limit === undefined ? null : options.limit + 1]);
-  return {
-    total: rows[0]?.total ?? 0n,
-    bills: rows.map(({ partyKey, nameKey, total: _total, ...bill }) => ({ ...bill, key: [partyKey, bill.ledgerId, bill.billDate ?? '', nameKey, bill.billId] })),
-  };
+       FROM live l JOIN wanted w USING (bill_id) ORDER BY l.bill_id, ${creatorOrderSql})
+     SELECT b.id AS "billId", b.name, b.ledger_id AS "ledgerId", led.name AS "ledgerName", to_char(ch.row_date, 'YYYY-MM-DD') AS "billDate",
+       to_char(ch.due_date, 'YYYY-MM-DD') AS "dueDate", CASE ch.kind WHEN 'advance' THEN 'advance' ELSE 'new_ref' END AS method,
+       w.pending, w.final_pending AS "finalPending", greatest(0, $3::date - ch.due_date)::int AS "overdueDays"
+     FROM wanted w JOIN bill b ON b.company_id = $1 AND b.ledger_id = ANY($2::uuid[]) AND b.id = w.bill_id
+       JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
+       JOIN chosen ch ON ch.bill_id = w.bill_id
+     WHERE $6::date IS NULL OR ch.row_date <= $6
+     ORDER BY lower(led.name), led.id, ch.row_date, lower(b.name), b.id`,
+    [context.company.companyId, ledgerIds, asOf, keep, options.side ?? null, options.datedBy ?? null, options.billIds ?? null]);
+  return rows;
 }
-const states = async (...args: Parameters<typeof billStates>) => (await billStates(...args)).bills.map(({ key: _key, ...bill }) => bill);
+const states = billStates;
 
-const encodeKey = (key: BillKey) => Buffer.from(JSON.stringify(key)).toString('base64url');
-function decodeKey(cursor: string | undefined): BillKey | undefined {
+/** The keyset of the bills receivable or payable list: party name, party, bill name (unique per party ignoring case). */
+type PageKey = [party: string, ledgerId: string, name: string];
+const encodeKey = (key: PageKey) => Buffer.from(JSON.stringify(key)).toString('base64url');
+function decodeKey(cursor: string | undefined): PageKey | undefined {
   if (cursor === undefined) return undefined;
   try {
     const key = JSON.parse(Buffer.from(cursor, 'base64url').toString()) as unknown;
-    if (Array.isArray(key) && key.length === 5 && key.every(part => typeof part === 'string') && /^\d{4}-\d{2}-\d{2}$/.test(key[2])
-      && [key[1], key[4]].every(id => /^[0-9a-f-]{36}$/.test(id))) return key as BillKey;
+    if (Array.isArray(key) && key.length === 3 && key.every(part => typeof part === 'string') && /^[0-9a-f-]{36}$/.test(key[1])) return key as PageKey;
   } catch { /* refused below */ }
   throw ledgerError(400, 'Check the page cursor and try again.', 'validation');
+}
+
+/**
+ * One page of the bills pending on `side` at `asOf`, in list order (party name, party, bill name), without reading the
+ * bills before or after it: parties are taken in order, and each party's bills in its name index, each with its pending
+ * summed from its own rows, until the page is full. A page costs the bills it returns plus the settled ones it passes.
+ */
+async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: string, side: 'Dr' | 'Cr', after: PageKey | undefined, limit: number) {
+  const { client, company } = context;
+  const { rows: parties } = await client.query<{ id: string; key: string }>(
+    `SELECT id, lower(name) AS key FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[])
+       AND ($3::text IS NULL OR (lower(name), id) >= ($3, $4::uuid)) ORDER BY lower(name), id`,
+    [company.companyId, ledgerIds, after?.[0] ?? null, after?.[1] ?? null]);
+  const page: { billId: string; ledgerId: string; key: PageKey }[] = [];
+  for (const party of parties) {
+    const from = after && party.id === after[1] ? after[2] : null;
+    const { rows } = await client.query<{ billId: string; name: string }>(
+      `SELECT b.id AS "billId", lower(b.name) AS name FROM bill b
+         CROSS JOIN LATERAL (SELECT coalesce(sum(${signedSql('r')}) FILTER (WHERE r.opening OR r.row_date <= $4), 0) AS pending
+           FROM (${liveBillRowsSql('a.bill_id = b.id')}) r) s
+       WHERE b.company_id = $1 AND b.ledger_id = $2 AND ($3::text IS NULL OR lower(b.name) > $3)
+         AND (($5 = 'Dr' AND s.pending > 0) OR ($5 = 'Cr' AND s.pending < 0))
+       ORDER BY lower(b.name) LIMIT $6`,
+      [company.companyId, party.id, from, asOf, side, limit + 1 - page.length]);
+    page.push(...rows.map(row => ({ billId: row.billId, ledgerId: party.id, key: [party.key, party.id, row.name] as PageKey })));
+    if (page.length > limit) break;
+  }
+  return { page: page.slice(0, limit), more: page.length > limit };
+}
+
+/** The total pending on `side` over every bill of `ledgerIds` at `asOf` (signed). */
+async function pendingTotal(context: LedgerContext, ledgerIds: string[], asOf: string, side: 'Dr' | 'Cr'): Promise<bigint> {
+  if (!ledgerIds.length) return 0n;
+  const { rows } = await context.client.query<{ total: bigint }>(
+    `SELECT coalesce(sum(pending), 0)::bigint AS total FROM (
+       SELECT sum(${signedSql('r')}) FILTER (WHERE r.opening OR r.row_date <= $3) AS pending
+       FROM (${liveBillRowsSql('a.bill_id IS NOT NULL AND a.ledger_id = ANY($2::uuid[])')}) r GROUP BY r.bill_id) s
+     WHERE ($4 = 'Dr' AND pending > 0) OR ($4 = 'Cr' AND pending < 0)`, [context.company.companyId, ledgerIds, asOf, side]);
+  return rows[0].total;
 }
 
 /** Each ledger's on-account amount at `asOf`, from its lines and opening (signed, debit positive). */
@@ -123,21 +149,24 @@ const naturalSide = (side: BillSide) => side === 'receivable' ? 'Dr' as const : 
 const positive = (amount: bigint) => amount < 0n ? subtractMoney(0n, amount) : amount;
 
 /**
- * Bills receivable or payable at a date, a page at a time (`limit`, `after`; an export reads them all). Bills on the
- * other side (advances, settlements left on their own) are not listed (observed). The total covers every page.
+ * Bills receivable or payable at a date, a page at a time (`limit`, `after`; an export reads them all), by party and bill
+ * name. Bills on the other side (advances, settlements left on their own) are not listed (observed). The total of every
+ * page comes with the first page only (a later page would have to read every bill again).
  */
 export async function billsOutstandingReport(context: LedgerContext, query: unknown, all = false): Promise<BillsOutstandingReport> {
   const { side, groupId, asOf, limit, after } = parseInput(outstandingQuery, query, queryFields);
   await reportBudget(context, listBudget);
   const { group, ledgerIds } = await scope(context, side, groupId);
   const pageSize = all ? exportLimit : limit;
-  const { bills, total } = await billStates(context, ledgerIds, asOf, 'pending', { side: naturalSide(side), after: all ? undefined : decodeKey(after), limit: pageSize });
-  if (all && bills.length > pageSize) throw exportTooLarge;
-  const shown = bills.slice(0, pageSize);
+  const cursor = all ? undefined : decodeKey(after);
+  const { page, more } = await pendingPage(context, ledgerIds, asOf, naturalSide(side), cursor, pageSize);
+  if (all && more) throw exportTooLarge;
+  const details = new Map((await states(context, [...new Set(page.map(item => item.ledgerId))], asOf, 'all', { billIds: page.map(item => item.billId) }))
+    .map(bill => [bill.billId, bill]));
   return {
-    asOf, side, group, total: positive(total),
-    bills: shown.map(({ key: _key, ...bill }) => ({ ...bill, amount: positive(bill.pending) })),
-    next: bills.length > pageSize ? encodeKey(shown[shown.length - 1].key) : null,
+    asOf, side, group, total: cursor ? null : positive(await pendingTotal(context, ledgerIds, asOf, naturalSide(side))),
+    bills: page.map(item => { const bill = details.get(item.billId)!; return { ...bill, amount: positive(bill.pending) }; }),
+    next: more ? encodeKey(page[page.length - 1].key) : null,
   };
 }
 
