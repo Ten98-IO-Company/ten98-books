@@ -13,7 +13,7 @@ Every table carries `company_id`, references its neighbours through composite fo
 | `account_group` | Group tree: parent, nature (asset, liability, income, expense), gross-profit flag, `system_key`, name, second-language name, revision | read, insert, delete, update name, parent, nature and flag |
 | `ledger` | Group, `system_key`, names, opening balance (amount and Dr/Cr side as of books beginning), revision; bill-wise flag, default credit period (a count of days, weeks or months, or a fixed due date) and credit-days check | read, insert, delete, update group, names, opening and the bill-wise settings |
 | `voucher_type` | Kind (one of the eight below), `system_key`, names, numbering series, revision | read, insert, rename |
-| `voucher_numbering_restart` | Restart rules per voucher type and series: applicable from, starting number, periodicity; one row seeded per type (books beginning, 1, yearly) | read, insert (seeding only) |
+| `voucher_numbering_restart` | Restart rules per voucher type and series: applicable from, starting number, periodicity; one row seeded per type (the start of the financial year in which the books begin, 1, yearly) | read, insert (seeding only) |
 | `voucher_counter` | Last number issued per company, voucher type, series and numbering period (`period_start`) | read, insert, update |
 | `voucher` | Type, series, number and its numbering period, date (`DATE`), narration, reference and reference date (the supplier's invoice, or the original invoice of a note), status (regular, cancelled, optional), post-dated flag, idempotency key and request hash, revision, soft-delete marker | read, insert, update lifecycle columns and the reference; never delete |
 | `voucher_line` | Line order, ledger, side, base amount (`BIGINT` minor units, > 0), transaction currency, amount and FX rate, tax classification and rate | read, insert, delete (alter replaces lines) |
@@ -97,6 +97,13 @@ Numbers come from the `voucher_counter` row of the company, voucher type, series
 - A cancelled voucher keeps its number and row (and its lines, for the record) and has no accounting effect.
 - An optional voucher takes no number and has no effect until it is altered to regular, when it takes the next number of the period of its date then.
 - A post-dated voucher takes its number at entry, in the year of its date, and counts from that date.
+- The company's financial year start is fixed once it has restart rules or vouchers (the database refuses the change, and the application role cannot write it, nor the currency, its minor units or the books beginning). Changing it later is a future, deliberate operation that must recompute every period and counter.
+- A sales bill named automatically keeps that name when an alter moves its voucher into another period and the voucher takes a new number: an unnamed new reference on a line that already had the bill named by the old number stays on that bill, so a date move never renames or splits it; only a name the client sends changes it. This is a decision awaiting observation of the reference.
+
+Known behaviours, unchanged for now:
+
+- The API accepts a date beyond the entry screen's period bound (the reference's screen refuses a date after its current period; its import accepts one). The entry screen will enforce its own bound.
+- A legitimate number move run inside a savepoint is refused: the database accepts a number only from a counter row written by the same transaction id, and a savepoint has its own. The application never posts inside a savepoint.
 
 Because numbers repeat across years, a number identifies a voucher only together with its year: everything that shows a number shows the voucher's date beside it (day book, ledger vouchers, the voucher view, the bills reports and their CSV), and nothing looks a voucher up by number (the API and screens use the voucher id). A sales bill named automatically takes the bare number, as the reference does, so number 1 of the next year for the same party finds the earlier year's bill "1" and joins it (`bill_attached` warning): one bill holding both invoices, dated and due as the first. Naming the bill on the voucher avoids that.
 

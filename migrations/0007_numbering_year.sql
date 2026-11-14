@@ -2,11 +2,12 @@
 -- stored restart rules (applicable from, starting number, periodicity), seeded with one row: the start of the financial
 -- year in which the books begin, 1, yearly. The rule in force on a voucher's date gives its period; a counter is kept
 -- per company, voucher type, series and period, and a number is unique only within its period. Only yearly restart is
--- built; its periods are the company's financial years. Every existing voucher keeps its number
--- and is filed under the period of its date; each period's counter continues from the highest number present in that
--- period (deleted vouchers included, so a deleted number is still never reissued). Row-level security, FORCE, ownership
--- and the existing grants are untouched; the application role may also set the new voucher column, through the same
--- guard as the number, and read and seed restart rules.
+-- built; its periods are the company's financial years. Every existing voucher keeps its number and is filed under the
+-- period of its date; each period's counter continues from the highest number present in that period (deleted vouchers
+-- included, so a deleted number is still never reissued). Row-level security, FORCE and ownership are untouched. The
+-- application role may also set the new voucher column, through the same guard as the number, and read and seed restart
+-- rules; its UPDATE on company narrows to the settings that do not shape the books, and the financial year start is
+-- fixed once numbering depends on it.
 
 -- ---- Schema ----
 
@@ -165,6 +166,20 @@ END $$;
 CREATE CONSTRAINT TRIGGER voucher_number_period AFTER UPDATE ON voucher DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW WHEN (OLD.date IS DISTINCT FROM NEW.date) EXECUTE FUNCTION voucher_assert_number_period();
 
+-- Every numbering period follows the financial year start, so it cannot change once the company has restart rules or
+-- vouchers. Changing it later is a future, deliberate operation that must recompute every period and counter.
+CREATE FUNCTION company_financial_year_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF (NEW.fy_start_month, NEW.fy_start_day) IS DISTINCT FROM (OLD.fy_start_month, OLD.fy_start_day) AND (
+      EXISTS (SELECT 1 FROM voucher_numbering_restart r WHERE r.company_id = OLD.company_id)
+      OR EXISTS (SELECT 1 FROM voucher v WHERE v.company_id = OLD.company_id)) THEN
+    RAISE EXCEPTION 'the financial year start cannot change once the company has vouchers or numbering rules'
+      USING ERRCODE = '23514', CONSTRAINT = 'company_financial_year_fixed';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER company_financial_year_guard BEFORE UPDATE ON company FOR EACH ROW EXECUTE FUNCTION company_financial_year_guard();
+
 -- ---- Existing data ----
 
 -- The migrator owns the tables but FORCE applies the policy to it too, so the scope lists every workspace (a company's
@@ -206,6 +221,10 @@ ALTER TABLE voucher ADD CONSTRAINT voucher_number_key UNIQUE (company_id, vouche
 -- ---- Grants ----
 
 GRANT UPDATE (number_period) ON voucher TO books_app;
+-- The application writes no company column today; these stay writable (and give FOR SHARE the privilege it needs).
+-- The currency, its minor units, the financial year start and the books beginning are fixed for the role.
+REVOKE UPDATE ON company FROM books_app;
+GRANT UPDATE (second_language_name, time_zone, locked_through) ON company TO books_app;
 GRANT SELECT, INSERT ON voucher_numbering_restart TO books_app;
 REVOKE ALL ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date), ledger_financial_year_start(date, integer, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date), ledger_financial_year_start(date, integer, integer) TO books_app;

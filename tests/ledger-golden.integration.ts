@@ -15,7 +15,7 @@ let database: TestDatabase;
 let owner: Member & { workspaceId: string };
 let companyId = '';
 let books: Chart;
-const ledgerTables = ['account_group', 'ledger', 'voucher_type', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log'];
+const ledgerTables = ['account_group', 'ledger', 'voucher_type', 'voucher_numbering_restart', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log'];
 
 before(async () => {
   database = await freshDatabase('ledger_golden');

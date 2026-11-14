@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import pg from 'pg';
 import { migrationFiles } from '../src/server/db.ts';
+import { getDatabase } from '../src/server/db.ts';
 import { createVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
+import { assertDatabaseRoles } from '../src/server/tenancy.ts';
 import { inCompany, voucherBody } from './helpers/ledger.ts';
 
 /**
@@ -89,6 +91,10 @@ test('every voucher keeps its number and is filed under the year of its date', a
     FROM voucher_numbering_restart WHERE company_id = $1 GROUP BY 1, 2, 3`, [company]);
   assert.deepEqual(rules.rows, [{ from: '2026-01-01', start: 1, periodicity: 'yearly', types: 8 }], 'each existing voucher type gets the default restart rule, dated on the financial year start, not the books beginning (15 February)');
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
+  await assertDatabaseRoles(getDatabase().pool);
+  // The company existed before 0007; its financial year start is now fixed too, even for the migrating owner.
+  await assert.rejects(admin.query('UPDATE company SET fy_start_month = 4 WHERE company_id = $1', [company]),
+    (error: unknown) => (error as { constraint?: string }).constraint === 'company_financial_year_fixed');
 });
 
 test('each year continues from its own highest number, so an earlier year may repeat a later year\'s number', async () => {

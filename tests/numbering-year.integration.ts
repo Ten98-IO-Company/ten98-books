@@ -173,6 +173,14 @@ test('numbers, periods and counters cannot be forged across years by direct SQL'
     code('23514', 'voucher_number_period_set'), 'a period without a number');
   await assert.rejects(asApp(books.id, client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number) VALUES ($1, $2, 'main', '2028-01-01', 1)`, [books.id, type])),
     code('23514', 'voucher_counter_sequence'), 'a counter that issues a number without a voucher');
+  // The financial year start shapes every period, so it is fixed once numbering depends on it; the settings that shape
+  // the books are not writable by the application role at all.
+  await assert.rejects(asAdmin(database.adminUrl, admin => admin.query('UPDATE company SET fy_start_month = 4, fy_start_day = 1 WHERE company_id = $1', [books.id])),
+    code('23514', 'company_financial_year_fixed'), 'the financial year start, even for a role that may write it');
+  for (const column of ['fy_start_month = 4, fy_start_day = 1', "base_currency = 'SAR'", 'currency_minor_units = 3', "books_beginning = '2026-02-01'"]) {
+    await assert.rejects(asApp(books.id, client => client.query(`UPDATE company SET ${column} WHERE company_id = $1`, [books.id])), code('42501'), column);
+  }
+  await asApp(books.id, client => client.query("UPDATE company SET time_zone = 'Asia/Riyadh', second_language_name = NULL WHERE company_id = $1", [books.id]));
   assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 1 }]);
   assert.equal((await books.pay('2026-06-03')).number, 2, 'the API continues where it left off');
   assert.equal((await books.pay('2027-01-01')).number, 1);
@@ -228,4 +236,23 @@ test('an invoice with a credit-period bill moved into the next year takes that y
   assert.equal(moved.status, 200, JSON.stringify(moved.body));
   assert.deepEqual([moved.body.voucher.number, moved.body.voucher.date, moved.body.voucher.lines[0].bills[0].dueDate], [2, '2027-01-20', '2027-02-19']);
   assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 1 }, { period: '2027-01-01', last: 2 }], 'number 1 of 2026 is left as a gap');
+});
+
+test('an automatically named bill keeps its name when its voucher moves to another year and takes a new number', async () => {
+  const books = await company('Bill Keeps Name');
+  const call = (path: string, body?: unknown) => owner.browser.call(`/api/companies/${books.id}${path}`, body);
+  const party = await addLedger(owner.browser, books.id, 'Named Customer', books.books.group('receivables'));
+  const other = await addLedger(owner.browser, books.id, 'Other Customer', books.books.group('receivables'));
+  const sales = await addLedger(owner.browser, books.id, 'Sales', books.books.group('sales'));
+  const lines = (ledgerId: string) => [{ ledgerId, side: 'Dr', amount: '100', bills: [{ kind: 'new_ref', amount: '100' }] }, { ledgerId: sales, side: 'Cr', amount: '100' }];
+  const december = (await call('/vouchers', { ...voucherBody(books.books.type('sales'), '2026-12-10', []), lines: lines(party) })).body.voucher;
+  assert.deepEqual([december.number, december.lines[0].bills[0].billName], [1, '1']);
+  assert.equal((await call('/vouchers', { ...voucherBody(books.books.type('sales'), '2027-01-05', []), lines: lines(other) })).body.voucher.number, 1);
+  const moved = await call(`/vouchers/${december.id}`, { date: '2027-01-20', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: december.revision, lines: lines(party) });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.deepEqual([moved.body.voucher.number, moved.body.voucher.lines[0].bills[0].billName, moved.body.voucher.lines[0].bills[0].billId],
+    [2, '1', december.lines[0].bills[0].billId], 'the number changes, the bill and its name stay');
+  assert.deepEqual(moved.body.warnings.map((item: any) => item.code), [], 'no bill_split');
+  const bills = (await call(`/reports/party-bills/${party}?asOf=2027-01-31`)).body.report.bills;
+  assert.deepEqual(bills.map((bill: any) => [bill.name, bill.pending]), [['1', '100.00']]);
 });
