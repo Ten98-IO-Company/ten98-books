@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
-import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
@@ -428,7 +428,7 @@ function shellWalk(start: string) {
     get level() { return level(); },
     get returns() { return stack.length; },
     goTo(to: string, { blocked = false } = {}) {
-      if (path(to).toLowerCase() === path().toLowerCase()) { push(to); return; }
+      if (path(to).toLowerCase() === path().toLowerCase()) { replace(to); return; }
       const entry: GoToReturn = { from: level(), to: path(to), level: '', index: -1, fromIndex: cursor, mark: drills, pending: true };
       stack = [...stack, entry];
       if (blocked) { stack = stack.filter(item => item !== entry); return; }
@@ -452,7 +452,8 @@ function shellWalk(start: string) {
       if (isForm(level())) { go(-1); return level(); }
       const innermost = stack[stack.length - 1];
       const source = backSource({ path: path(), index: cursor, step: step() }, stack, { screen: level().includes('/reports/'), shell: level() !== home });
-      if (source === 'go-to') { stack = stack.filter(item => item !== innermost); go(innermost.fromIndex - cursor); }
+      const held = heldReturn({ path: path(), index: cursor }, stack);
+      if (source === 'go-to' && held) { stack = stack.filter(item => item !== held); go(held.fromIndex - cursor); }
       else if (source === 'screen') {
         const index = trail.findLastIndex(entry => entry.child === reportLevel(level()));
         if (index >= 0) { const trailBack = drilledFrom(step(), innermost); push(trail.splice(index)[0].parent, trailBack); } else push(home);
@@ -568,6 +569,30 @@ test('browser back and forward keep a held return on its own entry; a reload or 
   // A reload forgets every return: Escape falls back to the screen's own logical parent.
   walk.open(at.dayBook); walk.goTo(at.trial); walk.reload();
   assert.equal(walk.escape(), at.home);
+});
+
+test('a return held under a later go-to still applies on its own entry (browser back past the later go-to)', () => {
+  // Cost centres, go-to the chart of accounts, open a ledger form, go-to the trial balance from the form, browser back to
+  // the form, Escape (the form goes back to the chart), Escape: the chart's return still leads to cost centres.
+  const walk = shellWalk('/app/c/x/masters/cost-centres');
+  walk.goTo(at.chart); walk.open(at.ledgerForm); walk.goTo(at.trial);
+  walk.back();
+  assert.equal(walk.level, at.ledgerForm);
+  assert.equal(walk.escape(), at.chart);
+  assert.equal(walk.escape(), '/app/c/x/masters/cost-centres');
+  // The later go-to's return is still held on its own entry: forward three times reaches the trial balance, which
+  // returns to the form.
+  walk.forward(); walk.forward(); walk.forward();
+  assert.equal(walk.level, at.trial);
+  assert.equal(walk.escape(), at.ledgerForm);
+});
+
+test('a go-to to the screen already shown with another address replaces it in place and keeps its return', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.trial);
+  walk.goTo('/app/c/x/reports/trial-balance?from=2026-01-01&to=2026-01-31&hl=g:a');
+  assert.equal(walk.returns, 1);
+  assert.equal(walk.escape(), at.dayBook);
 });
 
 test('a go-to the leave guard keeps from happening leaves no return', () => {

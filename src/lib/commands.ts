@@ -183,21 +183,25 @@ export function afterHistory(stack: readonly GoToReturn[], move: HistoryMove): r
   return stack
 }
 
+/** The go-to return held on the current history entry (its position and path), the latest if several; the one Escape spends. */
+export const heldReturn = (at: { path: string; index: number }, stack: readonly GoToReturn[]): GoToReturn | undefined =>
+  stack.findLast(goTo => !goTo.pending && goTo.index === at.index && samePath(goTo.to, at.path))
+
 /**
  * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take at a location (its path, history position and report trail
  * step number), in this order:
  * 1. A level drilled into after the innermost go-to takes the screen's own back, one level up.
- * 2. The very entry the innermost go-to opened returns to where that go-to was opened from. Go-to stacks, so the next
- *    one out applies there. A form opened from it and closed again is back on that entry.
+ * 2. The very entry a go-to opened returns to where that go-to was opened from (heldReturn: the latest return held on
+ *    this entry, innermost or not). Go-to stacks, so the next one out applies there. A form opened from it and closed
+ *    again, or the browser's back past a later go-to, is back on that entry.
  * 3. Otherwise the screen's own back, else the shell's (the company menu).
  *
  * A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes back the usual
  * way, and that ends at the menu.
  */
 export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell }: { screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
-  const innermost = stack[stack.length - 1]
-  if (screen && drilledFrom(at.step, innermost)) return 'screen'
-  if (innermost && !innermost.pending && innermost.index === at.index && samePath(innermost.to, at.path)) return 'go-to'
+  if (screen && drilledFrom(at.step, stack[stack.length - 1])) return 'screen'
+  if (heldReturn(at, stack)) return 'go-to'
   return screen ? 'screen' : shell ? 'shell' : 'none'
 }
 
