@@ -31,47 +31,61 @@ const snapshot = async () => (await admin.query(`SELECT
 let before0009: unknown;
 const types = async (company: string, kind: string) => (await admin.query('SELECT id FROM voucher_type WHERE company_id = $1 AND kind = $2', [company, kind])).rows[0].id as string;
 
+/**
+ * One company as the earlier release left it: a sales voucher posted by the server code with a cost row on the sales line
+ * and, written as that release stored them, new bills on the party line named `billNames` (the current posting code
+ * already needs 0009's bill key).
+ */
+async function earlierCompany(client: pg.Client, company: string, billNames: string[]): Promise<string> {
+  await client.query("INSERT INTO workspace (id, name) VALUES ($1, 'Earlier Changes')", [company]);
+  await client.query("INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'owner')", [company, user]);
+  await client.query("BEGIN");
+  await client.query("SELECT set_config('app.company_ids', $1, true)", [company]);
+  await client.query(`INSERT INTO company (company_id, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
+    VALUES ($1, 'AED', 2, 1, 1, '2026-01-01', 'Asia/Dubai')`, [company]);
+  await client.query("SELECT ledger_seed_company($1)", [company]);
+  await client.query("COMMIT");
+  const posted = await inCompany(user, company, async context => {
+    context.role = "owner";
+    await saveCostCentresSetting(context, { enabled: true });
+    const group = async (key: string) => (await context.client.query("SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2", [company, key])).rows[0].id;
+    const sales = (await createLedger(context, { name: "Sales", groupId: await group("sales") })).id;
+    const party = (await createLedger(context, { name: "Party", groupId: await group("receivables") })).id;
+    const centre = (await createCostCentre(context, { name: "Showroom", categoryId: (await createCostCategory(context, { name: "Channel" })).id, parentId: null })).id;
+    const type = (await context.client.query("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'sales'", [company])).rows[0].id;
+    return (await createVoucher(context, { idempotencyKey: `earlier-${randomUUID()}`, voucherTypeId: type, date: "2026-02-01", lines: [
+      { ledgerId: party, side: "Dr", amount: "100" }, { ledgerId: sales, side: "Cr", amount: "100", costAllocations: [{ costCentreId: centre, amount: "100" }] }] })).voucher;
+  }, "write");
+  await client.query("BEGIN");
+  await client.query("SELECT set_config('app.company_ids', $1, true)", [company]);
+  for (const name of billNames) {
+    const bill = (await client.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, 'AED') RETURNING id", [company, posted.lines[0].ledgerId, name])).rows[0].id;
+    const amount = 10000 / billNames.length;
+    await client.query(`INSERT INTO bill_allocation (company_id, ledger_id, voucher_id, line_no, kind, bill_id, currency, side, amount, currency_amount, due_date)
+      VALUES ($1, $2, $3, 1, 'new_ref', $4, 'AED', 'Dr', $5, $5, '2026-02-01')`, [company, posted.lines[0].ledgerId, posted.id, bill, amount]);
+  }
+  await client.query("COMMIT");
+  return posted.id;
+}
+
 before(async () => {
-  database = await freshDatabase('changesupgrade', { migrations: earlier });
+  database = await freshDatabase("changesupgrade", { migrations: earlier });
   admin = new pg.Client({ connectionString: database.adminUrl });
   await admin.connect();
   await admin.query(`INSERT INTO "user" (id, name, email) VALUES ($1, 'Owner', $2)`, [user, `owner-${user}@books.test`]);
-  for (const company of companies) {
-    await admin.query("INSERT INTO workspace (id, name) VALUES ($1, 'Earlier Changes')", [company]);
-    await admin.query("INSERT INTO membership (workspace_id, user_id, role) VALUES ($1, $2, 'owner')", [company, user]);
-    await admin.query('BEGIN');
-    await admin.query("SELECT set_config('app.company_ids', $1, true)", [company]);
-    await admin.query(`INSERT INTO company (company_id, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
-      VALUES ($1, 'AED', 2, 1, 1, '2026-01-01', 'Asia/Dubai')`, [company]);
-    await admin.query('SELECT ledger_seed_company($1)', [company]);
-    await admin.query('COMMIT');
-    // The earlier release's server code posts the same way: bills on the party line, cost rows on the sales line.
-    await inCompany(user, company, async context => {
-      context.role = 'owner';
-      await saveCostCentresSetting(context, { enabled: true });
-      const group = async (key: string) => (await context.client.query('SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2', [company, key])).rows[0].id;
-      const sales = (await createLedger(context, { name: 'Sales', groupId: await group('sales') })).id;
-      const party = (await createLedger(context, { name: 'Party', groupId: await group('receivables') })).id;
-      const centre = (await createCostCentre(context, { name: 'Showroom', categoryId: (await createCostCategory(context, { name: 'Channel' })).id, parentId: null })).id;
-      const type = (await context.client.query("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'sales'", [company])).rows[0].id;
-      const posted = await createVoucher(context, { idempotencyKey: `earlier-${randomUUID()}`, voucherTypeId: type, date: '2026-02-01', lines: [
-        { ledgerId: party, side: 'Dr', amount: '100', bills: [{ kind: 'new_ref', name: 'INV-1', amount: '100' }] },
-        { ledgerId: sales, side: 'Cr', amount: '100', costAllocations: [{ costCentreId: centre, amount: '100' }] }] });
-      vouchers[company] = posted.voucher.id;
-    }, 'write');
-  }
+  for (const company of companies) vouchers[company] = await earlierCompany(admin, company, ["INV-1"]);
   before0009 = await snapshot();
   await migrateDatabase({ log: () => undefined });
 });
 after(async () => { await admin?.end(); await database?.drop(); });
 
-test('the bill indexes are led by the line and the bill, the name collation exists, and nothing posted changed', async () => {
+test('the bill indexes are led by the line and the bill, bills are identified by the bill key, and nothing posted changed', async () => {
   const indexes = (await admin.query(`SELECT indexrelid::regclass::text AS name, pg_get_indexdef(indexrelid) AS definition FROM pg_index
     WHERE indrelid IN ('bill_allocation'::regclass, 'bill'::regclass) ORDER BY 1`)).rows;
   const definition = (name: string) => indexes.find(row => row.name === name)?.definition ?? '';
   assert.match(definition('bill_allocation_line_idx'), /\(voucher_id, line_no\)$/);
   assert.match(definition('bill_allocation_bill_idx'), /\(bill_id\)$/);
-  assert.match(definition('bill_name_order_idx'), /name COLLATE bill_name_order/);
+  assert.match(definition('bill_identity_idx'), /bill_key\(name\)/);
   assert.deepEqual(await snapshot(), before0009);
   assert.deepEqual((await admin.query('SELECT DISTINCT created_cancelled FROM voucher')).rows, [{ created_cancelled: false }], 'existing vouchers are not voids');
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
@@ -103,3 +117,4 @@ test('on the migrated data a voucher alters, moves to another type and a void po
   }), (error: { constraint?: string }) => error.constraint === 'bill_allocation_total');
   await admin.query('ROLLBACK').catch(() => undefined);
 });
+

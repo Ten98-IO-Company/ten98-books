@@ -1,5 +1,5 @@
--- 0009: bill checks that read their own line or bill on any statistics; bill names in name order; vouchers created
--- cancelled without lines; vouchers altered into another voucher type.
+-- 0009: bill checks that read their own line or bill on any statistics; the bill key (identity and name order);
+-- vouchers created cancelled without lines; vouchers altered into another voucher type.
 
 -- ---- Bill checks without statistics ----
 
@@ -54,14 +54,34 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- ---- Bill name order ----
+-- ---- The bill key: when two names are the same bill ----
 
--- Bills are listed by name as text, ignoring case and punctuation (observed for ten bills of one debtor: 10, 9, A-020,
--- A-100, a2, B-050, B1, b3, B-300, C-200). An ICU collation at primary strength with punctuation shifted gives that
--- order; it is not deterministic (B-1 and b1 compare equal), so every order by it ends with the bill id. Bill identity
--- is unchanged: a bill is still its party's name ignoring case (bill_identity_idx).
-CREATE COLLATION bill_name_order (provider = icu, locale = 'und-u-ka-shifted-ks-level1', deterministic = false);
-CREATE INDEX bill_name_order_idx ON bill (company_id, ledger_id, name COLLATE bill_name_order, id);
+-- A bill is its party's name compared by this key (observed: ab1, AB-1, A-B1 and Ab-1 on one party are one bill), and
+-- bills are listed in the order of the key (observed for ten bills of one debtor: 10, 9, A-020, A-100, a2, B-050, B1,
+-- b3, B-300, C-200). The key is the name trimmed, in lower case, without the characters the reference ignores. Those
+-- characters are this one constant (hyphens so far; the others are being observed). The bill keeps its first spelling
+-- for display. Used by the identity index, find-or-create and settlement by name, and every list by name (ties: bill id).
+CREATE FUNCTION bill_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+  RETURN lower(translate(btrim(p_name), '-', ''));
+GRANT EXECUTE ON FUNCTION bill_key(text) TO books_app;
+
+-- Two bills of one party that the key makes equal are not merged silently: the migration stops and names them (no
+-- released installation holds bills yet; an operator renames or merges them by hand first). The scope lists every
+-- workspace for this transaction only, as in 0008.
+DO $$
+DECLARE v_clash text;
+BEGIN
+  PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
+  SELECT string_agg(format('company %s, ledger %s: %s', company_id, ledger_id, names), '; ') INTO v_clash
+  FROM (SELECT company_id, ledger_id, string_agg(name, ', ' ORDER BY name) AS names FROM bill
+        GROUP BY company_id, ledger_id, bill_key(name) HAVING count(*) > 1) clashes;
+  PERFORM set_config('app.company_ids', '', true);
+  IF v_clash IS NOT NULL THEN
+    RAISE EXCEPTION 'these bills become one bill under the new bill key; rename or merge them first: %', v_clash;
+  END IF;
+END $$;
+DROP INDEX bill_identity_idx;
+CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, bill_key(name));
 
 -- ---- Vouchers created cancelled, without lines ----
 

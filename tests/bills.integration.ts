@@ -183,6 +183,18 @@ test('each list holds the bills lying on its side: a customer advance is a payab
   assert.match(csv, /"2026-03-02","ADV-C","Customer","800.00"/);
 });
 
+test('a bill is its name without case or hyphens: four spellings make one bill, a settlement in a fifth finds it, other characters stay apart (observed)', async () => {
+  const g = await books('Bill Key');
+  const sales = await g.ledger('Sales', 'sales'), bank = await g.ledger('Bank', 'bank_accounts'), party = await g.ledger('Key Party', 'receivables');
+  for (const name of ['ab1', 'AB-1', 'A-B1', 'Ab-1']) await g.voucher('sales', '2026-03-01', [[party, 'Dr', '20', [newRef(name, '20')]], [sales, 'Cr', '20']]);
+  assert.deepEqual(Object.entries(await g.pending(party, '2026-03-31')), [['ab1', '80.00']], 'one bill, 80.00, shown with its first spelling');
+  await g.voucher('receipt', '2026-03-05', [[bank, 'Dr', '30'], [party, 'Cr', '30', [against('a-b-1', '30')]]]);
+  assert.deepEqual(Object.entries(await g.pending(party, '2026-03-31')), [['ab1', '50.00']], 'settled under another spelling');
+  await g.voucher('sales', '2026-03-06', [[party, 'Dr', '10', [newRef('AB_1', '10')]], [sales, 'Cr', '10']]);
+  await g.voucher('sales', '2026-03-07', [[party, 'Dr', '10', [newRef('AB 1', '10')]], [sales, 'Cr', '10']]);
+  assert.deepEqual(Object.keys(await g.pending(party, '2026-03-31')).sort(), ['AB 1', 'AB_1', 'ab1'].sort(), 'characters outside the set keep bills apart');
+});
+
 test('bills are listed by name as text, ignoring case and punctuation: the ten observed names in their observed order', async () => {
   const g = await books('Bills By Name');
   const sales = await g.ledger('Sales', 'sales'), party = await g.ledger('Ten Bills', 'receivables');
