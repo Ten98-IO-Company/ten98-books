@@ -203,7 +203,7 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.deepEqual([cash.expected, cash.actual, cash.difference], ['20.000 Dr', '30.000 Dr', '10.000 Dr'], 'exact on three-decimal minor units');
   assert.equal(result.differences, 3, 'the count a non-zero exit code is based on');
   const printed = formatCompareResult(result).join('\n');
-  assert.ok(printed.includes('DIFFERS') && printed.includes('Not yet comparable:') && printed.includes('payroll'));
+  assert.ok(printed.includes('DIFFERS') && printed.includes('NOT YET COMPARABLE') && printed.includes('payroll'));
   assert.deepEqual((await seedDataset(owner.userId, edge)).vouchers, { created: 0, present: 4, cancelled: 0 });
 });
 
@@ -413,4 +413,26 @@ test('company creation carries an idempotency key, so a rerun finds the first co
   assert.deepEqual(again.vouchers, { created: 0, present: 18, cancelled: 0 });
   const mine = (await user.browser.call('/api/companies')).body.companies.filter((company: { name: string }) => company.name.startsWith('Starter Trading'));
   assert.equal(mine.length, 1, 'one company, not a second copy');
+});
+
+test('a ledger expected.json lists at zero is not yet comparable only when its own totals need that balance; otherwise it is a difference', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  await seedDataset(user.userId, stockDataset());
+  const zeroBank = stockDataset();
+  zeroBank.expected.trialBalance!.ledgers.bank = { closing: '0.00', side: 'Dr' };
+  const reconciled = await compareDataset(user.userId, zeroBank);
+  const bank = reconciled.lines.find(line => line.label === 'Closing balance of Bank')!;
+  assert.deepEqual([bank.expected, bank.actual, bank.ok], ['0.00', '500.00 Dr', false]);
+  assert.match(bank.reason!, /lists these 1 ledger\(s\) at zero, but its own totals need their balances/);
+  assert.deepEqual([reconciled.pending, reconciled.differences], [1, 2], 'only the two voucher-count lines differ');
+  assert.match(formatCompareResult(reconciled).join('\n'), /NOT YET COMPARABLE \(1 line\(s\)[^]*reason: expected.json lists these 1 ledger/);
+
+  // The same zero with a second figure wrong: the totals no longer reconcile, so the zero is a real difference.
+  const wrongToo = stockDataset();
+  wrongToo.expected.trialBalance!.ledgers.bank = { closing: '0.00', side: 'Dr' };
+  wrongToo.expected.trialBalance!.ledgers.promo = { closing: '25.00', side: 'Dr' };
+  const unexplained = await compareDataset(user.userId, wrongToo);
+  assert.equal(unexplained.lines.find(line => line.label === 'Closing balance of Bank')!.reason, undefined);
+  assert.deepEqual(unexplained.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(),
+    ['Closing balance of Bank', 'Closing balance of Promo', 'Voucher count (types ten98-books has)', 'Vouchers of type journal']);
 });

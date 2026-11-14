@@ -49,13 +49,19 @@ for (const slug of ['gulfline', 'najd']) {
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
 
     const result = await compareDataset(owner.userId, dataset);
-    t.diagnostic(`${result.lines.length} lines compared, ${result.differences} differ`);
+    t.diagnostic(`${result.lines.length} lines compared: ${result.matches} match, ${result.differences} differ, ${result.pending} not yet comparable`);
     const text = formatCompareResult(result).join('\n');
-    const findings = result.lines.filter(line => !line.ok);
-    const placeholders = findings.filter(line => line.block === 'Trial balance' && line.expected === '0.00');
+    // Three groups, every line in one: the 16 ledgers expected.json lists at zero (its own totals need their balances) are
+    // not yet comparable with the reason; only the sign, the journal count and the journal type count differ.
+    const placeholders = result.lines.filter(line => line.reason);
     assert.equal(placeholders.length, 16, text);
-    assert.deepEqual(findings.filter(line => !placeholders.includes(line)).map(line => line.label).sort(),
-      ['Net profit (excluding stock)', 'Voucher count (types ten98-books has)', 'Vouchers of type journal'], text);
+    assert.ok(placeholders.every(line => line.block === 'Trial balance' && line.expected === '0.00' && line.reason!.includes('its own totals need their balances')));
+    const findings = result.lines.filter(line => !line.ok && !line.reason);
+    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)', 'Voucher count (types ten98-books has)', 'Vouchers of type journal'], text);
+    assert.deepEqual([result.matches, result.differences, result.pending], [40, 3, 16]);
+    assert.match(text, /MATCHES \(40\)[^]*DIFFERS \(3\)[^]*NOT YET COMPARABLE \(16 line\(s\)/);
+    assert.ok(findings.find(line => line.label === 'Vouchers of type journal')!.note!.includes('journal-001 (journal, optional)'));
+    assert.ok(findings.find(line => line.label === 'Net profit (excluding stock)')!.note!.includes('opposite sign'));
     const net = result.lines.find(line => line.label === 'Net profit (excluding stock)')!;
     assert.deepEqual([net.expected, net.actual], ['52839.06', '-52839.06'], 'a loss, given without its sign');
     const journals = result.lines.find(line => line.label === 'Vouchers of type journal')!;
@@ -66,7 +72,7 @@ for (const slug of ['gulfline', 'najd']) {
     for (const label of ['Total debit', 'Total credit', 'Opening-balance difference (equals the opening stock value)', 'Gross profit (excluding stock)', 'Vouchers of type sales', 'Vouchers of type purchase', 'Vouchers of type payment', 'Vouchers of type receipt']) {
       assert.ok(agreeing.includes(label), label);
     }
-    assert.ok(result.lines.filter(line => line.expected !== '0.00' && !findings.includes(line)).length >= 25);
+    assert.ok(result.lines.filter(line => line.ok).length >= 25);
     for (const name of ['stockSummary (needs inventory)', 'receivables (needs bill-wise receivables, which ten98-books does not track yet)']) assert.ok(result.notComparable.includes(name), name);
     assert.equal(result.notComparable.some(line => line.startsWith('vat (')), slug === 'najd');
 

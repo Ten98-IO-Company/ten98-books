@@ -39,6 +39,6 @@ pnpm seed:demo -- --owner you@example.com --all --yes
 pnpm demo:compare -- --owner you@example.com --all
 ```
 
-`seed:demo` creates each company for that user (who becomes its owner) through the same functions the app uses, then its groups, ledgers with opening balances and vouchers; a second run changes nothing and reports "already present". `demo:compare` reads the seeded company's figures through the report modules and prints expected, actual and difference per line (exact to the minor unit), listing what ten98-books cannot compute yet; it exits with 1 when a comparable line differs. Use `--company <slug>` instead of `--all` for one dataset.
+`seed:demo` creates each company for that user (who becomes its owner) through the same functions the app uses, then its groups, ledgers with opening balances and vouchers; a second run changes nothing and reports "already present". `demo:compare` reads the seeded company's figures through the report modules and prints expected, actual and difference per line (exact to the minor unit) in three groups (matches, differs, not yet comparable with the reason); it exits with 1 when a comparable line differs. Use `--company <slug>` instead of `--all` for one dataset.
 
 MIT licensed; see [LICENSE](LICENSE).
