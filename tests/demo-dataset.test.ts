@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseDueDate, readLedgerBills, readLineBills } from '../src/server/demo/bill-rows.ts';
 import { planBills } from '../src/server/demo/bills.ts';
+import { readLedgerCostSetting, readLineCosts } from '../src/server/demo/cost-rows.ts';
 import { notComparable } from '../src/server/demo/compare.ts';
 import { checkNumbers, DatasetError, describeNumberDifference, dispositionOf, numbersKind, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
@@ -423,14 +424,14 @@ const numbered = (...rows: [type: string, key: string, date: string, status: 're
 
 test('checkNumbers matches, skips what has no number to check, and explains a shift by skipped vouchers of the same type', () => {
   const dataset = numbered(
-    ['journal', 'j1', '2026-01-01', 'optional', 2, 1], ['journal', 'j2', '2026-01-02', 'cancelled', 0, 2], ['journal', 'j3', '2026-01-03', 'regular', 2, 3],
+    ['journal', 'j1', '2026-01-01', 'optional', 2, 1], ['journal', 'j2', '2026-01-02', 'regular', 0, 2], ['journal', 'j3', '2026-01-03', 'regular', 2, 3],
     ['journal', 'j4', '2026-01-04', 'regular', 2, 4], ['sales_order', 'o1', '2026-01-05', 'regular', 0, 1], ['receipt', 'r1', '2026-01-06', 'regular', 2, 1], ['receipt', 'r2', '2026-01-07', 'regular', 2],
   );
   const assigned = new Map<string, number | null>([['j1', null], ['j3', 1], ['j4', 2], ['r1', 1], ['r2', 2]]);
   const check = checkNumbers(dataset as never, assigned);
   assert.deepEqual([check.checked, check.matched, check.unnumbered], [3, 1, 1], 'j3, j4 and r1 are checked; j1 is optional; o1 has an unsupported type; r2 has no expectedNumber');
   assert.deepEqual(check.differences.map(difference => [difference.key, difference.expected, difference.assigned, difference.explained]), [['j3', 3, 1, true], ['j4', 4, 2, true]]);
-  assert.equal(describeNumberDifference(check.differences[0]), 'voucher "j3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: j1 (optional), j2 (cancelled without lines)');
+  assert.equal(describeNumberDifference(check.differences[0]), 'voucher "j3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: j1 (optional), j2 (no entries)');
 });
 
 test('checkNumbers names refused and absent vouchers, and a restart of numbering is a real difference, not an explained one', () => {
@@ -448,13 +449,13 @@ test('checkNumbers names refused and absent vouchers, and a restart of numbering
 
 test('checkNumbers keys skipped vouchers by type and financial year, so a gap in one year explains nothing in the next', () => {
   const dataset = { ...numbered(
-    ['journal', 'j1', '2027-03-20', 'cancelled', 0, 1], ['journal', 'j2', '2027-03-25', 'regular', 2, 2],
+    ['journal', 'j1', '2027-03-20', 'regular', 0, 1], ['journal', 'j2', '2027-03-25', 'regular', 2, 2],
     ['journal', 'j3', '2027-04-02', 'regular', 2, 2], ['journal', 'j4', '2027-04-03', 'regular', 2, 3],
   ), company: { financialYearStart: { month: 4, day: 1 } } };
   const check = checkNumbers(dataset as never, new Map([['j2', 1], ['j3', 1], ['j4', 2]]));
   assert.deepEqual(check.differences.map(difference => [difference.key, difference.year, difference.holes.length, difference.explained]), [
     ['j2', '2026-04-01', 1, true], ['j3', '2027-04-01', 0, false], ['j4', '2027-04-01', 0, false]],
-  'the cancelled March journal explains the March shift only; April starts a new financial year');
+  'the March journal without entries explains the March shift only; April starts a new financial year');
 });
 
 /** Cost categories, centres and currencies for a dataset whose lines use them. */
@@ -518,7 +519,6 @@ test('expected exchange differences are amounts that fit the currency, and the n
   raw.expected.exchangeDifferences = { realised: { amount: '1.50', side: 'Dr' }, unrealised: { amount: '3.005', side: 'Dr' } };
   mentions(problems(raw), 'expected.json', 'exchangeDifferences.unrealised', '"3.005"');
   assert.deepEqual(notComparable({ ...good().expected, outstanding: {}, costCentres: {}, exchangeDifferences: {}, balanceSheet: { total: '1.00', unrealisedExchangeDifference: '1.00' } }), [
-    'costCentres (needs cost centres, which ten98-books does not model yet)',
     'exchangeDifferences (needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately)',
   ]);
 });
@@ -530,12 +530,11 @@ test('the skipped-feature summary counts bills, cost centres, foreign currencies
   raw.vouchers[0].lines[1].extras = { bills: [{ kind: 'new', name: 'A-1', amount: '40.00' }], currency: 'USD', currencyAmount: '10.89', rate: '3.6725' };
   const lines = unmodelled(parseDataset(raw, 'demo/sample-shop'));
   for (const expectedLine of [
-    'vouchers.json: cost centre allocations on 1 voucher line(s) (cost centres are not modelled)',
     'vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled',
     'vouchers.json: bank details (instrument and bank date) on 1 voucher line(s) (not modelled)',
-    'costCategories.json: cost categories not yet supported (2)', 'costCentres.json: cost centres not yet supported (3 centre(s))',
-    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports, the cost centre figures are kept as they are (not compared)',
+    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports and the cost centre figures with the cost category summary',
   ]) assert.ok(lines.includes(expectedLine), expectedLine + '\n' + lines.join('\n'));
+  assert.ok(!lines.some(text => /cost (centre|categor)/i.test(text) && !text.startsWith('checkpoints.json')), 'cost keys are read by the seeder, so they are not listed as skipped');
 });
 
 /** Bill keys the seeder reads: both spellings of the two generators, with plain-language problems for anything else. */
@@ -650,7 +649,64 @@ test('the bill plan sends rows in the ledger module\'s kinds and leaves out fore
   ]);
   assert.deepEqual(plan.skipped.map(row => [row.voucher, row.name, row.reason]), [
     ['v-foreign', 'USD-1', 'foreign'], ['v-settle-foreign', 'USD-1', 'unknown'], ['v-settle-draft', 'DRAFT-1', 'unknown'], ['v-ghost', 'GHOST', 'unknown']]);
-  assert.deepEqual([...plan.affected.get(debtor)!], [['usd-1', 'foreign'], ['draft-1', 'unknown'], ['ghost', 'unknown']]);
-  assert.deepEqual([...plan.created.get(debtor)!].sort(), ['draft-1', 'inv-1', 'ob-1']);
+  assert.deepEqual([...plan.affected.get(debtor)!], [['usd1', 'foreign'], ['draft1', 'unknown'], ['ghost', 'unknown']]);
+  assert.deepEqual([...plan.created.get(debtor)!].sort(), ['draft1', 'inv1', 'ob1'], 'bills are keyed by the name match key');
   assert.deepEqual([...plan.foreignLedgers], [debtor]);
+});
+
+/** Master names are compared under the product's name match key, so two spellings of one name are one name. */
+test('two master names equal under the name match key are refused at validation, naming both spellings', () => {
+  const groups = good();
+  groups.groups.push({ key: 'promo-costs-2', name: 'promotion-costs', under: 'indirect_expenses' });
+  mentions(problems(groups), 'groups.json', 'group name "promotion-costs"', 'the same name as "Promotion Costs" under the name match key');
+  const ledgers = good();
+  ledgers.ledgers.push({ key: 'promo-2', name: 'PROMOTION ', group: 'promotion-costs' }, { key: 'capital-2', name: 'Cap. ital', group: 'capital' });
+  const found = problems(ledgers);
+  mentions(found, 'ledgers.json', 'ledger name "PROMOTION"', 'the same name as "Promotion"');
+  mentions(found, 'ledgers.json', 'ledger name "Cap. ital"', 'the same name as "Capital"');
+  const same = good();
+  same.ledgers.push({ key: 'promo-3', name: 'Promotion', group: 'promotion-costs' });
+  mentions(problems(same), 'ledgers.json', 'ledger name "Promotion"', 'the name is used more than once');
+  const cost = good();
+  cost.extraFiles = { 'costCategories.json': [{ key: 'a', name: 'Channel' }, { key: 'b', name: 'CHANNEL' }], 'costCentres.json': [{ key: 'x', name: 'North-1', category: 'a' }, { key: 'y', name: 'north 1', category: 'b' }] };
+  const costFound = problems(cost);
+  mentions(costFound, 'costCategories.json', 'cost category name "CHANNEL"', 'the same name as "Channel"');
+  mentions(costFound, 'costCentres.json', 'cost centre name "north 1"', 'the same name as "North-1"');
+  assert.deepEqual(problems(good()), []);
+});
+
+test('cost keys are read: a line\'s rows, a ledger\'s setting, and the centre tree and figures are checked', () => {
+  assert.deepEqual(readLineCosts({ costCentres: [{ centre: 'online', amount: '40.00' }, { centre: 5, amount: '1.00' }, 'row'] }), [{ centre: 'online', amount: '40.00' }]);
+  assert.deepEqual(readLineCosts(undefined), []);
+  assert.deepEqual([readLedgerCostSetting({ costCentres: true }), readLedgerCostSetting({ costCentres: false }), readLedgerCostSetting({}), readLedgerCostSetting({ costCentres: 'yes' })], [true, false, undefined, undefined]);
+  const raw = good();
+  raw.ledgers[2].extras = { costCentres: 'yes' };
+  mentions(problems(raw), 'ledgers.json', '"promotion"', 'extras.costCentres must be true or false');
+  const tree = good();
+  const files = costing();
+  const centres = files['costCentres.json'] as { parent?: string }[];
+  centres[0].parent = 'ghost';
+  centres[1].parent = 'p-south';
+  centres[2].parent = 'p-north';
+  tree.extraFiles = files;
+  const found = problems(tree);
+  mentions(found, 'costCentres.json', 'centre "online"', 'parent "ghost" is not a centre key');
+  mentions(found, 'costCentres.json', 'the centres form a cycle through "parent"');
+  const figures = good();
+  figures.extraFiles = { ...costing(), 'checkpoints.json': { dates: { '2026-01-31': { costCentres: { ghost: { debit: '1.00', credit: '0.001' } } } } } };
+  figures.expected.costCentres = { from: '2026-01-01', to: '2026-01-31', centres: { online: { debit: '1.005', credit: '0.00' }, nowhere: { debit: '1.00', credit: '0.00' } } };
+  const figureFound = problems(figures);
+  mentions(figureFound, 'expected.json', 'costCentres.centres "nowhere"', 'not a centre key');
+  mentions(figureFound, 'expected.json', 'costCentres.centres "online", debit', '"1.005"');
+  mentions(figureFound, 'checkpoints.json', 'dates "2026-01-31" costCentres "ghost"', 'not a centre key');
+  mentions(figureFound, 'checkpoints.json', 'costCentres "ghost", credit', '"0.001"');
+});
+
+test('a voucher cancelled without lines is a void and takes its number; one with no lines that is not cancelled is still skipped', () => {
+  const voucher = (type: string, status: 'regular' | 'cancelled' | 'optional', lines: number) => numbered([type, 'v', '2026-01-01', status, lines]).vouchers[0];
+  assert.deepEqual([voucher('journal', 'cancelled', 0), voucher('journal', 'regular', 0), voucher('journal', 'regular', 2), voucher('sales_order', 'cancelled', 0), voucher('journal', 'cancelled', 2)].map(item => dispositionOf(item as never)),
+    ['void', 'no-entries', 'post', 'unsupported-type', 'post']);
+  const dataset = numbered(['journal', 'j1', '2026-01-01', 'regular', 2, 1], ['journal', 'j2', '2026-01-02', 'cancelled', 0, 2], ['journal', 'j3', '2026-01-03', 'regular', 2, 3]);
+  const check = checkNumbers(dataset as never, new Map([['j1', 1], ['j2', 2], ['j3', 3]]));
+  assert.deepEqual([check.checked, check.matched, check.differences], [3, 3, []], 'the void holds number 2, so j3 is number 3 and nothing is shifted');
 });

@@ -1,3 +1,4 @@
+import { nameMatchKey } from '../../lib/names.ts';
 import { dispositionOf, type Dataset } from './dataset.ts';
 import { isForeignLine, readLedgerBills, readLineBills, type BillMethod } from './bill-rows.ts';
 
@@ -36,10 +37,10 @@ const creating = (method: BillMethod) => method === 'new_ref' || method === 'adv
 export function planBills(dataset: Dataset): BillPlan {
   const plan: BillPlan = { lines: new Map(), sent: 0, skipped: [], affected: new Map(), created: new Map(), foreignLedgers: new Set() };
   const live = new Map<string, Set<string>>();
-  const add = (map: Map<string, Set<string>>, ledger: string, name: string) => (map.get(ledger) ?? map.set(ledger, new Set()).get(ledger)!).add(name.toLowerCase());
+  const add = (map: Map<string, Set<string>>, ledger: string, name: string) => (map.get(ledger) ?? map.set(ledger, new Set()).get(ledger)!).add(nameMatchKey(name));
   const mark = (ledger: string, name: string, reason: 'foreign' | 'unknown') => {
     const names = plan.affected.get(ledger) ?? plan.affected.set(ledger, new Map()).get(ledger)!;
-    if (names.get(name.toLowerCase()) !== 'foreign') names.set(name.toLowerCase(), reason);
+    if (names.get(nameMatchKey(name)) !== 'foreign') names.set(nameMatchKey(name), reason);
   };
   for (const entry of dataset.ledgers) for (const bill of readLedgerBills(entry.extras).found.openingBills) { add(live, entry.key, bill.name); add(plan.created, entry.key, bill.name); }
   for (const voucher of dataset.vouchers) {
@@ -56,7 +57,7 @@ export function planBills(dataset: Dataset): BillPlan {
           if (row.name !== undefined) mark(line.ledger, row.name, reason);
         };
         if (foreign) { skip('foreign'); continue; }
-        if (row.method === 'against_ref' && !live.get(line.ledger)?.has(row.name!.toLowerCase())) { skip('unknown'); continue; }
+        if (row.method === 'against_ref' && !live.get(line.ledger)?.has(nameMatchKey(row.name!))) { skip('unknown'); continue; }
         sent.push({ kind: row.method, ...row.name !== undefined ? { name: row.name } : {}, ...row.creditDays !== undefined ? { creditPeriod: { count: row.creditDays, unit: 'day' } } : {}, amount: row.amount });
         if (creating(row.method) && row.name !== undefined) {
           add(plan.created, line.ledger, row.name);

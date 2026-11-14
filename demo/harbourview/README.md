@@ -4,7 +4,7 @@ Harbourview Consulting FZ-LLC is an invented UAE consulting company (AED) that e
 
 Files: `company.json`, `groups.json` (empty), `ledgers.json`, `costCategories.json`, `costCentres.json`, `currencies.json`, `vouchers.json`, `expected.json` and `checkpoints.json` (scenario figures at 2026-02-28 and 2026-03-31 for pending bills and cost centres; not part of format v1, kept as it is).
 
-Conventions (everything below sits under `extras`; the seeder reads the bill keys, as `demo/README.md` describes, and keeps the rest untouched):
+Conventions (everything below sits under `extras`; the seeder reads the bill keys and the cost centre keys, as `demo/README.md` describes, and keeps the rest untouched):
 
 - Ledgers: `billWise`, `creditDays`, `costCentres` (true where the ledger takes centres) and `opening.bills` (`kind` new, `name`, `billDate`, `creditDays`, `amount`, `side`); `taxType` and `taxRate` on the two tax ledgers, which are ordinary duty ledgers at 5 %. Debtor A opens with 5,000.00, of which 4,500.00 is two named bills and 500.00 has none.
 - Voucher lines: `bills` (`kind` new, against, advance or on_account; `name`, `creditDays`, `amount`), `costCentres` (`centre`, `amount`; the category comes from the centre and each category's amounts add up to the line), `currency`, `currencyAmount` and `rate` on foreign lines (the line `amount` is the base-currency amount; bill amounts on such a line are in the foreign currency) and `bank` (`instrumentType`, `instrumentNumber`, `instrumentDate` and, on 102 lines, `bankDate`, the day the bank cleared it).

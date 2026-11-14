@@ -2,15 +2,18 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { formatMoney } from '@ten98/runtime';
 import { baseCurrencies, companyCreateInput } from '../../lib/company.ts';
+import { nameMatchKey } from '../../lib/names.ts';
 import { FoundationError } from '../auth.ts';
 import { createCompany, listCompanies } from '../companies.ts';
 import { getDatabase } from '../db.ts';
-import { ledgerContext, runLedger } from '../ledger/context.ts';
+import { ledgerContext, runLedger, type LedgerContext } from '../ledger/context.ts';
+import { createCostCategory, createCostCentre, listCostCategories, listCostCentres, saveCostCentresSetting } from '../ledger/cost-centres.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
 import { readLedgerBills } from './bill-rows.ts';
-import { planBills } from './bills.ts';
+import { planBills, type SentBillRow } from './bills.ts';
+import { readLedgerCostSetting, readLineCosts } from './cost-rows.ts';
 import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 
 /**
@@ -27,7 +30,7 @@ import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositio
  */
 
 /** Feature names (company.json `features`) ten98-books models; anything else is listed as skipped. */
-export const supportedFeatures: ReadonlySet<string> = new Set(['accounting', 'billWise']);
+export const supportedFeatures: ReadonlySet<string> = new Set(['accounting', 'billWise', 'costCentres']);
 
 export const voucherKeyPrefix = (slug: string) => `demo:${slug}:`;
 /** The idempotency key the company is created under: one company per dataset and owner, however it is renamed later. */
@@ -43,7 +46,7 @@ export const namedCreationKey = (slug: string, userId: string, name: string) => 
 export function validateCopyName(dataset: Dataset, value: string): string {
   const parsed = companyCreateInput.shape.name.safeParse(value);
   if (!parsed.success) throw new DemoError(`--as: ${parsed.error.issues[0]?.message ?? 'check the company name.'} (1 to 120 characters, no control characters)`);
-  if (parsed.data.toLowerCase() === dataset.company.name.toLowerCase()) throw new DemoError(`--as: "${parsed.data}" is the name of the dataset's own company; run the seed without --as for that one, or choose another name.`);
+  if (nameMatchKey(parsed.data) === nameMatchKey(dataset.company.name)) throw new DemoError(`--as: "${parsed.data}" is the name of the dataset's own company; run the seed without --as for that one, or choose another name.`);
   return parsed.data;
 }
 
@@ -51,6 +54,8 @@ export type Counts = { created: number; present: number };
 export type SeedReport = {
   slug: string; companyId: string; companyName: string; companyCreated: boolean;
   groups: Counts; ledgers: Counts & { openingsSet: number }; vouchers: Counts & { cancelled: number };
+  /** Vouchers cancelled without lines (voids) posted in this run; they are counted in `vouchers.created` too. */
+  voided: number;
   /** Vouchers not posted because their type is not one ten98-books has, by type (not yet supported). */
   unsupportedTypes: Record<string, number>;
   /** Vouchers of a supported type not posted because they have no lines (cancelled or no accounting effect), by type. */
@@ -78,7 +83,19 @@ export type SeedReport = {
    * `warnings` are the ledger module's own answers to the postings of this run, by code, each naming the voucher; `keptWithoutBills` are vouchers an earlier seed posted without bill rows, kept as they were.
    */
   bills: { openingBills: number; rowsPosted: number; skipped: string[]; warnings: Record<string, string[]>; keptWithoutBills: string[] };
+  /**
+   * Cost centres. `masters` is true when the dataset has categories or centres; `switchedOn` that this run switched the company feature on.
+   * `rowsPosted` were sent with vouchers posted in this run; `leftOutRows` are rows the ledger module dropped because their line's
+   * ledger takes no cost centres (`leftOut` names those lines); `warnings` are its answers by code, each naming the voucher and line;
+   * `keptWithoutCostRows` are vouchers an earlier seed posted without cost rows, kept as they were.
+   */
+  costs: { masters: boolean; switchedOn: boolean; categories: Counts; centres: Counts; rowsPosted: number; leftOutRows: number; leftOut: string[]; warnings: Record<string, string[]>; keptWithoutCostRows: string[] };
 };
+
+type CostCategoryEntry = { key: string; name: string; allocateRevenue?: boolean; allocateNonRevenue?: boolean };
+type CostCentreEntry = { key: string; name: string; category: string; parent?: string };
+const costCategoryEntries = (dataset: Dataset) => (dataset.extraFiles['costCategories.json'] ?? []) as CostCategoryEntry[];
+const costCentreEntries = (dataset: Dataset) => (dataset.extraFiles['costCentres.json'] ?? []) as CostCentreEntry[];
 
 export async function findUserId(email: string): Promise<string> {
   const { rows } = await getDatabase().pool.query<{ id: string }>('SELECT id FROM "user" WHERE lower(email) = lower($1)', [email.trim()]);
@@ -101,10 +118,10 @@ async function holdsDataset(userId: string, companyId: string, dataset: Dataset)
               EXISTS (SELECT 1 FROM voucher WHERE company_id = $1) AS any`, [companyId, voucherKeyPrefix(dataset.slug)]);
     if (vouchers.marked) return true;
     if (vouchers.any) return false;
-    const groupNames = new Set(dataset.groups.map(group => group.name.toLowerCase()));
-    const ledgerNames = new Set(dataset.ledgers.map(ledger => ledger.name.toLowerCase()));
-    return (await listGroups(context)).every(group => group.systemKey !== null || groupNames.has(group.name.toLowerCase()))
-      && (await listLedgers(context)).every(ledger => ledger.systemKey !== null || ledgerNames.has(ledger.name.toLowerCase()));
+    const groupNames = new Set(dataset.groups.map(group => nameMatchKey(group.name)));
+    const ledgerNames = new Set(dataset.ledgers.map(ledger => nameMatchKey(ledger.name)));
+    return (await listGroups(context)).every(group => group.systemKey !== null || groupNames.has(nameMatchKey(group.name)))
+      && (await listLedgers(context)).every(ledger => ledger.systemKey !== null || ledgerNames.has(nameMatchKey(ledger.name)));
   });
 }
 
@@ -151,7 +168,7 @@ export async function findDemoCompany(userId: string, dataset: Dataset, purpose:
 export function unmodelled(dataset: Dataset): string[] {
   const lines: string[] = [];
   // The keys the seeder reads (bills, see bill-rows.ts) are not "extras ten98-books ignores".
-  const read = new Set(['billWise', 'creditDays', 'creditPeriodDays', 'openingBills', 'opening', 'bills']);
+  const read = new Set(['billWise', 'creditDays', 'creditPeriodDays', 'openingBills', 'opening', 'bills', 'costCentres']);
   const keysOf = (entry: { extras?: Record<string, unknown> }, file: string) => Object.keys(entry.extras ?? {}).filter(key => !((file === 'ledgers.json' || file === 'vouchers.json') && read.has(key)));
   const fields = (entries: { extras?: Record<string, unknown> }[], file: string) => [...new Set(entries.flatMap(entry => keysOf(entry, file)))].sort();
   for (const feature of dataset.company.features) if (!supportedFeatures.has(feature)) lines.push(`company.json: feature "${feature}" is not modelled`);
@@ -169,7 +186,6 @@ export function unmodelled(dataset: Dataset): string[] {
   // The features the line extras carry, counted: none of them is modelled, and the amounts are posted without them.
   const lineExtras = dataset.vouchers.flatMap(voucher => voucher.lines.map(line => line.extras as Record<string, unknown> | undefined)).filter(extra => extra !== undefined);
   const withKey = (key: string) => lineExtras.filter(extra => Array.isArray(extra[key]) ? (extra[key] as unknown[]).length > 0 : extra[key] !== undefined);
-  if (withKey('costCentres').length) lines.push(`vouchers.json: cost centre allocations on ${withKey('costCentres').length} voucher line(s) (cost centres are not modelled)`);
   const foreign = lineExtras.filter(extra => typeof extra.currency === 'string');
   if (foreign.length) {
     const byCurrency = foreign.reduce((counts, extra) => counts.set(extra.currency as string, (counts.get(extra.currency as string) ?? 0) + 1), new Map<string, number>());
@@ -177,14 +193,13 @@ export function unmodelled(dataset: Dataset): string[] {
   }
   if (withKey('bank').length) lines.push(`vouchers.json: bank details (instrument and bank date) on ${withKey('bank').length} voucher line(s) (not modelled)`);
   for (const [file, content] of Object.entries(dataset.extraFiles)) {
-    if (file === 'costCategories.json') { lines.push(`costCategories.json: cost categories not yet supported (${(content as unknown[]).length})`); continue; }
-    if (file === 'costCentres.json') { lines.push(`costCentres.json: cost centres not yet supported (${(content as unknown[]).length} centre(s))`); continue; }
+    if (file === 'costCategories.json' || file === 'costCentres.json') continue;
     if (file === 'currencies.json') {
       const list = content as { code: string; rates?: unknown[] }[];
       lines.push(`currencies.json: foreign currencies not yet supported (${list.map(currency => currency.code).join(', ')}; ${list.reduce((sum, currency) => sum + (currency.rates?.length ?? 0), 0)} rate(s))`);
       continue;
     }
-    if (file === 'checkpoints.json') { lines.push('checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports, the cost centre figures are kept as they are (not compared)'); continue; }
+    if (file === 'checkpoints.json') { lines.push('checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports and the cost centre figures with the cost category summary'); continue; }
     if (file !== 'items.json') { lines.push(`${file}: feature file not modelled (kept as is)`); continue; }
     const items = content as ItemsFile;
     const value = formatMoney(openingStockValue(items, dataset.company.minorUnits), dataset.company.minorUnits);
@@ -199,13 +214,13 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
     const ids = new Map<string, string>();
     const existingGroups = await listGroups(context);
     for (const group of existingGroups) if (group.systemKey) ids.set(group.systemKey, group.id);
-    const groupByName = new Map(existingGroups.map(group => [group.name.toLowerCase(), group]));
+    const groupByName = new Map(existingGroups.map(group => [nameMatchKey(group.name), group]));
     const entries = new Map(dataset.groups.map(group => [group.key, group]));
     const place = async (key: string): Promise<string> => {
       const known = ids.get(key);
       if (known) return known;
       const entry = entries.get(key)!;
-      const present = groupByName.get(entry.name.toLowerCase());
+      const present = groupByName.get(nameMatchKey(entry.name));
       if (present) { ids.set(key, present.id); report.groups.present++; return present.id; }
       const parentId = await place(entry.under);
       try {
@@ -218,7 +233,7 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
     for (const group of dataset.groups) await place(group.key);
 
     const existingLedgers = await listLedgers(context);
-    const ledgerByName = new Map(existingLedgers.map(ledger => [ledger.name.toLowerCase(), ledger]));
+    const ledgerByName = new Map(existingLedgers.map(ledger => [nameMatchKey(ledger.name), ledger]));
     for (const entry of dataset.ledgers) {
       const at = `ledger "${entry.key}"`;
       try {
@@ -243,24 +258,65 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
           report.ledgers.openingsSet++;
           continue;
         }
-        const present = ledgerByName.get(entry.name.toLowerCase());
+        const present = ledgerByName.get(nameMatchKey(entry.name));
         if (present) { report.ledgers.present++; continue; }
         // The dataset's bill settings (see bill-rows.ts): bill-wise flag, default credit days and opening bills.
         const { billWise, creditDays, openingBills } = readLedgerBills(entry.extras).found;
+        const costCentres = readLedgerCostSetting(entry.extras);
         await createLedger(context, {
           name: entry.name, groupId: await place(entry.group!),
           ...entry.secondLanguageName ? { secondLanguageName: entry.secondLanguageName } : {},
           ...entry.opening ? { opening: { ...entry.opening, ...openingBills.length ? { bills: openingBills.map(bill => ({
             name: bill.name, ...bill.billDate !== undefined ? { billDate: bill.billDate } : {}, ...bill.creditDays !== undefined ? { creditPeriod: { count: bill.creditDays, unit: 'day' as const } } : {}, amount: bill.amount,
           })) } : {} } } : {},
-          ...billWise !== undefined ? { billWise } : {}, ...creditDays !== undefined ? { creditPeriod: { count: creditDays, unit: 'day' as const } } : {},
+          ...costCentres !== undefined ? { costCentres } : {}, ...billWise !== undefined ? { billWise } : {}, ...creditDays !== undefined ? { creditPeriod: { count: creditDays, unit: 'day' as const } } : {},
         });
         report.ledgers.created++;
         report.bills.openingBills += openingBills.length;
         if (entry.opening) report.ledgers.openingsSet++;
       } catch (error) { failure(dataset, 'ledgers', at, error); }
     }
+    await seedCostMasters(context, dataset, report);
   }).catch(error => { throw error instanceof DemoError ? error : failure(dataset, 'ledgers', 'masters', error); });
+}
+
+/**
+ * Switches the company's cost centres on, creates the categories and then the centres (parents first) the company lacks and
+ * matches by name key, so a rerun changes nothing and a master the user spelled differently is found. Existing categories and centres are kept as they are.
+ */
+async function seedCostMasters(context: LedgerContext, dataset: Dataset, report: SeedReport): Promise<void> {
+  if (!report.costs.masters) return;
+  try {
+    if (!context.company.costCentresEnabled) { await saveCostCentresSetting(context, { enabled: true }); report.costs.switchedOn = true; }
+    const categoryIds = new Map<string, string>();
+    const existingCategories = new Map((await listCostCategories(context)).map(category => [nameMatchKey(category.name), category.id]));
+    for (const entry of costCategoryEntries(dataset)) {
+      const present = existingCategories.get(nameMatchKey(entry.name));
+      if (present) { categoryIds.set(entry.key, present); report.costs.categories.present++; continue; }
+      const created = await createCostCategory(context, { name: entry.name, ...entry.allocateRevenue !== undefined ? { allocateRevenue: entry.allocateRevenue } : {}, ...entry.allocateNonRevenue !== undefined ? { allocateNonRevenue: entry.allocateNonRevenue } : {} });
+      categoryIds.set(entry.key, created.id);
+      report.costs.categories.created++;
+    }
+    const centreIds = new Map<string, string>();
+    const existingCentres = new Map((await listCostCentres(context)).map(centre => [nameMatchKey(centre.name), centre.id]));
+    const entries = new Map(costCentreEntries(dataset).map(entry => [entry.key, entry]));
+    const place = async (key: string): Promise<string> => {
+      const known = centreIds.get(key);
+      if (known) return known;
+      const entry = entries.get(key)!;
+      const present = existingCentres.get(nameMatchKey(entry.name));
+      if (present) { centreIds.set(key, present); report.costs.centres.present++; return present; }
+      const parentId = entry.parent === undefined ? null : await place(entry.parent);
+      const created = await createCostCentre(context, { name: entry.name, categoryId: categoryIds.get(entry.category), parentId });
+      centreIds.set(key, created.id);
+      report.costs.centres.created++;
+      return created.id;
+    };
+    for (const entry of costCentreEntries(dataset)) await place(entry.key);
+  } catch (error) {
+    if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/costCentres.json: cost centres: ${error.message}`);
+    throw error;
+  }
 }
 
 /** The rows left out, grouped by reason, one line each (the voucher keys of the first few named). */
@@ -268,7 +324,7 @@ export function describeSkippedBills(skipped: ReturnType<typeof planBills>['skip
   const lines: string[] = [];
   const reasons = {
     foreign: 'bill rows on foreign-currency lines (bills are base currency only until currencies are built)',
-    unknown: 'against rows settling a bill that no posted row creates (it belongs to a foreign-currency line, or to a voucher the dataset carries without lines)',
+    unknown: 'against rows settling a bill that no posted row creates (it belongs to a foreign-currency line, or to a voucher the dataset carries without lines, whose rows it does not hold)',
   };
   for (const reason of ['foreign', 'unknown'] as const) {
     const those = skipped.filter(row => row.reason === reason);
@@ -279,61 +335,102 @@ export function describeSkippedBills(skipped: ReturnType<typeof planBills>['skip
   return lines;
 }
 
-/** Posts the vouchers in entry order, each in its own transaction under its idempotency key; stops at the first error. */
+/** A line as posted: the bill rows and cost rows are what a company seeded earlier may lack (see `seedVouchers`). */
+type PostedLine = { ledgerId: string; side: 'Dr' | 'Cr'; amount: string; bills?: SentBillRow[]; costAllocations?: { costCentreId: string; amount: string }[] };
+/** The shapes one voucher is tried in: complete, without its cost rows (bill rows kept), and without either. */
+type Shape = 'full' | 'withoutCost' | 'plain';
+
+/**
+ * Posts the vouchers in entry order, each in its own transaction under its idempotency key; stops at the first error.
+ * A voucher cancelled without lines is posted as a void, so it takes its number as it did in the dataset's books.
+ */
 async function seedVouchers(userId: string, companyId: string, dataset: Dataset, report: SeedReport): Promise<void> {
-  const { ledgerByKey, typeIds } = await runLedger(userId, companyId, 'read', async context => {
+  const { ledgerByKey, typeIds, centreIds } = await runLedger(userId, companyId, 'read', async context => {
     const ledgers = await listLedgers(context);
     const ledgerByKey: Record<string, string> = {};
     for (const entry of dataset.ledgers) {
-      const found = ledgers.find(ledger => entry.standard ? ledger.systemKey === entry.standard : ledger.name.toLowerCase() === entry.name.toLowerCase());
+      const found = ledgers.find(ledger => entry.standard ? ledger.systemKey === entry.standard : nameMatchKey(ledger.name) === nameMatchKey(entry.name));
       if (found) ledgerByKey[entry.key] = found.id;
     }
-    return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])) };
+    const centres = new Map((await listCostCentres(context)).map(centre => [nameMatchKey(centre.name), centre.id]));
+    const centreIds = Object.fromEntries(costCentreEntries(dataset).flatMap(entry => centres.has(nameMatchKey(entry.name)) ? [[entry.key, centres.get(nameMatchKey(entry.name))!]] : []));
+    return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])), centreIds };
   });
   const bump = (counts: Record<string, number>, type: string) => { counts[type] = (counts[type] ?? 0) + 1; };
   const bills = planBills(dataset);
   report.bills.skipped = describeSkippedBills(bills.skipped);
+  const ledgerName = (key: string) => dataset.ledgers.find(entry => entry.key === key)?.name ?? key;
   const assigned = new Map<string, number | null>();
   const refused = new Set<string>();
   for (const voucher of dataset.vouchers) {
     const at = `voucher "${voucher.key}"`;
     const disposition = dispositionOf(voucher);
-    if (disposition !== 'post') {
+    if (disposition !== 'post' && disposition !== 'void') {
       bump(disposition === 'unsupported-type' ? report.unsupportedTypes : report.noEntries, voucher.type);
       continue;
     }
     try {
-      const body = {
+      const lines: PostedLine[] = voucher.lines.map((line, index) => {
+        const rows = bills.lines.get(voucher.key)?.[index];
+        const costs = readLineCosts(line.extras);
+        return {
+          ledgerId: ledgerByKey[line.ledger], side: line.side, amount: line.amount, ...rows ? { bills: rows } : {},
+          ...costs.length ? { costAllocations: costs.map(row => ({ costCentreId: centreIds[row.centre], amount: row.amount })) } : {},
+        };
+      });
+      const hasBills = lines.some(line => line.bills), hasCosts = lines.some(line => line.costAllocations);
+      const shapes: Shape[] = ['full', ...hasBills && hasCosts ? ['withoutCost' as const] : [], ...hasBills || hasCosts ? ['plain' as const] : []];
+      const payload = (shape: Shape) => ({
         idempotencyKey: voucherKeyPrefix(dataset.slug) + voucher.key, voucherTypeId: typeIds[voucher.type], date: voucher.date,
-        narration: voucher.narration ?? null, status: voucher.status === 'optional' ? 'optional' : 'regular', postDated: voucher.postDated,
-        lines: voucher.lines.map((line, index) => ({ ledgerId: ledgerByKey[line.ledger], side: line.side, amount: line.amount, ...bills.lines.get(voucher.key)?.[index] ? { bills: bills.lines.get(voucher.key)![index] } : {} })),
-      };
-      const send = (payload: typeof body) => runLedger(userId, companyId, 'write', async context => {
-        let { voucher: posted, replayed, warnings } = await createVoucher(context, payload);
+        narration: voucher.narration ?? null, status: disposition === 'void' ? 'cancelled' : voucher.status === 'optional' ? 'optional' : 'regular', postDated: voucher.postDated,
+        lines: lines.map((line): PostedLine => shape === 'full' ? line : { ledgerId: line.ledgerId, side: line.side, amount: line.amount, ...shape === 'withoutCost' && line.bills ? { bills: line.bills } : {} }),
+      });
+      const send = (body: ReturnType<typeof payload>) => runLedger(userId, companyId, 'write', async context => {
+        let { voucher: posted, replayed, warnings } = await createVoucher(context, body);
         if (!replayed) {
-          report.bills.rowsPosted += payload.lines.reduce((sum, line) => sum + ('bills' in line ? line.bills!.length : 0), 0);
-          for (const warning of warnings) (report.bills.warnings[warning.code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}${warning.billName ? ` bill "${warning.billName}"` : ''}`);
+          report.bills.rowsPosted += body.lines.reduce((sum, line) => sum + (line.bills?.length ?? 0), 0);
+          let sentCostRows = body.lines.reduce((sum, line) => sum + (line.costAllocations?.length ?? 0), 0);
+          for (const warning of warnings) {
+            const code: string = warning.code;
+            if (code.startsWith('cost_')) {
+              (report.costs.warnings[code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}`);
+              // The ledger module drops the rows of a line whose ledger takes no cost centres; the dataset's rows on it are counted, not lost silently.
+              const left = warning.line ? voucher.lines[warning.line - 1] : undefined;
+              if (code === 'cost_ignored' && left) { sentCostRows -= readLineCosts(left.extras).length; report.costs.leftOutRows += readLineCosts(left.extras).length; report.costs.leftOut.push(`${voucher.key} line ${warning.line} (${ledgerName(left.ledger)})`); }
+            } else (report.bills.warnings[code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}${warning.billName ? ` bill "${warning.billName}"` : ''}`);
+          }
+          report.costs.rowsPosted += sentCostRows;
         }
         let cancelled = false;
-        if (voucher.status === 'cancelled' && posted.status === 'regular') {
+        if (disposition === 'post' && voucher.status === 'cancelled' && posted.status === 'regular') {
           posted = (await cancelVoucher(context, posted.id, { revision: posted.revision })).voucher;
           cancelled = true;
         }
         return { number: posted.number, replayed, cancelled };
       });
-      let done: Awaited<ReturnType<typeof send>>;
-      try { done = await send(body); }
-      catch (error) {
-        // A company seeded before bill rows were sent holds this voucher without them, so its request hash differs. Replay
-        // it as it was posted (the key proves it is this dataset's voucher) and say so; any other mismatch still stops.
-        if (!(error instanceof FoundationError && error.code === 'idempotency_mismatch' && body.lines.some(line => 'bills' in line))) throw error;
-        const plain = { ...body, lines: body.lines.map(({ ledgerId, side, amount }) => ({ ledgerId, side, amount })) };
-        try { done = await send(plain as typeof body); } catch { throw error; }
-        if (!done.replayed) throw error;
-        report.bills.keptWithoutBills.push(voucher.key);
+      // A company seeded before bill rows or cost rows were sent holds this voucher without them, so the request of the
+      // complete voucher no longer matches what was stored. The key proves it is this dataset's voucher, so it is replayed
+      // in the shape it was posted (see `Shape`) and listed in the summary; any other difference under the same key (a
+      // changed amount, date or line) still stops the seed.
+      let done: Awaited<ReturnType<typeof send>> | undefined;
+      let first: unknown;
+      let used: Shape = 'full';
+      for (const shape of shapes) {
+        try { done = await send(payload(shape)); used = shape; break; }
+        catch (error) {
+          if (shape === 'full') first = error;
+          if (!(error instanceof FoundationError && error.code === 'idempotency_mismatch') || shape === shapes[shapes.length - 1]) throw shape === 'full' ? error : first;
+        }
+      }
+      if (!done) throw first;
+      if (used !== 'full') {
+        if (!done.replayed) throw first;
+        if (used === 'plain' && hasBills) report.bills.keptWithoutBills.push(voucher.key);
+        if (hasCosts) report.costs.keptWithoutCostRows.push(voucher.key);
       }
       if (done.replayed && !done.cancelled) report.vouchers.present++; else report.vouchers.created++;
       if (done.cancelled) report.vouchers.cancelled++;
+      if (disposition === 'void' && !done.replayed) report.voided++;
       assigned.set(voucher.key, done.number);
     } catch (error) {
       if (error instanceof FoundationError && error.code === 'posting_rule') {
@@ -384,10 +481,11 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
   let company = await findDemoCompany(userId, dataset, 'seed', copyName);
   const report: SeedReport = {
     slug: dataset.slug, companyId: '', companyName: copyName ?? settings.name, companyCreated: false,
-    groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
+    groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 }, voided: 0,
     unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0, kind: numbersKind(dataset) },
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
     mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {}, keptWithoutBills: [] },
+    costs: { masters: costCategoryEntries(dataset).length + costCentreEntries(dataset).length > 0, switchedOn: false, categories: { created: 0, present: 0 }, centres: { created: 0, present: 0 }, rowsPosted: 0, leftOutRows: 0, leftOut: [], warnings: {}, keptWithoutCostRows: [] },
   };
   if (!company) {
     try {
@@ -420,15 +518,22 @@ export async function selectDatasets(selection: DemoSelection, root = demoRoot):
 }
 
 export function formatSeedReport(report: SeedReport): string[] {
-  const changed = report.companyCreated || report.groups.created || report.ledgers.created || report.ledgers.openingsSet || report.vouchers.created;
+  const changed = report.companyCreated || report.groups.created || report.ledgers.created || report.ledgers.openingsSet || report.vouchers.created || report.costs.switchedOn || report.costs.categories.created || report.costs.centres.created;
   const part = (counts: Counts) => `${counts.created} created, ${counts.present} already present`;
   const lines = [
     `${report.companyName} (${report.slug}): ${changed ? 'seeded' : 'already present, nothing changed'}`,
     `  company: ${report.companyCreated ? 'created' : 'already present'}`,
     `  groups: ${part(report.groups)}`,
     `  ledgers: ${part(report.ledgers)}${report.ledgers.openingsSet ? `; ${report.ledgers.openingsSet} opening balance(s) set` : ''}`,
-    report.mastersOnly ? '  vouchers: not posted (masters only)' : `  vouchers: ${part(report.vouchers)}${report.vouchers.cancelled ? `; ${report.vouchers.cancelled} cancelled` : ''}`,
+    report.mastersOnly ? '  vouchers: not posted (masters only)' : `  vouchers: ${part(report.vouchers)}${report.vouchers.cancelled ? `; ${report.vouchers.cancelled} cancelled` : ''}${report.voided ? `; ${report.voided} cancelled without lines (voids)` : ''}`,
   ];
+  const costs = report.costs;
+  if (costs.masters) lines.push(`  cost centres: ${costs.switchedOn ? 'switched on; ' : ''}categories ${part(costs.categories)}; centres ${part(costs.centres)}`);
+  if (costs.rowsPosted) lines.push(`  cost rows: ${costs.rowsPosted} posted with the vouchers`);
+  if (costs.leftOutRows) lines.push(`  cost rows left out: ${costs.leftOutRows} on ${costs.leftOut.length} line(s) whose ledger takes no cost centres (the ledger module dropped them, cost_ignored); e.g. ${costs.leftOut.slice(0, 4).join(', ')}`);
+  if (costs.keptWithoutCostRows.length) lines.push(`  vouchers already posted before cost rows were sent, kept as they were without cost rows: ${costs.keptWithoutCostRows.length} (e.g. ${costs.keptWithoutCostRows.slice(0, 3).join(', ')}); seed into a new company to get their cost figures`);
+  const costWarnings = Object.entries(costs.warnings);
+  if (costWarnings.length) lines.push('  cost warnings raised by the postings:', ...costWarnings.map(([code, which]) => `    ${code}: ${which.length} (e.g. ${which.slice(0, 3).join('; ')})`));
   if (report.bills.openingBills) lines.push(`  opening bills: ${report.bills.openingBills} set with the ledgers created`);
   const typeCounts = (counts: Record<string, number>) => Object.entries(counts).map(([type, count]) => `${count} ${type.replace(/_/g, ' ')}`).join(', ');
   if (report.bills.rowsPosted) lines.push(`  bill rows: ${report.bills.rowsPosted} posted with the vouchers`);
@@ -437,7 +542,7 @@ export function formatSeedReport(report: SeedReport): string[] {
   const warningCodes = Object.entries(report.bills.warnings);
   if (warningCodes.length) lines.push('  bill warnings raised by the postings:', ...warningCodes.map(([code, which]) => `    ${code}: ${which.length} (e.g. ${which.slice(0, 3).join('; ')})`));
   if (Object.keys(report.unsupportedTypes).length) lines.push(`  vouchers not posted, type not yet supported: ${typeCounts(report.unsupportedTypes)}`);
-  if (Object.keys(report.noEntries).length) lines.push(`  vouchers not posted, no entries to post (cancelled or no accounting effect; cannot be represented yet): ${typeCounts(report.noEntries)}`);
+  if (Object.keys(report.noEntries).length) lines.push(`  vouchers not posted, no entries to post (no lines and not cancelled; cannot be represented yet): ${typeCounts(report.noEntries)}`);
   if (report.refused.length) lines.push('  vouchers refused by ten98-books posting rules and not posted (a difference from the dataset):', ...report.refused.map(line => `    ${line}`));
   if (report.numbers.checked || report.numbers.unnumbered) {
     lines.push(`  voucher numbers, ${report.numbers.kind}: ${report.numbers.matched} of ${report.numbers.checked} checked match expectedNumber${report.numbers.unnumbered ? `; ${report.numbers.unnumbered} optional voucher(s) hold a number in the dataset but take none until regular` : ''}`);

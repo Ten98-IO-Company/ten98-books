@@ -1,4 +1,5 @@
 import { addMoney, formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime';
+import { nameMatchKey } from '../../lib/names.ts';
 import { financialYearOf } from '../../lib/company.ts';
 import { FoundationError } from '../auth.ts';
 import { ledgerContext } from '../ledger/context.ts';
@@ -7,6 +8,7 @@ import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../
 import { listVouchers } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
 import { compareBills } from './compare-bills.ts';
+import { compareCosts } from './compare-costs.ts';
 import { checkNumbers, DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 import { findDemoCompany, findUserId, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
 
@@ -30,7 +32,7 @@ export type CompareResult = {
   lines: CompareLine[]; notComparable: string[]; matches: number; differences: number; pending: number;
 };
 
-const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet', 'outstanding', 'receivables', 'payables'],
+const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet', 'outstanding', 'receivables', 'payables', 'costCentres'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'],
   profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets', 'unrealisedExchangeDifference'] };
 
@@ -41,7 +43,6 @@ const annotations = ['source', 'voucherCountNote', 'report', 'note'];
 const blockReasons: Record<string, string> = {
   stockSummary: 'needs inventory',
   vat: 'needs the VAT return, which ten98-books does not compute yet',
-  costCentres: 'needs cost centres, which ten98-books does not model yet',
   exchangeDifferences: 'needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately',
 };
 
@@ -84,7 +85,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     const prefix = voucherKeyPrefix(dataset.slug);
     const assigned = new Map((await client.query<{ key: string; number: number | null }>('SELECT idempotency_key AS key, number FROM voucher WHERE company_id = $1 AND starts_with(idempotency_key, $2)', [access.companyId, prefix])).rows.map((row): [string, number | null] => [row.key.slice(prefix.length), row.number]));
     const seeded = new Set(assigned.keys());
-    const absent = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && dispositionOf(voucher) === 'post' && !seeded.has(voucher.key));
+    const absent = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && (dispositionOf(voucher) === 'post' || dispositionOf(voucher) === 'void') && !seeded.has(voucher.key));
     const absentNote = (type?: string) => {
       const those = absent.filter(voucher => type === undefined || voucher.type === type);
       return those.length ? `${those.length} voucher(s) of the dataset are not in the books: ${those.map(voucher => `${voucher.key} (${voucher.type}, ${voucher.status})`).join(', ')}` : undefined;
@@ -93,8 +94,8 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       push(block, label, String(wanted), String(actual), String(actual - wanted), wanted === actual, wanted === actual ? undefined : absentNote(type));
 
     // Voucher counts: every undeleted voucher dated in the period, whatever its status, for the types ten98-books has.
-    // Vouchers of other types, and vouchers without lines (cancelled or no accounting effect), are never posted, so they
-    // are taken out of the expected counts and named instead.
+    // Vouchers cancelled without lines are posted as voids and counted. Vouchers of other types, and vouchers with no lines
+    // that are not cancelled, are never posted, so they are taken out of the expected counts and named instead.
     if (expected.voucherCount !== undefined || expected.vouchersByType) {
       const byType = new Map<string, number>();
       let total = 0;
@@ -104,7 +105,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         if (!page.next) break;
         after = page.next;
       }
-      const unposted = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && dispositionOf(voucher) !== 'post');
+      const unposted = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && dispositionOf(voucher) !== 'post' && dispositionOf(voucher) !== 'void');
       const unpostedOf = (type: string) => unposted.filter(voucher => voucher.type === type && dispositionOf(voucher) === 'no-entries').length;
       if (expected.voucherCount !== undefined) number('Vouchers', 'Voucher count (types ten98-books has)', expected.voucherCount - unposted.length, total);
       const expectedTypes = expected.vouchersByType ?? {};
@@ -116,7 +117,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       const unsupported = Object.entries(expectedTypes).filter(([type]) => !seededVoucherTypeKeys.includes(type));
       if (unsupported.length) skipped.push(`voucher types ten98-books does not have, left out of the voucher counts: ${listed(unsupported)} (needs those voucher types)`);
       const noEntries = [...new Set(unposted.filter(voucher => dispositionOf(voucher) === 'no-entries').map(voucher => voucher.type))].map((type): [string, number] => [type, unpostedOf(type)]);
-      if (noEntries.length) skipped.push(`vouchers without lines of supported types (cancelled or no accounting effect) cannot be represented yet, left out of the voucher counts: ${listed(noEntries)}`);
+      if (noEntries.length) skipped.push(`vouchers without lines of supported types that are not cancelled (no accounting effect) cannot be represented yet, left out of the voucher counts: ${listed(noEntries)}`);
     }
 
     // Voucher numbers (every dataset voucher, whatever its date: numbering is not bound to the period). A difference that
@@ -133,7 +134,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     }
     if (shifted.length) {
       lines.push({ block: 'Voucher numbers', label: 'Voucher numbers shifted by vouchers ten98-books does not post', expected: String(shifted.length), actual: 'not compared', difference: 'n/a', ok: false,
-        reason: `their numbers differ only because earlier vouchers of the same type hold numbers in the dataset but none here (cancelled without lines, optional, refused or absent); examples: ${examples(shifted)}` });
+        reason: `their numbers differ only because earlier vouchers of the same type hold numbers in the dataset but none here (optional, refused or absent); examples: ${examples(shifted)}` });
     }
     const unsupportedNumbered = dataset.vouchers.filter(voucher => voucher.expectedNumber !== undefined && dispositionOf(voucher) === 'unsupported-type').length;
     if (unsupportedNumbered) skipped.push(`voucher numbers: expectedNumber of ${unsupportedNumbered} voucher(s) of types ten98-books does not have (not checked)`);
@@ -157,7 +158,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       const stored = await listLedgers(context);
       const closing = new Map(report.nodes.filter(node => node.kind === 'ledger').map(node => [node.id, subtractMoney(node.closingDebit, node.closingCredit)]));
       const appLedger = (entry: Dataset['ledgers'][number]) =>
-        stored.find(item => entry.standard ? item.systemKey === entry.standard : item.name.toLowerCase() === entry.name.toLowerCase());
+        stored.find(item => entry.standard ? item.systemKey === entry.standard : nameMatchKey(item.name) === nameMatchKey(entry.name));
       const matched = new Set<string>();
       const zeroed: { line: CompareLine; actual: bigint }[] = [];
       const foreignCodes = new Set(dataset.vouchers.flatMap(voucher => voucher.lines.filter(line => typeof (line.extras as { currency?: unknown } | undefined)?.currency === 'string').map(line => line.ledger)));
@@ -280,6 +281,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
 
     // Pending bills (per party at each stated date, and the count and total per side), against the bill reports.
     lines.push(...await compareBills(context, dataset));
+    lines.push(...await compareCosts(context, dataset, seeded));
   }).catch(error => {
     // A refusal of the report (a period the reports do not take) is a problem in expected.json, named as such.
     if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/expected.json: the reports refused the period ${from} to ${to}: ${error.message}`);

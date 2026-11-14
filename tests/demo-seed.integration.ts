@@ -331,7 +331,7 @@ const stockDataset = (): Dataset => parseDataset({
     { key: 'order-1', type: 'sales_order', date: '2026-01-03', status: 'regular', postDated: false, expectedNumber: 1, lines: [], extras: { noAccountingEffect: true } },
     { key: 'journal-1', type: 'journal', date: '2026-01-04', status: 'optional', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '10.00' }, { ledger: 'bank', side: 'Cr', amount: '10.00' }] },
-    { key: 'journal-2', type: 'journal', date: '2026-01-05', status: 'cancelled', postDated: false, expectedNumber: 2, lines: [], extras: { noAccountingEffect: true } },
+    { key: 'journal-2', type: 'journal', date: '2026-01-05', status: 'regular', postDated: false, expectedNumber: 2, lines: [], extras: { noAccountingEffect: true } },
     { key: 'journal-3', type: 'journal', date: '2026-01-06', status: 'regular', postDated: false, expectedNumber: 3,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '20.00' }, { ledger: 'capital', side: 'Cr', amount: '20.00' }] },
     { key: 'memo-1', type: 'memorandum', date: '2026-01-07', status: 'regular', postDated: false,
@@ -367,7 +367,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.match(report.refused[0], /^voucher "payment-2" \(payment, 2026-01-09, optional\): A payment must credit at least one cash or bank ledger/);
   assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 2, kind: 'dataset sequence (not yet verified against the reference)' });
   assert.ok(formatCompareResult(await compareDataset(owner.userId, stockDataset())).includes('  Voucher numbers (expectedNumber, checked when seeding): dataset sequence (not yet verified against the reference)'));
-  assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (cancelled without lines)']);
+  assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (no entries)']);
   assert.ok(report.skipped.includes('items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)'));
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
@@ -380,7 +380,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
 test('the comparison leaves skipped vouchers and stock out of the counts, checks the opening stock difference and names what it cannot compare', async () => {
   const result = await compareDataset(owner.userId, stockDataset());
   const byLabel = Object.fromEntries(result.lines.map(line => [line.label, line]));
-  // Eight vouchers expected in the period; three are never posted (an order, a memorandum, a cancelled voucher without lines).
+  // Eight vouchers expected in the period; three are never posted (an order, a memorandum, a voucher with no entries).
   assert.deepEqual([byLabel['Voucher count (types ten98-books has)'].expected, byLabel['Voucher count (types ten98-books has)'].actual], ['5', '4'], 'the refused payment is the one missing');
   assert.deepEqual([byLabel['Vouchers of type payment'].expected, byLabel['Vouchers of type payment'].actual], ['2', '1']);
   assert.deepEqual([byLabel['Vouchers of type journal'].expected, byLabel['Vouchers of type journal'].actual, byLabel['Vouchers of type journal'].ok], ['2', '2', true], 'a journal may use a bank ledger');
@@ -397,7 +397,7 @@ test('the comparison leaves skipped vouchers and stock out of the counts, checks
   assert.deepEqual(result.notComparable, [
     'stockSummary (needs inventory)',
     'voucher types ten98-books does not have, left out of the voucher counts: sales_order 1, memorandum 1 (needs those voucher types)',
-    'vouchers without lines of supported types (cancelled or no accounting effect) cannot be represented yet, left out of the voucher counts: journal 1',
+    'vouchers without lines of supported types that are not cancelled (no accounting effect) cannot be represented yet, left out of the voucher counts: journal 1',
     'voucher numbers: expectedNumber of 1 voucher(s) of types ten98-books does not have (not checked)',
     'trialBalance: 2 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss, Purchases)',
     'profitAndLoss.grossProfit and profitAndLoss.netProfit (include opening and closing stock; need inventory)',
