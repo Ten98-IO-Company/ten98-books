@@ -98,7 +98,7 @@ test('ledger refusals carry a stable code with their status and message unchange
     [`${base()}/vouchers`, voucherBody(books.type('payment'), '2026-01-03', cashLine('1')), 409, 'locked_period', /^The books are locked through 2026-01-03\./],
     [`${base()}/vouchers`, voucherBody(books.type('payment'), '2025-12-31', cashLine('1')), 400, 'before_books_beginning', 'The date 2025-12-31 is before the books begin on 2026-01-01.'],
     [`${base()}/vouchers`, voucherBody(books.type('payment'), '2026-01-08', [[ids.rent, 'Dr', '2'], [books.ledger('Cash'), 'Cr', '1']]), 400, 'unbalanced', 'Debits (2.00) and credits (1.00) must be equal.'],
-    [`${base()}/vouchers`, voucherBody(books.type('journal'), '2026-01-08', cashLine('1')), 400, 'posting_rule', /^A journal cannot use a cash or bank ledger/],
+    [`${base()}/vouchers`, voucherBody(books.type('contra'), '2026-01-08', cashLine('1')), 400, 'posting_rule', /^A contra voucher moves money between cash and bank ledgers only/],
     [`${base()}/vouchers/${regular.id}`, { date: '2026-01-07', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, lines: [], revision: cancelled.revision }, 409, 'voucher_state', 'A cancelled voucher cannot be altered.'],
     [`${base()}/vouchers`, { ...keyed, narration: 'Changed' }, 409, 'idempotency_mismatch', 'This idempotency key was already used for a different voucher. Send a new key for a new voucher.'],
     [`/api/companies/${randomUUID()}/groups`, undefined, 404, 'not_found', companyNotFound],

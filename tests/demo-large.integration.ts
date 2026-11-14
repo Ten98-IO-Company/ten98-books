@@ -32,11 +32,10 @@ for (const slug of ['gulfline', 'najd']) {
     const first = await seedDataset(owner.userId, dataset);
     t.diagnostic(`first seed of ${dataset.vouchers.length} vouchers: ${Date.now() - started} ms`);
     assert.equal(first.companyCreated, true);
-    assert.deepEqual(first.vouchers, { created: 300, present: 0, cancelled: 0 });
+    assert.deepEqual(first.vouchers, { created: 301, present: 0, cancelled: 0 });
     assert.deepEqual(first.unsupportedTypes, { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 });
     assert.deepEqual(first.noEntries, { journal: 2 }, 'the two cancelled journals without lines');
-    assert.equal(first.refused.length, 1);
-    assert.match(first.refused[0], /^voucher "journal-001" \(journal, 2026-06-15, optional\): A journal cannot use a cash or bank ledger/);
+    assert.deepEqual(first.refused, [], 'a journal may use a bank ledger, so the optional journal-001 posts');
     assert.deepEqual(first.numbers, { checked: 300, matched: 298, unnumbered: 0, kind: 'confirmed against the reference' });
     // Numbers restart each financial year (D-04 as amended), so the only two that differ are the journals shifted by the
     // two cancelled journals without lines.
@@ -47,32 +46,31 @@ for (const slug of ['gulfline', 'najd']) {
     started = Date.now();
     const again = await seedDataset(owner.userId, dataset);
     t.diagnostic(`second seed (nothing to do): ${Date.now() - started} ms`);
-    assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: 300, cancelled: 0 }, 0, 0]);
+    assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: 301, cancelled: 0 }, 0, 0]);
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
 
     const result = await compareDataset(owner.userId, dataset);
     t.diagnostic(`${result.lines.length} lines compared: ${result.matches} match, ${result.differences} differ, ${result.pending} not yet comparable`);
     const text = formatCompareResult(result).join('\n');
     // Three groups, every line in one: the 16 ledgers expected.json lists at zero (its own totals need their balances) are
-    // not yet comparable with the reason; only the sign, the journal count and the journal type count differ.
+    // not yet comparable with the reason; only the sign of the net profit differs.
     const placeholders = result.lines.filter(line => line.reason && line.block === 'Trial balance');
     assert.equal(placeholders.length, 16, text);
     assert.ok(placeholders.every(line => line.block === 'Trial balance' && line.expected === '0.00' && line.reason!.includes('its own totals need their balances')));
     const findings = result.lines.filter(line => !line.ok && !line.reason);
-    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)', 'Voucher count (types ten98-books has)', 'Vouchers of type journal'], text);
-    assert.deepEqual([result.matches, result.differences, result.pending], [41, 3, 17]);
-    assert.match(text, /MATCHES \(41\)[^]*DIFFERS \(3\)[^]*NOT YET COMPARABLE \(17 line\(s\)/);
+    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)'], text);
+    assert.deepEqual([result.matches, result.differences, result.pending], [43, 1, 17]);
+    assert.match(text, /MATCHES \(43\)[^]*DIFFERS \(1\)[^]*NOT YET COMPARABLE \(17 line\(s\)/);
     // Every number of the vouchers posted here equals the reference's, including the 28 that restart on 1 January 2027.
     const numbers = result.lines.find(line => line.label.startsWith('Voucher numbers equal'))!;
     assert.deepEqual([numbers.expected, numbers.actual, numbers.difference, numbers.ok], ['298', '298', '0', true]);
     const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
     assert.deepEqual([shifted.expected, shifted.ok, typeof shifted.reason], ['2', false, 'string']);
-    assert.ok(findings.find(line => line.label === 'Vouchers of type journal')!.note!.includes('journal-001 (journal, optional)'));
     assert.ok(findings.find(line => line.label === 'Net profit (excluding stock)')!.note!.includes('opposite sign'));
     const net = result.lines.find(line => line.label === 'Net profit (excluding stock)')!;
     assert.deepEqual([net.expected, net.actual], ['52839.06', '-52839.06'], 'a loss, given without its sign');
     const journals = result.lines.find(line => line.label === 'Vouchers of type journal')!;
-    assert.deepEqual([journals.expected, journals.actual], ['3', '2'], 'the refused optional journal');
+    assert.deepEqual([journals.expected, journals.actual, journals.ok], ['3', '3', true], 'the optional journal with a bank ledger is posted');
 
     // Everything that carries a figure and is not one of those findings agrees exactly, totals and opening stock included.
     const agreeing = result.lines.filter(line => line.ok).map(line => line.label);

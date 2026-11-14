@@ -54,7 +54,6 @@ test('posting rules refuse bad vouchers with plain-language messages and write n
     ['payment without cash or bank credit', attempt('payment', '2026-02-01', [[ids.rent, 'Dr', '100'], [ids.capital, 'Cr', '100']]), 400, /payment must credit at least one cash or bank/],
     ['payment debiting cash', attempt('payment', '2026-02-01', [[cash, 'Dr', '100'], [ids.bank, 'Cr', '100']]), 400, /payment cannot debit a cash or bank ledger \(line 1\)/],
     ['receipt without cash or bank debit', attempt('receipt', '2026-02-01', [[ids.rent, 'Dr', '100'], [ids.sales, 'Cr', '100']]), 400, /receipt must debit at least one cash or bank/],
-    ['journal touching bank', attempt('journal', '2026-02-01', [[ids.rent, 'Dr', '100'], [ids.bank, 'Cr', '100']]), 400, /journal cannot use a cash or bank ledger \(line 2\)/],
     ['unknown voucher type', owner.browser.call(url(), voucherBody(randomUUID(), '2026-02-01', [[ids.rent, 'Dr', '1'], [cash, 'Cr', '1']])), 400, /voucher type was not found/],
   ];
   for (const [name, response, status, message] of cases) {
@@ -326,4 +325,13 @@ test('opening balances may be out of balance during setup; the trial balance sho
   const report = (await owner.browser.call(`/api/companies/${company}/trial-balance?from=2026-01-01&to=2026-01-31`)).body.trialBalance;
   assert.deepEqual(report.openingDifference, { amount: '750.50', side: 'Dr' });
   assert.deepEqual([report.totals.closingDebit, report.totals.closingCredit], ['750.50', '0.00']);
+});
+
+test('a journal accepts cash and bank ledgers, also on either side', async () => {
+  const before = await closing(ids.bank);
+  const bank = await post(owner.browser, companyId, books.type('journal'), '2026-06-01', [[ids.rent, 'Dr', '40'], [ids.bank, 'Cr', '40']]);
+  assert.deepEqual([bank.status, bank.lines.length], ['regular', 2]);
+  const cash = await post(owner.browser, companyId, books.type('journal'), '2026-06-02', [[books.ledger('Cash'), 'Dr', '15'], [ids.capital, 'Cr', '15']]);
+  assert.ok(cash.number > bank.number);
+  assert.equal(await closing(ids.bank), before - 4000n, 'the bank ledger moves like any other');
 });
