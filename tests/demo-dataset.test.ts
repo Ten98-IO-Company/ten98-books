@@ -505,7 +505,7 @@ test('expected exchange differences are amounts that fit the currency, and the n
   const raw = good();
   raw.expected.exchangeDifferences = { realised: { amount: '1.50', side: 'Dr' }, unrealised: { amount: '3.005', side: 'Dr' } };
   mentions(problems(raw), 'expected.json', 'exchangeDifferences.unrealised', '"3.005"');
-  assert.deepEqual(notComparable({ ...good().expected, outstanding: {}, costCentres: {}, exchangeDifferences: {}, balanceSheet: { total: '1.00', unadjustedForexGainLoss: '1.00' } }), [
+  assert.deepEqual(notComparable({ ...good().expected, outstanding: {}, costCentres: {}, exchangeDifferences: {}, balanceSheet: { total: '1.00', unrealisedExchangeDifference: '1.00' } }), [
     'outstanding (needs pending bills (bill-wise tracking), which ten98-books does not have yet)',
     'costCentres (needs cost centres, which ten98-books does not model yet)',
     'exchangeDifferences (needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately)',

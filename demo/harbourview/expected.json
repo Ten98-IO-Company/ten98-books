@@ -145,7 +145,7 @@
   "balanceSheet": {
     "report": "Balance sheet as at 2026-12-31",
     "total": "318012.75",
-    "unadjustedForexGainLoss": "378.75",
+    "unrealisedExchangeDifference": "378.75",
     "note": "liabilities side total; the unrealised exchange row is on the assets side"
   },
   "outstanding": {

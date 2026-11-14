@@ -31,7 +31,7 @@ export type CompareResult = {
 
 const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'],
-  profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets', 'unadjustedForexGainLoss'] };
+  profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets', 'unrealisedExchangeDifference'] };
 
 /** Keys that only describe where a figure came from (report names, notes); they carry no figure, so they are not listed. */
 const annotations = ['source', 'voucherCountNote', 'report', 'note'];
