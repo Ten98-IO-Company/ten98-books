@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 import pg from 'pg';
 
 /**
@@ -19,8 +20,11 @@ function required(name: string): URL {
 
 export type TestDatabase = { name: string; adminUrl: string; drop: () => Promise<void> };
 
-/** Creates a fresh database, points this process's DATABASE_URL and MIGRATION_DATABASE_URL at it and applies migrations. */
-export async function freshDatabase(label: string): Promise<TestDatabase> {
+/**
+ * Creates a fresh database, points this process's DATABASE_URL and MIGRATION_DATABASE_URL at it and applies migrations:
+ * all of them, or only `migrations` (a prefix of `migrationFiles`) to prepare a database as an earlier release left it.
+ */
+export async function freshDatabase(label: string, { migrations }: { migrations?: readonly string[] } = {}): Promise<TestDatabase> {
   const admin = required('TEST_ADMIN_DATABASE_URL'), application = required('DATABASE_URL'), migrator = required('MIGRATION_DATABASE_URL');
   process.env.AUTH_SECRET ??= randomBytes(32).toString('hex');
   const name = `books_${label}_${randomBytes(4).toString('hex')}`;
@@ -33,7 +37,10 @@ export async function freshDatabase(label: string): Promise<TestDatabase> {
   }
   const scoped = new URL(admin.href); scoped.pathname = `/${name}`;
   const { migrateDatabase } = await import('../../src/server/startup-migrate.ts');
-  await migrateDatabase({ log: () => undefined });
+  const { createMigrationLedger } = await import('@ten98/runtime');
+  const { migrationLedger, migrationLockKey } = await import('../../src/server/db.ts');
+  const ledger = migrations ? createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: migrations, lockKey: migrationLockKey }) : migrationLedger;
+  await migrateDatabase({ ledger, log: () => undefined });
   return {
     name, adminUrl: scoped.href,
     drop: async () => {

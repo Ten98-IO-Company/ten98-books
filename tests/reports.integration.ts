@@ -19,7 +19,7 @@ let books: Chart;
 before(async () => {
   database = await freshDatabase('reports');
   owner = await setupOwner();
-  ({ companyId, books } = await goldenCompany(owner.browser, owner.workspaceId));
+  ({ companyId, books } = await goldenCompany(owner.browser));
 });
 after(async () => { await database?.drop(); });
 
@@ -187,7 +187,7 @@ test('CSV exports hold the same figures, quote every cell and neutralise formula
   assert.ok(text.startsWith('"Particulars","Kind","Level","Opening debit"'), text.slice(0, 80));
   assert.ok(text.endsWith('"Total","total","","12000.00","12000.00","85225.00","85225.00","53625.00","53625.00"\r\n'), text.slice(-120));
 
-  const tricky = await createCompany(owner.browser, owner.workspaceId, { name: 'Escaping Books' });
+  const tricky = await createCompany(owner.browser, { name: 'Escaping Books' });
   const chartOf = await chart(owner.browser, tricky);
   const formula = await addLedger(owner.browser, tricky, '=SUM(A1:A9)', chartOf.group('indirect_expenses'));
   const quoted = await addLedger(owner.browser, tricky, 'Smith, "Junior" & Sons', chartOf.group('capital'));
@@ -206,7 +206,7 @@ test('CSV exports hold the same figures, quote every cell and neutralise formula
 });
 
 test('a three-decimal company reports exact fils in every statement', async () => {
-  const kwd = await createCompany(owner.browser, owner.workspaceId, { name: 'Three Decimals', baseCurrency: 'KWD' });
+  const kwd = await createCompany(owner.browser, { name: 'Three Decimals', baseCurrency: 'KWD' });
   const chartOf = await chart(owner.browser, kwd);
   const bank = await addLedger(owner.browser, kwd, 'Gulf Bank', chartOf.group('bank_accounts'), { amount: '1500.125', side: 'Dr' });
   await addLedger(owner.browser, kwd, 'Capital Paid In', chartOf.group('capital'), { amount: '1500.125', side: 'Cr' });
@@ -225,7 +225,7 @@ test('a three-decimal company reports exact fils in every statement', async () =
 });
 
 test('a financial year starting in April carries the earlier year into the profit and loss account at exact boundaries', async () => {
-  const april = await createCompany(owner.browser, owner.workspaceId, { name: 'April Books', financialYearStart: { month: 4, day: 1 }, booksBeginning: '2025-04-01' });
+  const april = await createCompany(owner.browser, { name: 'April Books', financialYearStart: { month: 4, day: 1 }, booksBeginning: '2025-04-01' });
   const chartOf = await chart(owner.browser, april);
   const bank = await addLedger(owner.browser, april, 'Bay Bank', chartOf.group('bank_accounts'), { amount: '1000', side: 'Dr' });
   await addLedger(owner.browser, april, 'Founders', chartOf.group('capital'), { amount: '1000', side: 'Cr' });
@@ -263,7 +263,7 @@ test('a financial year starting in April carries the earlier year into the profi
 });
 
 test('unbalanced opening balances show a difference line so the statements agree', async () => {
-  const setup = await createCompany(owner.browser, owner.workspaceId, { name: 'Setting Up' });
+  const setup = await createCompany(owner.browser, { name: 'Setting Up' });
   const chartOf = await chart(owner.browser, setup);
   await addLedger(owner.browser, setup, 'Main Bank', chartOf.group('bank_accounts'), { amount: '1000', side: 'Dr' });
   await addLedger(owner.browser, setup, 'Partner', chartOf.group('capital'), { amount: '400', side: 'Cr' });
@@ -277,7 +277,7 @@ test('unbalanced opening balances show a difference line so the statements agree
 });
 
 test('cancelled, deleted and optional vouchers never count; a post-dated voucher counts from its own date', async () => {
-  const life = await createCompany(owner.browser, owner.workspaceId, { name: 'Lifecycle Books' });
+  const life = await createCompany(owner.browser, { name: 'Lifecycle Books' });
   const chartOf = await chart(owner.browser, life);
   const cash = chartOf.ledger('Cash');
   const income = await addLedger(owner.browser, life, 'Fees Earned', chartOf.group('indirect_income'));
@@ -319,7 +319,7 @@ test('queries are checked at the boundary', async () => {
 
 test('exports are limited per user per minute with a plain message; reading reports is not limited', async () => {
   const { exportsPerMinute } = await import('../src/server/api/reports.ts');
-  const reader = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const reader = await invite(owner.browser, companyId, 'viewer');
   const path = `/api/companies/${companyId}/reports/trial-balance/export?${period}`;
   for (let index = 0; index < exportsPerMinute; index++) assert.equal((await rawGet(reader.browser, path)).status, 200, `export ${index + 1}`);
   assert.deepEqual(await reader.browser.call(path), { status: 429, body: { error: 'Too many requests. Wait a minute and try again.' } });
@@ -339,9 +339,9 @@ const everyRoute = (company: string) => {
 test('another workspace\'s user gets "not found" for every report and export; a stranger is asked to sign in; a viewer reads', async () => {
   const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
   const intruder = await invite(owner.browser, other, 'admin');
-  const own = await createCompany(intruder.browser, other, { name: 'Intruder Books' });
+  const own = await createCompany(intruder.browser, { name: 'Intruder Books' });
   assert.equal((await intruder.browser.call(`/api/companies/${own}/reports/defaults`)).status, 200, 'the intruder reads their own company');
-  const viewer = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const viewer = await invite(owner.browser, companyId, 'viewer');
   const stranger = browser();
   for (const path of everyRoute(companyId)) {
     assert.deepEqual(await intruder.browser.call(path), { status: 404, body: { error: companyNotFound, code: 'not_found' } }, path);

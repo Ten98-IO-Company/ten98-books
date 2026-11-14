@@ -32,7 +32,7 @@ Only regular, undeleted vouchers affect any balance. Cancelled, deleted and opti
 
 Each report except defaults has a CSV export at the same path plus `/export` (for example `trial-balance/export?from=&to=`), with the same authorization: RFC 4180 records through the runtime CSV helpers, every cell quoted, a cell that could start a spreadsheet formula prefixed with an apostrophe, a UTF-8 byte-order mark so spreadsheets read Arabic names, plain decimal amounts with the currency's decimal places, balances as an amount column and a Dr or Cr column, and a level column instead of indentation. An export holds the whole period, up to 100,000 lines, and each user may export 20 times a minute (more answers 429 "Too many requests. Wait a minute and try again."); reading reports is not limited.
 
-Amounts in JSON are decimal strings; a signed balance is positive on the debit side and negative on the credit side. Unknown or repeated query parameters are refused (400), as are a group id that names no group and a ledger id that names no ledger (404). A company the user cannot reach answers "not found" (404) for every route and export.
+Amounts in JSON are decimal strings; a signed balance is positive on the debit side and negative on the credit side. Unknown or repeated query parameters are refused (400), as are a group id that names no group and a ledger id that names no ledger (404). A company the user is not a member of answers "not found" (404) for every route and export; a company is a workspace ([TENANCY.md](TENANCY.md)).
 
 ## Drill-down and screens
 

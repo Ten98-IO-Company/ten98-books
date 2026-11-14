@@ -55,8 +55,8 @@ export type CompanyCreateInput = z.input<typeof companyCreateInput>;
 
 /** The company as the API returns it. Dates are calendar dates in the company's own time zone (D-09). */
 export type Company = {
+  /** The workspace id: a company is a workspace (D-03). */
   id: string;
-  workspaceId: string;
   name: string;
   secondLanguageName: string | null;
   baseCurrency: BaseCurrency;
@@ -65,6 +65,18 @@ export type Company = {
   booksBeginning: string;
   timeZone: string;
   lockedThrough: string | null;
+};
+
+/**
+ * One entry of GET /api/companies: a company the user belongs to, their role in it, and its books settings. `company`
+ * is null while the company is not set up yet, and for a company whose two-factor requirement the user does not meet.
+ */
+export type CompanySummary = {
+  id: string;
+  name: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+  twoFactorLocked: boolean;
+  company: Company | null;
 };
 
 /** The financial year containing `date` (YYYY-MM-DD), as inclusive first and last calendar dates. */

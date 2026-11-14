@@ -46,7 +46,8 @@ export async function handleApi(request: Request): Promise<Response> {
       if (response) return response;
     }
     const user = await signedIn(request);
-    // Every route below is under /api/(workspaces|companies)/<id> except GET /api/me and POST /api/workspaces, which stay reachable.
+    // Every route below is under /api/(workspaces|companies)/<id> (a company id is its workspace id) except GET /api/me,
+    // POST /api/workspaces and GET or POST /api/companies, which stay reachable.
     await requireWorkspaceFactor(path, user.id);
     for (const area of signedInAreas) {
       const response = await area({ ...context, user });

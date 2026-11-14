@@ -6,6 +6,7 @@ import { handleApi } from '../src/server/api.ts';
 import { getConfig } from '../src/server/config.ts';
 import { createPool, getDatabase } from '../src/server/db.ts';
 import { assertApplicationRole } from '../src/server/startup-migrate.ts';
+import { notSetUp } from '../src/server/companies.ts';
 import { assertDatabaseRoles, companyNotFound, DatabaseRoleError, withCompany } from '../src/server/tenancy.ts';
 import { Browser, freshDatabase, type TestDatabase } from './helpers/database.ts';
 
@@ -13,8 +14,9 @@ let database: TestDatabase;
 const browser = () => new Browser(handleApi, getConfig().appUrl);
 const books = { baseCurrency: 'AED', financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai' };
 const password = 'correct horse battery staple';
-// A owns workspace W1 with company C1, and W2. B is an admin of W2 only and creates company C2 there.
-const fixture = { aId: '', bId: '', c1: '', c2: '', w1: '', w2: '', inviteToken: '' };
+// D-03: a company is a workspace. A owns W1 (from first-user setup, not set up yet), company C1 and company C2.
+// B is an admin of C2 only.
+const fixture = { aId: '', bId: '', c1: '', c2: '', w1: '', inviteToken: '' };
 let a: Browser, b: Browser;
 
 before(async () => {
@@ -25,16 +27,16 @@ before(async () => {
   const me = (await a.call('/api/me')).body;
   fixture.aId = me.user.id;
   fixture.w1 = me.workspaces[0].id;
-  fixture.c1 = (await a.call(`/api/workspaces/${fixture.w1}/companies`, { name: 'C1', ...books })).body.company.id;
-  fixture.w2 = (await a.call('/api/workspaces', { name: 'W2' })).body.workspace.id;
-  const invite = (await a.call(`/api/workspaces/${fixture.w2}/invitations`, { email: bEmail, role: 'admin' })).body.inviteUrl as string;
+  fixture.c1 = (await a.call('/api/companies', { name: 'C1', ...books })).body.company.id;
+  fixture.c2 = (await a.call('/api/companies', { name: 'C2', ...books, baseCurrency: 'SAR' })).body.company.id;
+  const invite = (await a.call(`/api/workspaces/${fixture.c2}/invitations`, { email: bEmail, role: 'admin' })).body.inviteUrl as string;
   fixture.inviteToken = new URL(invite).hash.replace('#invite=', '');
   const accepted = await b.call('/api/invitations/accept', { token: fixture.inviteToken, name: 'B', password });
   assert.equal(accepted.body.signedIn, true);
   fixture.bId = (await b.call('/api/me')).body.user.id;
-  // B is a member of W2 only, so C1 is outside B's reach.
-  fixture.c2 = (await b.call(`/api/workspaces/${fixture.w2}/companies`, { name: 'C2', ...books, baseCurrency: 'SAR' })).body.company.id;
+  // B is a member of C2 only, so C1 and W1 are outside B's reach.
   assert.ok(fixture.c1 && fixture.c2);
+  assert.deepEqual((await b.call('/api/companies')).body.companies.map((item: { id: string; role: string }) => [item.id, item.role]), [[fixture.c2, 'admin']]);
 });
 
 /** A superuser connection to this test database, for fixtures the application role must not be able to create. */
@@ -60,7 +62,7 @@ test('the application role passes the boot assertion; a superuser or the table o
   } finally { await superuser.end(); await migrator.end(); }
 });
 
-test('a user from another workspace gets the same not-found answer as for a missing company, on read and write', async () => {
+test('a user from another company gets the same not-found answer as for a missing company, on read and write', async () => {
   const missing = randomUUID();
   const foreign = await b.call(`/api/companies/${fixture.c1}`);
   const absent = await b.call(`/api/companies/${missing}`);
@@ -75,11 +77,14 @@ test('a user from another workspace gets the same not-found answer as for a miss
     await assert.rejects(write(companyId), (error: unknown) => (error as { status?: number }).status === 404 && (error as Error).message === companyNotFound);
   }
   assert.equal(ran, false, 'no company work runs before authorization succeeds');
-  // Creating a company in a workspace the user is not in is refused the same way as a missing workspace.
-  const w1 = (await a.call('/api/me')).body.workspaces.find((w: { name: string }) => w.name === 'W1').id;
-  const intruding = await b.call(`/api/workspaces/${w1}/companies`, { name: 'Intruder', ...books });
-  assert.deepEqual(intruding, await b.call(`/api/workspaces/${randomUUID()}/companies`, { name: 'Intruder', ...books }));
-  assert.equal(intruding.status, 404);
+  // Setting up a company the user is not in is refused the same way as a missing company, and writes nothing.
+  const intruding = await b.call(`/api/companies/${fixture.w1}/setup`, { name: 'Intruder', ...books });
+  assert.deepEqual(intruding, await b.call(`/api/companies/${randomUUID()}/setup`, { name: 'Intruder', ...books }));
+  assert.deepEqual(intruding, { status: 404, body: { error: companyNotFound } });
+  assert.equal(Number((await asAdmin(admin => admin.query('SELECT count(*) FROM company WHERE company_id = $1', [fixture.w1]))).rows[0].count), 0);
+  assert.equal((await asAdmin(admin => admin.query('SELECT name FROM workspace WHERE id = $1', [fixture.w1]))).rows[0].name, 'W1');
+  // Nor can they read or change its team.
+  assert.equal((await b.call(`/api/workspaces/${fixture.c1}/team`)).status, 404);
 });
 
 test('row-level security hides company rows from hand-written SQL through the application role', async () => {
@@ -105,10 +110,10 @@ test('row-level security hides company rows from hand-written SQL through the ap
     await client.query('COMMIT');
     // The setting is transaction-local: the next transaction on the same connection sees nothing again.
     assert.equal((await client.query('SELECT * FROM company')).rowCount, 0);
-    // A row for a company outside the list cannot be written in. The target is a real project with no company row yet,
+    // A row for a company outside the list cannot be written in. The target is a real workspace with no company row yet,
     // so neither a duplicate key nor a missing foreign key could explain the refusal: only the policy can.
     const unused = randomUUID();
-    await asAdmin(admin => admin.query("INSERT INTO project(id, workspace_id, name) VALUES ($1, $2, 'Unused')", [unused, fixture.w1]));
+    await asAdmin(admin => admin.query("INSERT INTO workspace(id, name) VALUES ($1, 'Unused')", [unused]));
     await client.query('BEGIN');
     await client.query("SELECT set_config('app.company_ids', $1, true)", [fixture.c2]);
     await assert.rejects(client.query(`INSERT INTO company(company_id, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
@@ -157,7 +162,7 @@ test('the company scope ends with the withCompany transaction and never leaks to
 });
 
 test('a used invitation cannot be accepted again', async () => {
-  const members = async () => (await getDatabase().pool.query('SELECT user_id FROM membership WHERE workspace_id = $1 ORDER BY user_id', [fixture.w2])).rows;
+  const members = async () => (await getDatabase().pool.query('SELECT user_id FROM membership WHERE workspace_id = $1 ORDER BY user_id', [fixture.c2])).rows;
   const before = await members();
   const stranger = await browser().call('/api/invitations/accept', { token: fixture.inviteToken, name: 'Someone else', password });
   assert.ok(stranger.status >= 400 && stranger.status < 500, `refused, got ${stranger.status}`);
@@ -166,13 +171,66 @@ test('a used invitation cannot be accepted again', async () => {
   assert.deepEqual(await members(), before);
 });
 
+test('a company without books settings reports that it is not set up; an owner or admin sets it up once', async () => {
+  const listed = (await a.call('/api/companies')).body.companies.find((item: { id: string }) => item.id === fixture.w1);
+  assert.deepEqual(listed, { id: fixture.w1, name: 'W1', role: 'owner', twoFactorLocked: false, company: null });
+  assert.deepEqual(await a.call(`/api/companies/${fixture.w1}`), { status: 409, body: { error: notSetUp, code: 'not_set_up' } });
+  assert.equal((await a.call(`/api/companies/${fixture.w1}/groups`)).status, 404, 'the books do not exist before setup');
+
+  // An editor of the company may not set it up; the refusal writes nothing.
+  const editorEmail = `editor-${randomUUID()}@books.test`;
+  const token = new URL((await a.call(`/api/workspaces/${fixture.w1}/invitations`, { email: editorEmail, role: 'editor' })).body.inviteUrl).hash.replace('#invite=', '');
+  const editor = browser();
+  assert.equal((await editor.call('/api/invitations/accept', { token, name: 'Editor', password })).body.signedIn, true);
+  assert.equal((await editor.call(`/api/companies/${fixture.w1}/setup`, { name: 'Editor Books', ...books })).status, 403);
+
+  const setUp = await a.call(`/api/companies/${fixture.w1.toUpperCase()}/setup`, { name: 'W1 Trading', ...books });
+  assert.equal(setUp.status, 200, JSON.stringify(setUp.body));
+  assert.equal(setUp.body.company.id, fixture.w1);
+  assert.equal(setUp.body.company.name, 'W1 Trading', 'the name entered at setup becomes the company name');
+  assert.deepEqual((await editor.call(`/api/companies/${fixture.w1}`)).body, setUp.body, 'every member now reads the company');
+  assert.equal((await editor.call(`/api/companies/${fixture.w1}/groups`)).status, 200, 'and its seeded chart');
+  assert.deepEqual(await a.call(`/api/companies/${fixture.w1}/setup`, { name: 'Again', ...books, baseCurrency: 'USD' }),
+    { status: 409, body: { error: 'This company is already set up.', code: 'already_set_up' } });
+  assert.equal((await a.call(`/api/companies/${fixture.w1}`)).body.company.baseCurrency, 'AED');
+
+  // Renaming the company renames the workspace: one name. Owners and admins only.
+  assert.equal((await editor.call(`/api/workspaces/${fixture.w1}/rename`, { name: 'Editor Name' })).status, 404);
+  assert.equal((await a.call(`/api/workspaces/${fixture.w1}/rename`, { name: 'W1 Holdings' })).status, 200);
+  assert.equal((await editor.call(`/api/companies/${fixture.w1}`)).body.company.name, 'W1 Holdings');
+  assert.equal((await editor.call('/api/me')).body.workspaces[0].name, 'W1 Holdings');
+});
+
+test('creating a company is atomic: when seeding fails, no workspace, membership or settings remain', async () => {
+  const counts = () => asAdmin(async admin => (await admin.query(
+    'SELECT (SELECT count(*) FROM workspace) AS workspaces, (SELECT count(*) FROM membership) AS memberships, (SELECT count(*) FROM company) AS companies, (SELECT count(*) FROM account_group) AS groups')).rows[0]);
+  const before = await counts();
+  await asAdmin(admin => admin.query('REVOKE EXECUTE ON FUNCTION ledger_seed_company(text) FROM books_app'));
+  try {
+    assert.equal((await a.call('/api/companies', { name: 'Half Made', ...books })).status, 500);
+  } finally { await asAdmin(admin => admin.query('GRANT EXECUTE ON FUNCTION ledger_seed_company(text) TO books_app')); }
+  assert.deepEqual(await counts(), before);
+  assert.ok(!(await a.call('/api/companies')).body.companies.some((item: { name: string }) => item.name === 'Half Made'));
+  assert.equal((await a.call('/api/companies', { name: 'Whole', ...books })).status, 201, 'the same request succeeds once seeding works');
+});
+
+test('a company that requires two-factor lists its name only to a member without a factor and refuses its routes', async () => {
+  await asAdmin(admin => admin.query('INSERT INTO workspace_two_factor_requirement(workspace_id) VALUES ($1)', [fixture.c2]));
+  try {
+    assert.deepEqual((await b.call('/api/companies')).body.companies, [{ id: fixture.c2, name: 'C2', role: 'admin', twoFactorLocked: true, company: null }]);
+    assert.equal((await b.call(`/api/companies/${fixture.c2}`)).status, 403);
+    assert.equal((await b.call(`/api/companies/${fixture.c2}/groups`)).status, 403);
+  } finally { await asAdmin(admin => admin.query('DELETE FROM workspace_two_factor_requirement WHERE workspace_id = $1', [fixture.c2])); }
+  assert.equal((await b.call(`/api/companies/${fixture.c2}`)).status, 200);
+});
+
 // Last: these change B's membership.
 test('a demotion waits for an in-flight company write; then the viewer, and later the removed member, cannot write', async () => {
   const write = () => withCompany(fixture.bId, fixture.c2, 'write', client => client.query("UPDATE company SET time_zone = 'Asia/Riyadh' WHERE company_id = $1", [fixture.c2]));
   let demotion: Promise<{ status: number }> | undefined;
   let settled = false;
   await withCompany(fixture.bId, fixture.c2, 'write', async client => {
-    demotion = a.call(`/api/workspaces/${fixture.w2}/members/${fixture.bId}/role`, { role: 'viewer' }).then(result => { settled = true; return result; });
+    demotion = a.call(`/api/workspaces/${fixture.c2}/members/${fixture.bId}/role`, { role: 'viewer' }).then(result => { settled = true; return result; });
     await new Promise(resolve => setTimeout(resolve, 750));
     assert.equal(settled, false, 'the demotion cannot commit while the write that checked the old role is open');
     assert.equal((await client.query("UPDATE company SET time_zone = 'Asia/Riyadh' WHERE company_id = $1", [fixture.c2])).rowCount, 1);
@@ -182,7 +240,7 @@ test('a demotion waits for an in-flight company write; then the viewer, and late
   await assert.rejects(write(), refusedAsMissing, 'a viewer cannot write');
   assert.equal((await b.call(`/api/companies/${fixture.c2}`)).status, 200, 'a viewer still reads');
 
-  assert.equal((await a.call(`/api/workspaces/${fixture.w2}/members/${fixture.bId}/remove`, {})).status, 200);
+  assert.equal((await a.call(`/api/workspaces/${fixture.c2}/members/${fixture.bId}/remove`, {})).status, 200);
   await assert.rejects(write(), refusedAsMissing, 'a removed member cannot write');
   await assert.rejects(withCompany(fixture.bId, fixture.c2, 'read', async () => undefined), refusedAsMissing, 'a removed member cannot read');
   assert.deepEqual((await b.call(`/api/companies/${fixture.c2}`)).body, { error: companyNotFound });

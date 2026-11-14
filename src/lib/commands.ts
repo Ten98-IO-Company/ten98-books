@@ -31,7 +31,7 @@ export interface CommandDefinition {
 export const commands = {
   'help.keyboard': { title: 'Show keyboard shortcuts', context: 'global' },
   'nav.back': { title: 'Go back one level', context: 'global' },
-  'company.switch': { title: 'Choose another company', context: 'global' },
+  'company.switch': { title: 'Change company', context: 'global' },
 
   'menu.next': { title: 'Highlight the next item', context: 'company-home', bar: false },
   'menu.previous': { title: 'Highlight the previous item', context: 'company-home', bar: false },

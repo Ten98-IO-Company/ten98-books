@@ -34,7 +34,7 @@ type Posted = { date: string; ledger: string; signed: bigint; side: 'Dr' | 'Cr';
 test('random balanced vouchers: the trial balance sums to zero and equals an independent sum over the lines', async () => {
   const seed = Number(process.env.REPORTS_PROPERTY_SEED ?? 20261114);
   const next = random(seed);
-  const companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Random Books', booksBeginning: '2025-01-01' });
+  const companyId = await createCompany(owner.browser, { name: 'Random Books', booksBeginning: '2025-01-01' });
   const books = await chart(owner.browser, companyId);
   const specs = [
     ['Plant', 'fixed_assets', 'asset', { amount: '5000', side: 'Dr' as const }], ['Debtors One', 'receivables', 'asset', undefined],

@@ -16,7 +16,7 @@ const ids = { bank: '', capital: '', rent: '', sales: '', customer: '' };
 before(async () => {
   database = await freshDatabase('ledger_posting');
   owner = await setupOwner();
-  companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Rules Trading' });
+  companyId = await createCompany(owner.browser, { name: 'Rules Trading' });
   books = await chart(owner.browser, companyId);
   ids.bank = await addLedger(owner.browser, companyId, 'Main Bank', books.group('bank_accounts'), { amount: '5000', side: 'Dr' });
   ids.capital = await addLedger(owner.browser, companyId, 'Capital Account', books.group('capital'), { amount: '5000', side: 'Cr' });
@@ -37,7 +37,7 @@ const voucherCount = async () => Number((await asAdmin(database.adminUrl, admin 
 
 test('posting rules refuse bad vouchers with plain-language messages and write nothing', async () => {
   const cash = books.ledger('Cash');
-  const foreign = await createCompany(owner.browser, owner.workspaceId, { name: 'Other Books' });
+  const foreign = await createCompany(owner.browser, { name: 'Other Books' });
   const foreignCash = (await chart(owner.browser, foreign)).ledger('Cash');
   const cases: [string, Promise<{ status: number; body: any }>, number, RegExp][] = [
     ['unbalanced', attempt('payment', '2026-02-01', [[ids.rent, 'Dr', '100'], [cash, 'Cr', '90']]), 400, /Debits \(100\.00\) and credits \(90\.00\) must be equal/],
@@ -304,7 +304,7 @@ test('a locked period refuses new, altered, cancelled and deleted vouchers on or
 });
 
 test('openings are computed at report time: income and expense of earlier years carry into the profit and loss ledger', async () => {
-  const company = await createCompany(owner.browser, owner.workspaceId, { name: 'Two Years' });
+  const company = await createCompany(owner.browser, { name: 'Two Years' });
   const chartOf = await chart(owner.browser, company);
   const fees = await addLedger(owner.browser, company, 'Fees', chartOf.group('indirect_expenses'));
   const profitAndLoss = chartOf.ledger('Profit and Loss');
@@ -320,7 +320,7 @@ test('openings are computed at report time: income and expense of earlier years 
 });
 
 test('opening balances may be out of balance during setup; the trial balance shows the difference', async () => {
-  const company = await createCompany(owner.browser, owner.workspaceId, { name: 'Setting Up' });
+  const company = await createCompany(owner.browser, { name: 'Setting Up' });
   const chartOf = await chart(owner.browser, company);
   await addLedger(owner.browser, company, 'Setup Bank', chartOf.group('bank_accounts'), { amount: '750.50', side: 'Dr' });
   const report = (await owner.browser.call(`/api/companies/${company}/trial-balance?from=2026-01-01&to=2026-01-31`)).body.trialBalance;

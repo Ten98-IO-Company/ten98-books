@@ -5,14 +5,16 @@ import { FoundationError } from './auth.ts';
 import { getDatabase } from './db.ts';
 
 /**
- * Company tenancy (D-03). A company is a project of a workspace; every table that holds company data is listed here, has
- * forced row-level security on `current_setting('app.company_ids', true)` and is read and written only inside
- * `withCompany`. Better Auth, team and pg-boss tables stay outside row-level security.
+ * Company tenancy (D-03 as amended 2026-11-14). A company is a workspace: its id is the workspace id, its team is the
+ * workspace's members and their roles. Every table that holds company data is listed here, has forced row-level
+ * security on `current_setting('app.company_ids', true)` and is read and written only inside `withCompany` (or, for
+ * reads across the user's own companies, `withCompanies`). Better Auth, team and pg-boss tables stay outside it.
  */
 export const accountingTables = ['company', 'account_group', 'ledger', 'voucher_type', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log'] as const;
 
 export type CompanyMode = 'read' | 'write';
-export type CompanyAccess = { companyId: string; workspaceId: string; name: string; role: WorkspaceRole };
+/** The authorized company (workspace) with its name and the caller's role in it. */
+export type CompanyAccess = { companyId: string; name: string; role: WorkspaceRole };
 
 /** One answer for a missing company and for a company the user may not reach, so ids reveal nothing. */
 export const companyNotFound = 'Company not found or unavailable.';
@@ -25,45 +27,64 @@ export async function setCompanyScope(client: PoolClient, companyIds: readonly s
 }
 
 /**
- * Discover's projectAccess check, taken inside the transaction. The project row and the caller's membership row are
- * share-locked until commit (the team controller's caller-membership convention), so a removal or demotion waits for
- * an in-flight company transaction and cannot commit between this check and its writes.
+ * The caller's memberships among `companyIds`, taken inside the transaction. Each membership row is share-locked until
+ * commit (the team controller's caller-membership convention), so a removal or demotion waits for an in-flight company
+ * transaction and cannot commit between this check and its writes. The workspace row is not locked: team changes lock
+ * it first, and books transactions must not queue behind them or hold them up.
  */
-async function companyAccess(client: PoolClient, userId: string, companyId: string, mode: CompanyMode): Promise<CompanyAccess> {
-  if (!uuid.test(companyId)) throw new FoundationError(404, companyNotFound);
-  const { rows } = await client.query<{ id: string; workspace_id: string; name: string; role: WorkspaceRole }>(
-    `SELECT p.id, p.workspace_id, p.name, m.role FROM project p
-     JOIN membership m ON m.workspace_id = p.workspace_id AND m.user_id = $2
-     WHERE p.id = $1 FOR SHARE OF p, m`, [companyId.toLowerCase(), userId],
-  );
-  const row = rows[0];
-  if (!row || (mode === 'write' && !writers.includes(row.role))) throw new FoundationError(404, companyNotFound);
-  return { companyId: row.id, workspaceId: row.workspace_id, name: row.name, role: row.role };
+async function memberships(client: PoolClient, userId: string, companyIds: readonly string[]): Promise<CompanyAccess[]> {
+  const ids = companyIds.filter(id => uuid.test(id)).map(id => id.toLowerCase());
+  if (!ids.length) return [];
+  const { rows } = await client.query<CompanyAccess>(
+    `SELECT w.id AS "companyId", w.name, m.role FROM membership m JOIN workspace w ON w.id = m.workspace_id
+     WHERE m.user_id = $2 AND m.workspace_id = ANY ($1::text[]) ORDER BY w.created_at, w.id FOR SHARE OF m`, [ids, userId]);
+  return rows;
 }
 
-/**
- * Authorizes `userId` for `companyId` and runs `run` in one transaction whose row-level security admits that company
- * only. Every company-scoped read and write, HTTP or job, goes through here. `outer` joins a transaction the caller
- * already holds (company creation inserts the project first); the caller then owns commit and rollback.
- */
-export async function withCompany<T>(userId: string, companyId: string, mode: CompanyMode, run: (client: PoolClient, access: CompanyAccess) => Promise<T>, outer?: PoolClient): Promise<T> {
-  if (outer) {
-    const access = await companyAccess(outer, userId, companyId, mode);
-    await setCompanyScope(outer, [access.companyId]);
-    return run(outer, access);
-  }
+async function companyAccess(client: PoolClient, userId: string, companyId: string, mode: CompanyMode): Promise<CompanyAccess> {
+  const [access] = await memberships(client, userId, [companyId]);
+  if (!access || (mode === 'write' && !writers.includes(access.role))) throw new FoundationError(404, companyNotFound);
+  return access;
+}
+
+async function transaction<T>(run: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getDatabase().pool.connect();
   try {
     await client.query('BEGIN');
-    const access = await companyAccess(client, userId, companyId, mode);
-    await setCompanyScope(client, [access.companyId]);
-    const result = await run(client, access);
+    const result = await run(client);
     await client.query('COMMIT');
     return result;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
   } finally { client.release(); }
+}
+
+/**
+ * Authorizes `userId` as a member of company `companyId` (viewers read; editors, admins and owners write) and runs `run`
+ * in one transaction whose row-level security admits that company only. Every company-scoped read and write, HTTP or
+ * job, goes through here. `outer` joins a transaction the caller already holds (company creation inserts the workspace
+ * first); the caller then owns commit and rollback.
+ */
+export async function withCompany<T>(userId: string, companyId: string, mode: CompanyMode, run: (client: PoolClient, access: CompanyAccess) => Promise<T>, outer?: PoolClient): Promise<T> {
+  const scoped = async (client: PoolClient) => {
+    const access = await companyAccess(client, userId, companyId, mode);
+    await setCompanyScope(client, [access.companyId]);
+    return run(client, access);
+  };
+  return outer ? scoped(outer) : transaction(scoped);
+}
+
+/**
+ * For reads: runs `run` in one transaction scoped to those of `companyIds` the user is a member of (the company list, and
+ * later consolidated reports). Ids the user cannot reach are left out silently; `run` receives the ones admitted.
+ */
+export function withCompanies<T>(userId: string, companyIds: readonly string[], run: (client: PoolClient, access: CompanyAccess[]) => Promise<T>): Promise<T> {
+  return transaction(async client => {
+    const access = await memberships(client, userId, companyIds);
+    await setCompanyScope(client, access.map(item => item.companyId));
+    return run(client, access);
+  });
 }
 
 /** Operator-safe refusal: names the failed checks, never connection details. */
