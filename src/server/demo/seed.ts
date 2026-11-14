@@ -135,7 +135,26 @@ export function unmodelled(dataset: Dataset): string[] {
   note('vouchers.json', dataset.vouchers.flatMap(voucher => voucher.lines), 'voucher line(s)');
   const inventory = dataset.vouchers.filter(voucher => voucher.inventory?.length);
   if (inventory.length) lines.push(`vouchers.json: inventory on ${inventory.length} voucher(s), ${inventory.reduce((sum, voucher) => sum + voucher.inventory!.length, 0)} item line(s) (stock is not modelled)`);
+  // The features the line extras carry, counted: none of them is modelled, and the amounts are posted without them.
+  const lineExtras = dataset.vouchers.flatMap(voucher => voucher.lines.map(line => line.extras as Record<string, unknown> | undefined)).filter(extra => extra !== undefined);
+  const withKey = (key: string) => lineExtras.filter(extra => Array.isArray(extra[key]) ? (extra[key] as unknown[]).length > 0 : extra[key] !== undefined);
+  if (withKey('bills').length) lines.push(`vouchers.json: bill-wise allocations on ${withKey('bills').length} voucher line(s) (bills are not tracked)`);
+  if (withKey('costCentres').length) lines.push(`vouchers.json: cost centre allocations on ${withKey('costCentres').length} voucher line(s) (cost centres are not modelled)`);
+  const foreign = lineExtras.filter(extra => typeof extra.currency === 'string');
+  if (foreign.length) {
+    const byCurrency = foreign.reduce((counts, extra) => counts.set(extra.currency as string, (counts.get(extra.currency as string) ?? 0) + 1), new Map<string, number>());
+    lines.push(`vouchers.json: foreign-currency amounts on ${foreign.length} voucher line(s) (${[...byCurrency].map(([code, count]) => `${code} ${count}`).join(', ')}): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled`);
+  }
+  if (withKey('bank').length) lines.push(`vouchers.json: bank details (instrument and bank date) on ${withKey('bank').length} voucher line(s) (not modelled)`);
   for (const [file, content] of Object.entries(dataset.extraFiles)) {
+    if (file === 'costCategories.json') { lines.push(`costCategories.json: cost categories not yet supported (${(content as unknown[]).length})`); continue; }
+    if (file === 'costCentres.json') { lines.push(`costCentres.json: cost centres not yet supported (${(content as unknown[]).length} centre(s))`); continue; }
+    if (file === 'currencies.json') {
+      const list = content as { code: string; rates?: unknown[] }[];
+      lines.push(`currencies.json: foreign currencies not yet supported (${list.map(currency => currency.code).join(', ')}; ${list.reduce((sum, currency) => sum + (currency.rates?.length ?? 0), 0)} rate(s))`);
+      continue;
+    }
+    if (file === 'checkpoints.json') { lines.push('checkpoints.json: scenario checkpoint figures kept as they are (not compared)'); continue; }
     if (file !== 'items.json') { lines.push(`${file}: feature file not modelled (kept as is)`); continue; }
     const items = content as ItemsFile;
     const value = formatMoney(openingStockValue(items, dataset.company.minorUnits), dataset.company.minorUnits);

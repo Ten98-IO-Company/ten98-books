@@ -1,0 +1,27 @@
+[
+  {
+    "key": "showroom",
+    "name": "Showroom",
+    "category": "channel"
+  },
+  {
+    "key": "online",
+    "name": "Online",
+    "category": "channel"
+  },
+  {
+    "key": "p-north",
+    "name": "P-North",
+    "category": "projects"
+  },
+  {
+    "key": "p-south",
+    "name": "P-South",
+    "category": "projects"
+  },
+  {
+    "key": "p-east",
+    "name": "P-East",
+    "category": "projects"
+  }
+]

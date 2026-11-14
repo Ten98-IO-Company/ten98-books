@@ -446,3 +446,42 @@ test('a ledger expected.json lists at zero is not yet comparable only when its o
   assert.deepEqual(unexplained.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(),
     ['Closing balance of Bank', 'Closing balance of Promo', 'Voucher count (types ten98-books has)', 'Vouchers of type journal']);
 });
+
+/** A foreign-currency invoice the reference restates at the year-end rate: 100 USD booked at 3.67 and restated at 3.70. */
+const currencyDataset = (unrealised: string): Dataset => parseDataset({
+  company: { slug: 'fx-check', name: 'Fx Check', country: 'AE', baseCurrency: 'AED', minorUnits: 2, financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai', features: ['accounting', 'multiCurrency'] },
+  ledgers: [
+    { key: 'debtor-usd', name: 'Debtor USD', group: 'receivables' },
+    { key: 'sales', name: 'Sales', group: 'sales' },
+  ],
+  vouchers: [
+    { key: 'sales-1', type: 'sales', date: '2026-02-01', status: 'regular', postDated: false, narration: 'USD invoice', lines: [
+      { ledger: 'debtor-usd', side: 'Dr', amount: '367.00', extras: { currency: 'USD', currencyAmount: '100.00', rate: '3.67' } },
+      { ledger: 'sales', side: 'Cr', amount: '367.00', extras: { currency: 'USD', currencyAmount: '100.00', rate: '3.67' } },
+    ] },
+  ],
+  expected: {
+    period: { from: '2026-01-01', to: '2026-12-31' },
+    trialBalance: { totalDebit: '370.00', totalCredit: '370.00', ledgers: { 'debtor-usd': { closing: '370.00', side: 'Dr' }, sales: { closing: '367.00', side: 'Cr' } } },
+    exchangeDifferences: { realised: { amount: '0.00', side: 'Dr' }, unrealised: { amount: unrealised, side: 'Cr' } },
+  },
+  extraFiles: { 'currencies.json': [{ code: 'USD', name: 'US Dollar', rates: [{ kind: 'standard', date: '2026-01-01', rate: '3.67' }] }] },
+}, 'demo/fx-check');
+
+test('a foreign-currency restatement and an unrealised row that reconcile to the cent are not yet comparable, with the arithmetic; one that does not stays a difference', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const report = await seedDataset(user.userId, currencyDataset('3.00'));
+  assert.ok(report.skipped.includes('vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled'));
+  assert.ok(report.skipped.includes('currencies.json: foreign currencies not yet supported (USD; 1 rate(s))'));
+
+  const reconciled = await compareDataset(user.userId, currencyDataset('3.00'));
+  const pending = reconciled.lines.filter(line => line.reason).map(line => line.label).sort();
+  assert.deepEqual(pending, ['Closing balance of Debtor USD', 'Total credit', 'Total debit', 'Unrealised exchange-difference row (a separate row in the expected trial balance)']);
+  assert.deepEqual(reconciled.lines.filter(line => !line.ok && !line.reason), []);
+  assert.match(reconciled.lines.find(line => line.label === 'Total debit')!.reason!, /Expected total debit 370\.00 = app 367\.00 \+ restated ledgers 3\.00 \+ the row 0\.00; expected total credit 370\.00 = app 367\.00 \+ restated ledgers 0\.00 \+ the row 3\.00\. Without the row the expected totals would be 370\.00 and 367\.00, which do not balance/);
+
+  // The same figures with a row that does not account for the difference: nothing is explained, everything stays visible.
+  const off = await compareDataset(user.userId, currencyDataset('4.00'));
+  assert.deepEqual(off.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(), ['Closing balance of Debtor USD', 'Total credit', 'Total debit']);
+  assert.match(off.lines.find(line => line.label.startsWith('Unrealised'))!.reason!, /could not be reconciled with this row/);
+});

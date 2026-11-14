@@ -1,5 +1,5 @@
 {
-  "source": "Figures for Najd Electrical Supplies Co (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet is as at 2026-12-31. They were not produced by ten98-books.",
+  "source": "Figures for Najd Electrical Supplies Co (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet and pending bills are as at 2026-12-31. They were not produced by ten98-books.",
   "period": {
     "from": "2026-01-01",
     "to": "2026-12-31"
@@ -27,8 +27,28 @@
     "totalDebit": "2397413.38",
     "totalCredit": "2397413.38",
     "ledgers": {
+      "dune-crest-savings-account": {
+        "closing": "492339.60",
+        "side": "Dr"
+      },
+      "tuwaiq-plains-bank-current": {
+        "closing": "525.43",
+        "side": "Dr"
+      },
       "share-capital": {
         "closing": "886440.00",
+        "side": "Cr"
+      },
+      "petty-cash-showroom": {
+        "closing": "6000.00",
+        "side": "Cr"
+      },
+      "input-vat-15": {
+        "closing": "112250.13",
+        "side": "Dr"
+      },
+      "output-vat-15": {
+        "closing": "151860.89",
         "side": "Cr"
       },
       "accumulated-depreciation": {
@@ -45,14 +65,6 @@
       },
       "warehouse-equipment": {
         "closing": "90000.00",
-        "side": "Dr"
-      },
-      "sales-local": {
-        "closing": "1012405.52",
-        "side": "Cr"
-      },
-      "purchases-local": {
-        "closing": "748333.90",
         "side": "Dr"
       },
       "bank-charges": {
@@ -87,40 +99,56 @@
         "closing": "72000.00",
         "side": "Dr"
       },
+      "staff-gratuity-provision": {
+        "closing": "12800.00",
+        "side": "Cr"
+      },
+      "purchases-local": {
+        "closing": "748333.90",
+        "side": "Dr"
+      },
+      "sales-local": {
+        "closing": "1012405.52",
+        "side": "Cr"
+      },
+      "term-loan-tuwaiq-plains-bank": {
+        "closing": "200000.00",
+        "side": "Cr"
+      },
+      "hejaz-coast-cable-works": {
+        "closing": "36301.25",
+        "side": "Cr"
+      },
+      "shenzhen-brightline-trading-ltd": {
+        "closing": "44105.72",
+        "side": "Cr"
+      },
       "al-masar-contracting-est": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "riyadh-tech-solutions-co": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "hijaz-facilities-co": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "najd-lighting-gallery": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "qasr-hotels-group": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "eastern-builders-co": {
-        "closing": "0.00",
+        "closing": "19155.26",
         "side": "Dr"
       },
       "dhahran-electrical-works": {
-        "closing": "0.00",
+        "closing": "3000.00",
+        "side": "Cr"
+      },
+      "eastern-builders-co": {
+        "closing": "8164.08",
         "side": "Dr"
       },
-      "shenzhen-brightline-trading-ltd": {
-        "closing": "0.00",
+      "hijaz-facilities-co": {
+        "closing": "6450.12",
         "side": "Dr"
       },
-      "hejaz-coast-cable-works": {
-        "closing": "0.00",
+      "najd-lighting-gallery": {
+        "closing": "32463.81",
+        "side": "Dr"
+      },
+      "qasr-hotels-group": {
+        "closing": "3465.18",
+        "side": "Dr"
+      },
+      "riyadh-tech-solutions-co": {
+        "closing": "52915.19",
         "side": "Dr"
       },
       "dammam-switchgear-co": {
@@ -132,26 +160,6 @@
         "side": "Dr"
       },
       "najd-packaging-co": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "tuwaiq-plains-bank-current": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "dune-crest-savings-account": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "petty-cash-showroom": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "term-loan-tuwaiq-plains-bank": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "staff-gratuity-provision": {
         "closing": "0.00",
         "side": "Dr"
       },
@@ -202,14 +210,6 @@
       "round-off": {
         "closing": "0.00",
         "side": "Dr"
-      },
-      "output-vat-15": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "input-vat-15": {
-        "closing": "0.00",
-        "side": "Dr"
       }
     },
     "note": "stock value is not a ledger: opening stock 369440.0 is carried by items.json only"
@@ -219,7 +219,7 @@
     "grossProfit": "402044.76",
     "netProfit": "85134.08",
     "grossProfitExcludingStock": "264071.62",
-    "netProfitExcludingStock": "52839.06"
+    "netProfitExcludingStock": "-52839.06"
   },
   "balanceSheet": {
     "report": "Balance sheet as at 2026-12-31",
