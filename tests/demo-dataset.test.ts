@@ -710,3 +710,11 @@ test('a voucher cancelled without lines is a void and takes its number; one with
   const check = checkNumbers(dataset as never, new Map([['j1', 1], ['j2', 2], ['j3', 3]]));
   assert.deepEqual([check.checked, check.matched, check.differences], [3, 3, []], 'the void holds number 2, so j3 is number 3 and nothing is shifted');
 });
+
+test('a category and a centre, and a group and a ledger, may share a name: they are separate name spaces', () => {
+  const raw = good();
+  raw.groups.push({ key: 'rent-group', name: 'Rent', under: 'indirect_expenses' });
+  raw.ledgers.push({ key: 'rent', name: 'Rent', group: 'rent-group' });
+  raw.extraFiles = { 'costCategories.json': [{ key: 'north', name: 'North' }], 'costCentres.json': [{ key: 'north-centre', name: 'North', category: 'north' }] };
+  assert.deepEqual(problems(raw), []);
+});

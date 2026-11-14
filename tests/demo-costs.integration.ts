@@ -99,7 +99,7 @@ test('cost rows are posted, a void takes its number, the rows a ledger cannot ca
   const byLabel = Object.fromEntries(result.lines.filter(item => item.block.startsWith('Cost centres ')).map(item => [item.label, item]));
   assert.deepEqual([byLabel['Cost centre North'].expected, byLabel['Cost centre North'].actual, byLabel['Cost centre North'].ok], ['Dr 0.00 / Cr 420.00', 'Dr 0.00 / Cr 420.00', true]);
   assert.deepEqual([byLabel['Cost centre Job-1'].actual, byLabel['Cost centre Job-1'].ok], ['Dr 100.00 / Cr 500.00', true], 'a sub-centre is rolled into its top-most centre');
-  assert.match(byLabel['Cost centre Job 1A'].reason!, /rolls a sub-centre into its top-most centre/);
+  assert.deepEqual([byLabel['Cost centre Job 1A'].actual, byLabel['Cost centre Job 1A'].ok, byLabel['Cost centre Job 1A'].reason], ['Dr 100.00 / Cr 0.00', true, undefined], 'a sub-centre is read from its own break-up');
   assert.equal(result.lines.find(item => item.label === 'Voucher count (types ten98-books has)')!.ok, true, 'the void is counted');
   assert.deepEqual((await companyVoucherNumbers(user.userId, report.companyId)).filter(item => item.startsWith('receipt')), ['receipt 1 cancelled', 'receipt 2 regular']);
 
@@ -175,4 +175,17 @@ test('a company seeded before cost rows were sent keeps its vouchers as posted, 
   (changed.vouchers[2].lines[0] as { amount: string }).amount = '101.00';
   (changed.vouchers[2].lines[1] as { amount: string }).amount = '101.00';
   await assert.rejects(() => seedDataset(user.userId, changed), /already used for a different voucher/);
+});
+
+test('a sub-centre is compared on its own break-up: a gap is a difference, and an expected zero is not a match while the books hold a figure', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const wrong: Centres = { 'job-1': { debit: '100.00', credit: '500.00' }, 'job-1a': { debit: '90.00', credit: '0.00' } };
+  await seedDataset(user.userId, costsDataset(wrong));
+  const gap = await compareDataset(user.userId, costsDataset(wrong));
+  const sub = gap.lines.find(item => item.label === 'Cost centre Job 1A')!;
+  assert.deepEqual([sub.ok, sub.reason, sub.actual, sub.difference], [false, undefined, 'Dr 100.00 / Cr 0.00', 'Dr 10.00 / Cr 0.00']);
+  const zero = await compareDataset(user.userId, costsDataset({ 'job-1a': { debit: '0.00', credit: '0.00' } }));
+  assert.deepEqual([zero.lines.find(item => item.label === 'Cost centre Job 1A')!.ok, zero.differences], [false, 1]);
+  const exact = await compareDataset(user.userId, costsDataset({ 'job-1a': { debit: '100.00', credit: '0.00' } }));
+  assert.equal(exact.lines.find(item => item.label === 'Cost centre Job 1A')!.ok, true);
 });

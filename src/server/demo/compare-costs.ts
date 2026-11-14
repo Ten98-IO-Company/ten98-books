@@ -1,8 +1,9 @@
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime';
 import { nameMatchKey } from '../../lib/names.ts';
 import type { LedgerContext } from '../ledger/context.ts';
+import { listCostCentres } from '../ledger/cost-centres.ts';
 import { listLedgers } from '../ledger/masters.ts';
-import { costCategorySummary } from '../reports/cost-centres.ts';
+import { costCategorySummary, costCentreBreakup } from '../reports/cost-centres.ts';
 import { readLineCosts } from './cost-rows.ts';
 import type { CompareLine } from './compare.ts';
 import { toMinor, type Dataset } from './dataset.ts';
@@ -10,7 +11,9 @@ import { toMinor, type Dataset } from './dataset.ts';
 /**
  * The cost centre figures of expected.json (each centre's debit and credit for the period) and of the scenario
  * checkpoints (from the start of the period to each date), compared with the cost category summary of the seeded company.
- * A centre is compared on its two totals, one line per centre and range. A difference is never adjusted away: when the
+ * A centre is compared on its two totals, one line per centre and range. A top-level centre is read from the summary; a centre
+ * that sits under another is not listed there (the summary rolls it into its top-most centre), so it is read from its own
+ * break-up report, whose totals are the centre's own rows and those of its sub-centres. A difference is never adjusted away: when the
  * dataset's own rows explain part of the gap (rows the ledger module left out because their ledger takes no cost
  * centres, or vouchers that are not in the books) the line names those vouchers, and stays a difference.
  */
@@ -44,6 +47,7 @@ export async function compareCosts(context: LedgerContext, dataset: Dataset, see
     const entry = dataset.ledgers.find(item => item.key === ledgerKey)!;
     return stored.find(item => entry.standard ? item.systemKey === entry.standard : nameMatchKey(item.name) === nameMatchKey(entry.name))?.costCentres === true;
   };
+  const centreIds = new Map((await listCostCentres(context)).map(centre => [nameMatchKey(centre.name), centre.id]));
   const lines: CompareLine[] = [];
   for (const { block, from, to, centres } of ranges) {
     const summary = await costCategorySummary(context, { from, to });
@@ -51,14 +55,15 @@ export async function compareCosts(context: LedgerContext, dataset: Dataset, see
     for (const [key, figure] of Object.entries(centres)) {
       const entry = entries.find(item => item.key === key)!;
       const [wantedDebit, wantedCredit] = [toMinor(figure.debit, exponent), toMinor(figure.credit, exponent)];
-      const got = actual.get(nameMatchKey(entry.name)) ?? { debit: 0n, credit: 0n };
+      const centreId = centreIds.get(nameMatchKey(entry.name));
+      if (centreId === undefined) { lines.push({ block, label: `Cost centre ${entry.name}`, expected: both(wantedDebit, wantedCredit), actual: 'centre missing', difference: 'n/a', ok: false }); continue; }
+      // A sub-centre has its own figure in its break-up; a top-level centre with no figures in the period has no row in the summary and reads as zero.
+      const got = entry.parent !== undefined ? (await costCentreBreakup(context, centreId, { from, to })).totals : actual.get(nameMatchKey(entry.name)) ?? { debit: 0n, credit: 0n };
       const [differenceDebit, differenceCredit] = [subtractMoney(got.debit, wantedDebit), subtractMoney(got.credit, wantedCredit)];
       const ok = differenceDebit === 0n && differenceCredit === 0n;
       const line: CompareLine = { block, label: `Cost centre ${entry.name}`, expected: both(wantedDebit, wantedCredit), actual: both(got.debit, got.credit),
         difference: both(differenceDebit, differenceCredit), ok };
-      if (entry.parent !== undefined) {
-        line.reason = `the centre sits under "${entries.find(item => item.key === entry.parent)?.name}": the summary rolls a sub-centre into its top-most centre, so its own figure is not listed`;
-      } else if (!ok) {
+      if (!ok) {
         // The vouchers of the dataset with rows on this centre that the books cannot show: not seeded, or on a ledger that takes no centres.
         const unreproduced = dataset.vouchers.filter(voucher => voucher.status === 'regular' && voucher.date >= from && voucher.date <= to
           && voucher.lines.some(row => readLineCosts(row.extras).some(cost => cost.centre === key) && (!seeded.has(voucher.key) || !takesCentres(row.ledger)))).map(voucher => voucher.key);

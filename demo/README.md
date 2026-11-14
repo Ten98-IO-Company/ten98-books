@@ -62,7 +62,7 @@ One folder per company, named by its slug. Amounts are plain decimal strings wit
   "financialYearStart": { "month": 1, "day": 1 }, "booksBeginning": "2026-01-01", "timeZone": "Asia/Dubai", "features": ["accounting"] }
 ```
 
-`slug` equals the folder name. `baseCurrency` must be one ten98-books supports and `minorUnits` that currency's (2 or 3); `timeZone` is a named zone. `features` lists the areas the dataset uses; ten98-books models `accounting` only and lists any other as skipped. `extras` is allowed.
+`slug` equals the folder name. `baseCurrency` must be one ten98-books supports and `minorUnits` that currency's (2 or 3); `timeZone` is a named zone. `features` lists the areas the dataset uses; ten98-books models `accounting`, `billWise` and `costCentres` and lists any other (`inventory`, `multiCurrency`, ...) as skipped. `extras` is allowed.
 
 ### `groups.json` (optional)
 

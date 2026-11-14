@@ -385,8 +385,10 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         narration: voucher.narration ?? null, status: disposition === 'void' ? 'cancelled' : voucher.status === 'optional' ? 'optional' : 'regular', postDated: voucher.postDated,
         lines: lines.map((line): PostedLine => shape === 'full' ? line : { ledgerId: line.ledgerId, side: line.side, amount: line.amount, ...shape === 'withoutCost' && line.bills ? { bills: line.bills } : {} }),
       });
-      const send = (body: ReturnType<typeof payload>) => runLedger(userId, companyId, 'write', async context => {
+      const send = (body: ReturnType<typeof payload>, shape: Shape) => runLedger(userId, companyId, 'write', async context => {
         let { voucher: posted, replayed, warnings } = await createVoucher(context, body);
+        // A shape other than the complete voucher may only replay a stored voucher: refused here, inside the transaction, so it rolls back and can never post a new one.
+        if (shape !== 'full' && !replayed) throw new FoundationError(409, 'This request key was already used for a different voucher.', 'idempotency_mismatch');
         if (!replayed) {
           report.bills.rowsPosted += body.lines.reduce((sum, line) => sum + (line.bills?.length ?? 0), 0);
           let sentCostRows = body.lines.reduce((sum, line) => sum + (line.costAllocations?.length ?? 0), 0);
@@ -416,7 +418,7 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
       let first: unknown;
       let used: Shape = 'full';
       for (const shape of shapes) {
-        try { done = await send(payload(shape)); used = shape; break; }
+        try { done = await send(payload(shape), shape); used = shape; break; }
         catch (error) {
           if (shape === 'full') first = error;
           if (!(error instanceof FoundationError && error.code === 'idempotency_mismatch') || shape === shapes[shapes.length - 1]) throw shape === 'full' ? error : first;
@@ -424,7 +426,6 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
       }
       if (!done) throw first;
       if (used !== 'full') {
-        if (!done.replayed) throw first;
         if (used === 'plain' && hasBills) report.bills.keptWithoutBills.push(voucher.key);
         if (hasCosts) report.costs.keptWithoutCostRows.push(voucher.key);
       }
