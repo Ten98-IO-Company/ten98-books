@@ -3,19 +3,21 @@ import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { api } from '../../lib/api'
+import { yesNo } from '../../lib/lookup-entry'
 import { useCompany } from '../../lib/app-context'
 import type { Nature } from '../../lib/ledger'
 import {
   emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, isolate, natureLockReason, natureSingular,
-  parentReason, primaryChoice, resolveLookup, validateGroupForm, type Choice, type GroupField, type GroupFormAction, type GroupFormValues, type GroupRow, type LedgerRow,
+  parentReason, primaryChoice, validateGroupForm, type Choice, type GroupField, type GroupFormAction, type GroupFormValues, type GroupRow, type LedgerRow,
 } from '../../lib/masters'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
+import { EntryScope, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import { LookupField } from './LookupField'
 import { useCanWrite } from './useCanWrite'
+import { useEntryLookups, type LookupSpec } from './useEntryLookups'
 
 const natureChoices: Choice[] = (['asset', 'liability', 'income', 'expense'] as const).map(value => ({ value, label: natureSingular[value] }))
-const yesNo: Choice[] = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
+const yesNoChoices: Choice[] = [...yesNo]
 
 export type MasterFormProps<T> = {
   groups: GroupRow[]
@@ -73,54 +75,29 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
 
   // What each lookup offers, how a chosen value changes the form, and what a blank field says.
-  const lookups: Record<LookupName, { options: Choice[]; current: (from: GroupFormValues) => string; actions: (value: string, from: GroupFormValues) => GroupFormAction[]; blank: string }> = {
+  const lookups: Record<LookupName, LookupSpec<GroupFormValues, GroupFormAction>> = {
     parentId: {
       options: parentChoices, current: from => from.parentId, blank: 'Choose the group this one sits under, or Primary.',
       // Moving a group to the top keeps its own nature unless the form already names one.
       actions: (value, from) => [{ type: 'set', field: 'parentId', value }, ...value === primaryChoice && existing && !from.nature ? [{ type: 'set', field: 'nature', value: existing.nature } as const] : []],
     },
     nature: { options: natureChoices, current: from => from.nature, actions: value => [{ type: 'set', field: 'nature', value: value as Nature }], blank: 'Choose the nature of a primary group.' },
-    grossProfit: { options: yesNo, current: from => from.grossProfit ? 'yes' : 'no', actions: value => [{ type: 'set', field: 'grossProfit', value: value === 'yes' }], blank: 'Choose Yes or No.' },
+    grossProfit: { options: yesNoChoices, current: from => from.grossProfit ? 'yes' : 'no', actions: value => [{ type: 'set', field: 'grossProfit', value: value === 'yes' }], blank: 'Choose Yes or No.' },
   }
 
-  /** Applies what was typed in one lookup to `from`: its single matching choice, or an error on that field (null). */
-  function settle(field: LookupName, text: string, from: GroupFormValues): GroupFormValues | null {
-    const lookup = lookups[field]
-    const result = resolveLookup(lookup.options, text, lookup.current(from))
-    const error = 'error' in result ? result.error : result.value === '' ? lookup.blank : ''
-    if (error) { setErrors(previous => ({ ...previous, [field]: error })); return null }
-    setErrors(previous => ({ ...previous, [field]: undefined }))
-    if ('error' in result || result.value === lookup.current(from)) return from
-    let next = from
-    for (const action of lookup.actions(result.value, from)) { next = groupFormReducer(next, action); dispatch(action) }
-    return next
-  }
-
-  /** Typed lookup text with no row highlighted, on Enter or the accept chord: pick the one choice it names or show the error here. */
-  function typedEnter(field: LookupName, text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
-    const lookup = lookups[field]
-    const result = resolveLookup(lookup.options, text, lookup.current(values))
-    if ('value' in result && result.value === lookup.current(values)) return 'unchanged'
-    if (!settle(field, text, values)) return 'error'
-    // On Enter a pick moves on, as after a highlighted row, once the new value is on screen.
-    if (advance) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
-    return 'picked'
-  }
+  const entryLookups = useEntryLookups({
+    form, values, reduce: groupFormReducer, dispatch, specs: lookups, order: lookupOrder, shown: (field, from) => groupFields(from).includes(field), setErrors,
+    advance: field => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) },
+  })
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
   function prepare(): GroupFormValues | null {
-    let next = values
-    for (const field of lookupOrder) {
-      const text = entryText(form.current, field)
-      if (text === null || !groupFields(next).includes(field)) continue
-      const settled = settle(field, text, next)
-      if (!settled) { focusEntryField(form.current, field); return null }
-      next = settled
-    }
-    const found = validateGroupForm(next, parentIds)
+    const settled = entryLookups.settleAll()
+    if (!settled) return null
+    const found = validateGroupForm(settled, parentIds)
     setErrors(found)
     if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return null }
-    return next
+    return settled
   }
 
   async function save() {
@@ -166,7 +143,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
 
   useEntryCommands({
     form, readOnly,
-    onLeaveField: (name, text) => name in lookups ? settle(name as LookupName, text, values) !== null : true,
+    onLeaveField: (name, text) => entryLookups.isLookup(name) ? entryLookups.settle(name, text, values) !== null : true,
     onLastField: askToSave, onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/group/$groupId', params: { companyId: company.id, groupId: existing.id } }) : undefined,
@@ -195,15 +172,15 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
       <Stack data-entry-field='parentId'>
         <LookupField label='Under' options={parentChoices} value={values.parentId} disabled={readOnly} required error={errors.parentId}
           description={values.parentId === primaryChoice ? 'A primary group sits at the top of the chart and has its own nature.' : parent ? `Takes the nature of its parent: ${natureSingular[parent.nature]}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} onTypedEnter={(text, advance) => typedEnter('parentId', text, advance)} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} onTypedEnter={(text, advance) => entryLookups.typedEnter('parentId', text, advance)} />
       </Stack>
       {fields.includes('nature') && <Stack data-entry-field='nature'>
         <LookupField label='Nature' options={natureChoices} value={values.nature} disabled={readOnly || natureLock !== null} required error={errors.nature}
-          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} onTypedEnter={(text, advance) => typedEnter('nature', text, advance)} />
+          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} onTypedEnter={(text, advance) => entryLookups.typedEnter('nature', text, advance)} />
       </Stack>}
       {fields.includes('grossProfit') && <Stack data-entry-field='grossProfit'>
-        <LookupField label='Counts towards gross profit' options={yesNo} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly} error={errors.grossProfit}
-          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} onTypedEnter={(text, advance) => typedEnter('grossProfit', text, advance)} />
+        <LookupField label='Counts towards gross profit' options={yesNoChoices} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly} error={errors.grossProfit}
+          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} onTypedEnter={(text, advance) => entryLookups.typedEnter('grossProfit', text, advance)} />
       </Stack>}
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>

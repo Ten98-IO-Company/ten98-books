@@ -267,6 +267,7 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
     { id: 'masters', label: 'Masters', items: [
       ...canWrite ? [item('home.new-master', '/app/c/$companyId/masters/new'), item('home.edit-master', '/app/c/$companyId/masters/edit')] : [],
       item('home.chart-of-accounts', '/app/c/$companyId/masters/chart-of-accounts'),
+      item('home.cost-centres', '/app/c/$companyId/masters/cost-centres'),
     ] },
     { id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] },
     ...reportMenuGroups(report => go(reportRoutes[report])),
