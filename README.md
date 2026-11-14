@@ -4,6 +4,7 @@ Web accounting for GCC businesses on the Ten98 stack: double-entry books, invent
 
 - [Contributor rules](AGENTS.md)
 - [Decisions](docs/DECISIONS.md)
+- [Roadmap and status](docs/ROADMAP.md)
 - [Company model and tenancy](docs/TENANCY.md): a workspace is one company with its own team and roles
 - [Keyboard commands](docs/KEYBOARD.md)
 - [Ledger core](docs/LEDGER.md): data model, posting rules, numbering and the HTTP API of the double-entry books
