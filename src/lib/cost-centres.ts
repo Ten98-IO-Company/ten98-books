@@ -48,7 +48,8 @@ export type CostFigures = { opening: bigint; debit: bigint; credit: bigint; clos
 export type CostSummaryCentre = CostFigures & { costCentreId: string; name: string };
 export type CostSummaryCategory = CostFigures & { categoryId: string; name: string; centres: CostSummaryCentre[] };
 /**
- * The cost category summary: per category (as each centre stands today), its top-level centres (no parent) with every
+ * The cost category summary: per category (as each centre stands today), its top-level centres (no parent) that have
+ * figures for the period (observed: centres and categories without figures have no row), with every
  * sub-centre folded in, whatever the sub-centres' own categories (observed); the category's figures are the sum of its
  * centres' (a total of our own: the reference's cost reports show none).
  */

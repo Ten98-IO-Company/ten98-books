@@ -132,8 +132,8 @@ const lockCentreTree = (context: LedgerContext) => context.client.query('SELECT 
 
 /**
  * A centre placed under a parent (created there, or moved) must be in the parent's category. A centre that changes
- * category and keeps its parent may end up in another category than the parent (observed); it then counts as a root of
- * its own category in the reports.
+ * category and keeps its parent may end up in another category than the parent (observed); the reports still count it
+ * in its top-level ancestor's row, in that ancestor's category (observed).
  */
 async function assertPlacement(context: LedgerContext, categoryId: string, parentId: string | null): Promise<void> {
   await readCostCategory(context, categoryId).catch(missingAs(ledgerError(400, 'The cost category was not found.', 'not_found')));
@@ -226,7 +226,7 @@ export type StoredCostRow = { lineNo: number; ledgerId: string; categoryId: stri
 export type CostRow = StoredCostRow;
 export type CostPlan = { rows: CostRow[]; warnings: BillWarning[] };
 
-const warning = (code: BillWarning['code'], line: number, amount: bigint | null = null): BillWarning =>
+const warning = (code: BillWarning['code'], line: number | null, amount: bigint | null = null): BillWarning =>
   ({ code, line, billId: null, billName: null, amount });
 const towards = (row: { side: Side; amount: bigint }, side: Side) => row.side === side ? row.amount : subtractMoney(0n, row.amount);
 
@@ -239,8 +239,9 @@ export async function storedCostRows(context: LedgerContext, voucherId: string):
 
 /**
  * Applies the cost rules to a voucher's lines. A line takes rows when the company keeps cost centres and its ledger
- * takes them; otherwise sent rows are dropped (`cost_ignored`), except on an alter of a line that already had rows (same
- * line number and ledger): rows sent are then accepted (`cost_kept`); with the list left out the earlier rows are kept,
+ * takes them; otherwise sent rows are dropped (`cost_ignored`), except on an alter of a line that already had rows (the
+ * same line number and ledger, else the first unclaimed stored line of its ledger): rows sent are then accepted
+ * (`cost_kept`); with the list left out the earlier rows are kept,
  * the last row of each category taking the difference to a changed line amount (`cost_rebalanced`; its side turns when
  * the difference passes it, and a row reaching zero is dropped); an empty list drops them (`cost_dropped`). Observed:
  * the reference keeps such rows in its reports and drops them silently when the voucher is saved again; keeping them
@@ -255,16 +256,44 @@ export async function planCost(context: LedgerContext, lines: CostLine[], stored
   const rows: CostRow[] = [];
   const warnings: BillWarning[] = [];
   const accepted: { line: CostLine; sent: CostAllocationInput[] }[] = [];
+  const takes = (line: CostLine) => costCentresEnabled && line.costCentres;
+
+  // Which stored line each line inherits its earlier rows from: the same line number and ledger first; then a line
+  // left without a match takes the first unclaimed stored line of its ledger (lines inserted or removed above it).
+  const storedLines = [...new Set(stored.map(row => row.lineNo))];
+  const ledgerOf = new Map(stored.map(row => [row.lineNo, row.ledgerId]));
+  const claimed = new Set<number>(), source = new Map<CostLine, number>();
+  for (const line of lines) if (ledgerOf.get(line.lineNo) === line.ledgerId) { source.set(line, line.lineNo); claimed.add(line.lineNo); }
+  for (const line of lines) {
+    if (source.has(line) || takes(line)) continue;
+    const original = storedLines.find(lineNo => !claimed.has(lineNo) && ledgerOf.get(lineNo) === line.ledgerId);
+    if (original !== undefined) { source.set(line, original); claimed.add(original); }
+  }
+
   for (const line of lines) {
     const sent = line.costAllocations ?? [];
-    const earlier = stored.filter(row => row.lineNo === line.lineNo && row.ledgerId === line.ledgerId);
-    if (costCentresEnabled && line.costCentres) { if (sent.length) accepted.push({ line, sent }); continue; }
+    if (takes(line)) { if (sent.length) accepted.push({ line, sent }); continue; }
+    const original = source.get(line);
+    const earlier = original === undefined ? [] : stored.filter(row => row.lineNo === original);
     if (!earlier.length) { if (sent.length) warnings.push(warning('cost_ignored', line.lineNo)); continue; }
     if (sent.length) { accepted.push({ line, sent }); warnings.push(warning('cost_kept', line.lineNo)); continue; }
     // Declared difference: the reference drops such rows without a word when the voucher is saved again. Here rows
     // are dropped only when the body says so with an empty list.
     if (line.costAllocations) { warnings.push(warning('cost_dropped', line.lineNo)); continue; }
     rows.push(...rebalance(line, earlier, warnings));
+  }
+  // Stored rows no line carried (their line was removed, or its ledger changed): on a ledger that takes cost centres the
+  // body states the rows whole, as for any line; otherwise they are dropped, and the answer says so.
+  const unclaimed = storedLines.filter(lineNo => !claimed.has(lineNo));
+  if (unclaimed.length) {
+    const taking = new Set(lines.filter(takes).map(line => line.ledgerId));
+    const elsewhere = [...new Set(unclaimed.map(lineNo => ledgerOf.get(lineNo)!))].filter(id => !lines.some(line => line.ledgerId === id));
+    if (costCentresEnabled && elsewhere.length) {
+      const { rows: flags } = await context.client.query<{ id: string }>('SELECT id FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[]) AND cost_centres',
+        [context.company.companyId, elsewhere]);
+      for (const flag of flags) taking.add(flag.id);
+    }
+    for (const lineNo of unclaimed) if (!taking.has(ledgerOf.get(lineNo)!)) warnings.push(warning('cost_dropped', null));
   }
 
   const centreIds = [...new Set([...accepted.flatMap(({ sent }) => sent.map(row => row.costCentreId)), ...rows.map(row => row.costCentreId)])].sort();

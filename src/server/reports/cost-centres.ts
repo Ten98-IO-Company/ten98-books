@@ -82,16 +82,18 @@ export async function costCategorySummary(context: LedgerContext, value: unknown
   const roots = rootsOf(list);
   const figures = new Map(list.filter(centre => roots.get(centre.id) === centre.id).map(centre => [centre.id, zero()]));
   for (const own of await ownFigures(context, query.from, query.to)) add(figures.get(roots.get(own.centreId)!)!, own);
+  // Observed: a centre, or a category, with no figures for the period has no row.
+  const hasFigures = (row: CostFigures) => row.opening !== 0n || row.debit !== 0n || row.credit !== 0n;
   return {
     from: query.from, to: query.to,
-    categories: categories.map((category): CostSummaryCategory => {
+    categories: categories.flatMap((category): CostSummaryCategory[] => {
       const total = zero();
-      const centresOf = list.filter(centre => centre.categoryId === category.id && figures.has(centre.id)).sort(byName).map(centre => {
+      const centresOf = list.filter(centre => centre.categoryId === category.id && figures.has(centre.id) && hasFigures(figures.get(centre.id)!)).sort(byName).map(centre => {
         const own = figures.get(centre.id)!;
         add(total, own);
         return { costCentreId: centre.id, name: centre.name, ...own };
       });
-      return { categoryId: category.id, name: category.name, ...total, centres: centresOf };
+      return centresOf.length ? [{ categoryId: category.id, name: category.name, ...total, centres: centresOf }] : [];
     }),
   };
 }

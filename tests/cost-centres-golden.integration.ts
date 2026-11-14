@@ -2,17 +2,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { getDatabase } from '../src/server/db.ts';
-import { demoRoot, loadDataset, toMinor, type Dataset } from '../src/server/demo/dataset.ts';
+import { demoRoot, loadDataset, type Dataset } from '../src/server/demo/dataset.ts';
 import { seedDataset, voucherKeyPrefix } from '../src/server/demo/seed.ts';
-import { setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
  * Golden: the harbourview demo company (two cost categories, five centres, 71 lines with centres, 11 of them on foreign
- * currency lines at their base amounts) loaded inside the test, its categories, centres and allocation rows added as the
- * application role (the demo seeder does not model them yet), then the cost category summary compared with
+ * currency lines at their base amounts) loaded inside the test, its categories and centres created and each voucher's
+ * allocation rows added by altering it through the API (the demo seeder does not model them yet), then the cost category summary compared with
  * `expected.json` for 2026 and with `checkpoints.json` at its two dates. Optional and cancelled vouchers do not count.
  */
 let database: TestDatabase;
@@ -54,33 +52,40 @@ before(async () => {
     'SELECT idempotency_key AS key, id, status FROM voucher WHERE company_id = $1 AND starts_with(idempotency_key, $2)', [companyId, prefix]))).rows
     .map(row => [row.key.slice(prefix.length), row]));
   const ledgerIds = new Map((await call('/ledgers')).body.ledgers.map((ledger: { id: string; name: string; costCentres: boolean }) => [ledger.name, ledger]));
-  const client = await getDatabase().pool.connect();
-  try {
-    await client.query('BEGIN');
-    await setCompanyScope(client, [companyId]);
-    for (const voucher of dataset.vouchers) {
-      const stored = posted.get(voucher.key);
-      for (const [index, line] of voucher.lines.entries()) {
-        const extras = line.extras as { costCentres?: CostLine[]; currency?: string } | undefined;
-        if (!extras?.costCentres) continue;
-        counted.lines++;
-        if (!stored) continue;
-        // Rows of a cancelled voucher are frozen: it was cancelled by the seeder, so it keeps none (it counts nowhere anyway).
-        if (stored.status === 'cancelled') { counted.cancelled++; continue; }
-        if (extras.currency && extras.currency !== dataset.company.baseCurrency) counted.foreign++;
-        if (stored.status === 'optional') counted.optional++;
-        const ledgerName = dataset.ledgers.find(entry => entry.key === line.ledger)!.name;
-        assert.equal((ledgerIds.get(ledgerName) as { costCentres: boolean }).costCentres, true, `${ledgerName} takes cost centres`);
-        for (const row of extras.costCentres) {
-          await client.query(`INSERT INTO cost_allocation (company_id, voucher_id, line_no, ledger_id, category_id, cost_centre_id, side, amount)
-            SELECT $1, $2, $3, l.ledger_id, $4, $5, l.side, $6 FROM voucher_line l WHERE l.company_id = $1 AND l.voucher_id = $2 AND l.line_no = $3`,
-          [companyId, stored.id, index + 1, centres[row.centre].category, centres[row.centre].id, toMinor(row.amount, dataset.company.minorUnits as 2)]);
+  // Each voucher with centres is altered through the posting path, re-sent as read with its lines' cost rows added, so
+  // the rows pass the posting rules (planCost) and the database's per-line check.
+  for (const voucher of dataset.vouchers) {
+    const lines = voucher.lines.map(line => (line.extras as { costCentres?: CostLine[]; currency?: string } | undefined));
+    if (!lines.some(extras => extras?.costCentres)) continue;
+    counted.lines += lines.filter(extras => extras?.costCentres).length;
+    const stored = posted.get(voucher.key);
+    if (!stored) continue;
+    // A cancelled voucher's rows are frozen and it counts nowhere: it stays without rows.
+    if (stored.status === 'cancelled') { counted.cancelled += lines.filter(extras => extras?.costCentres).length; continue; }
+    counted.foreign += lines.filter(extras => extras?.costCentres && extras.currency && extras.currency !== dataset.company.baseCurrency).length;
+    if (stored.status === 'optional') counted.optional += lines.filter(extras => extras?.costCentres).length;
+    const read = (await call(`/vouchers/${stored.id}`)).body.voucher;
+    const body = {
+      date: read.date, narration: read.narration, status: read.status, postDated: read.postDated, reference: read.reference, referenceDate: read.referenceDate,
+      revision: read.revision,
+      lines: read.lines.map((line: any, index: number) => {
+        const extras = lines[index];
+        if (extras?.costCentres) {
+          const ledgerName = dataset.ledgers.find(entry => entry.key === voucher.lines[index].ledger)!.name;
+          assert.equal((ledgerIds.get(ledgerName) as { costCentres: boolean }).costCentres, true, `${ledgerName} takes cost centres`);
         }
-      }
-    }
-    // The database's per-line check accepts every line: each category adds up to the line's base amount.
-    await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+        return {
+          ledgerId: line.ledgerId, side: line.side, amount: line.amount,
+          bills: line.bills.map((row: any) => ({ kind: row.kind, amount: row.amount, side: row.side, ...(row.kind === 'on_account' ? {} : { name: row.billName }),
+            ...(row.kind === 'new_ref' || row.kind === 'advance' ? { creditPeriod: row.creditPeriod ?? { dueDate: row.dueDate } } : {}) })),
+          ...(extras?.costCentres ? { costAllocations: extras.costCentres.map(row => ({ costCentreId: centres[row.centre].id, amount: row.amount })) } : {}),
+        };
+      }),
+    };
+    const altered = await call(`/vouchers/${stored.id}`, body);
+    assert.equal(altered.status, 200, `${voucher.key}: ${JSON.stringify(altered.body)}`);
+    assert.deepEqual(altered.body.warnings.filter((item: { code: string }) => item.code.startsWith('cost_')), [], voucher.key);
+  }
 });
 after(async () => { await database?.drop(); });
 

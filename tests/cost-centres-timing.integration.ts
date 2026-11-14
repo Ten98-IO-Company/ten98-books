@@ -4,7 +4,7 @@ import { after, before, test } from 'node:test';
 import type { PoolClient } from 'pg';
 import { alterVoucher, createVoucher, readVoucher } from '../src/server/ledger/vouchers.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { chart, createCompany, inCompany, setupOwner, type Chart, type Member } from './helpers/ledger.ts';
+import { asAdmin, chart, createCompany, inCompany, setupOwner, type Chart, type Member } from './helpers/ledger.ts';
 
 /**
  * The cost of the per-line check (M2a slice 2): a 500-line voucher with a row in each of two categories on every line
@@ -52,27 +52,30 @@ const counters = async (client: PoolClient): Promise<Counters> => {
 };
 const delta = (after: Counters, before: Counters) => Object.fromEntries(Object.keys(after).map(key => [key, after[key as keyof Counters] - before[key as keyof Counters]])) as Counters;
 
-test('each deferred check reads only its own line\'s rows: 1,000 checks fetch 2,000 rows by index and scan nothing, on post and on alter', async t => {
+test('each deferred check reads only its own line\'s rows: 1,000 checks fetch 2,000 rows by index and scan nothing, on post and on alter, with and without table statistics', async t => {
+  for (const tables of ['without statistics', 'analysed'] as const) {
+  if (tables === 'analysed') await asAdmin(database.adminUrl, admin => admin.query('ANALYZE cost_allocation'));
   await inCompany(owner.userId, companyId, async context => {
     const posted = await createVoucher(context, body(true));
     let start = await counters(context.client);
     let started = performance.now();
     await context.client.query('SET CONSTRAINTS ALL IMMEDIATE');
-    t.diagnostic(`the deferred checks of the post (500 lines, 1,000 cost rows): ${(performance.now() - started).toFixed(0)} ms`);
+    t.diagnostic(`${tables}: the deferred checks of the post (500 lines, 1,000 cost rows): ${(performance.now() - started).toFixed(0)} ms`);
     const post = delta(await counters(context.client), start);
     // One check per inserted row, each fetching that line's two rows through cost_allocation_line_idx.
-    assert.deepEqual([post.seq_tup_read, post.idx_scan, post.idx_tup_fetch], [0, 1000, 2000], JSON.stringify(post));
+    assert.deepEqual([post.seq_tup_read, post.idx_scan, post.idx_tup_fetch], [0, 1000, 2000], `${tables}: ${JSON.stringify(post)}`);
     await context.client.query('SET CONSTRAINTS ALL DEFERRED');
 
     await alterVoucher(context, posted.voucher.id, alterBody((await readVoucher(context, posted.voucher.id)).revision, true));
     start = await counters(context.client);
     started = performance.now();
     await context.client.query('SET CONSTRAINTS ALL IMMEDIATE');
-    t.diagnostic(`the deferred checks of the alter (2,000 cost row changes): ${(performance.now() - started).toFixed(0)} ms`);
+    t.diagnostic(`${tables}: the deferred checks of the alter (2,000 cost row changes): ${(performance.now() - started).toFixed(0)} ms`);
     const alter = delta(await counters(context.client), start);
     // 1,000 rows went with the replaced lines and 1,000 came with the new ones: 2,000 checks, still two rows each.
-    assert.deepEqual([alter.seq_tup_read, alter.idx_scan, alter.idx_tup_fetch], [0, 2000, 4000], JSON.stringify(alter));
+    assert.deepEqual([alter.seq_tup_read, alter.idx_scan, alter.idx_tup_fetch], [0, 2000, 4000], `${tables}: ${JSON.stringify(alter)}`);
   }, 'write');
+  }
 });
 
 test('a 500-line voucher with 1,000 cost rows posts and alters within the posting budget, measured against the same voucher without rows', async t => {

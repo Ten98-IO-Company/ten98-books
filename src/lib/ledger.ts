@@ -24,7 +24,7 @@ export const ledgerErrorCodes = [
   'stale_revision', // someone changed the row since the client read it
   'retry', // a deadlock or serialization failure; nothing was saved
   'duplicate_name', // another group, ledger, voucher type, cost category or cost centre (across categories) has the name
-  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used
+  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference)
   'seeded_row', // a built-in row (also the seeded cost category) cannot be deleted
   'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
   'family_rule', // a built-in ledger would leave its behaviour family

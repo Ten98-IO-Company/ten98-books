@@ -20,7 +20,7 @@ CREATE TABLE cost_category (
   system_key text CHECK (system_key IN ('primary')),
   name text NOT NULL CHECK (name = btrim(name) AND length(name) BETWEEN 1 AND 120),
   second_language_name text CHECK (second_language_name IS NULL OR (second_language_name = btrim(second_language_name) AND length(second_language_name) BETWEEN 1 AND 120)),
-  -- Stored, not enforced (observed: a category with non-revenue No took an allocation from a fixed-asset line).
+  -- Stored, not enforced (import-tested: a category with non-revenue No took an allocation from a fixed-asset line).
   allocate_revenue boolean NOT NULL DEFAULT true,
   allocate_non_revenue boolean NOT NULL DEFAULT false,
   revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
@@ -71,11 +71,16 @@ CREATE TABLE cost_allocation (
   FOREIGN KEY (company_id, category_id) REFERENCES cost_category (company_id, id),
   FOREIGN KEY (company_id, cost_centre_id) REFERENCES cost_centre (company_id, id)
 );
--- A centre once per line and stored category (observed: a duplicate is refused); also the per-line check's index.
-CREATE UNIQUE INDEX cost_allocation_line_idx ON cost_allocation (company_id, voucher_id, line_no, category_id, cost_centre_id);
+-- A centre once per line and stored category (observed: a duplicate is refused); also the per-line check's index. It
+-- leads with the line, not the company: without table statistics every index that leads with company_id looks alike to
+-- the planner, which then reads the company's rows and filters them by line (measured: 1,000 rows per check on a
+-- 500-line voucher). Led by the line, the line's conditions are the index conditions and win on any statistics.
+CREATE UNIQUE INDEX cost_allocation_line_idx ON cost_allocation (voucher_id, line_no, category_id, cost_centre_id, company_id);
 CREATE INDEX cost_allocation_centre_idx ON cost_allocation (company_id, cost_centre_id) INCLUDE (side, amount, voucher_id, ledger_id);
 -- The last-used centre of a ledger (most recently entered row) and the reads by ledger.
 CREATE INDEX cost_allocation_ledger_idx ON cost_allocation (company_id, ledger_id, id DESC);
+-- Whether a category is used (the in-use read and the category delete's foreign key check).
+CREATE INDEX cost_allocation_category_idx ON cost_allocation (company_id, category_id);
 
 -- ---- Guards ----
 
@@ -159,7 +164,7 @@ BEGIN
 END $$;
 CREATE TRIGGER cost_allocation_guard BEFORE INSERT OR DELETE ON cost_allocation FOR EACH ROW EXECUTE FUNCTION cost_allocation_guard();
 
--- Each stored category used on a line nets, towards the line's side, to exactly the line amount. Checked at commit for
+-- Each stored category used on a line nets, towards the line's side, to exactly the line amount (import-tested). Checked at commit for
 -- every inserted or deleted row, on that row's line only, through cost_allocation_line_idx: lines are never updated, a
 -- line's rows go with it, and rows are never updated, so this check is complete. voucher_assert_balanced is untouched.
 CREATE FUNCTION cost_allocation_assert_line() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
@@ -174,8 +179,8 @@ BEGIN
   -- The line is gone, and its rows with it (an alter replaced it, or the company was removed): nothing left to check.
   IF NOT FOUND THEN RETURN NULL; END IF;
   -- The company is a group, not a filter: with `company_id = ...` in WHERE and no statistics yet (a new table), the
-  -- planner reads every row of the company through the primary key for each check. Grouped, the line index is the
-  -- only good path; a row of another company in scope with the same voucher id can only make the check refuse.
+  -- planner reads every row of the company through a company-led index for each check. Grouped, the line index (led by
+  -- the line) is the path; a row of another company in scope with the same voucher id can only make the check refuse.
   SELECT category_id INTO v_category FROM cost_allocation
   WHERE voucher_id = v_row.voucher_id AND line_no = v_row.line_no
   GROUP BY company_id, category_id
@@ -191,8 +196,11 @@ CREATE CONSTRAINT TRIGGER cost_allocation_balanced AFTER INSERT OR DELETE ON cos
 
 -- ---- Revision log, row-level security and grants ----
 
+-- The entity check only widens, so every existing row already passes it: added NOT VALID, it holds the table's lock
+-- only briefly instead of scanning the log while postings wait. New rows are checked as before; a later VALIDATE
+-- CONSTRAINT (which takes a weaker lock) can mark it validated outside a migration transaction.
 ALTER TABLE revision_log DROP CONSTRAINT revision_log_entity_check;
-ALTER TABLE revision_log ADD CONSTRAINT revision_log_entity_check CHECK (entity IN ('group', 'ledger', 'voucher_type', 'voucher', 'cost_category', 'cost_centre'));
+ALTER TABLE revision_log ADD CONSTRAINT revision_log_entity_check CHECK (entity IN ('group', 'ledger', 'voucher_type', 'voucher', 'cost_category', 'cost_centre')) NOT VALID;
 
 DO $$
 DECLARE table_name text;
