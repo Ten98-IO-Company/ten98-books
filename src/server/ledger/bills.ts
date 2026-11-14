@@ -96,6 +96,12 @@ export async function planBills(context: LedgerContext, voucher: { kind: Voucher
   const { exponent } = context.company;
   const rows: PlannedRow[] = [];
   const warnings: BillWarning[] = [];
+  // Decided, awaiting observation: on alter, an unnamed new reference or advance stays on the bill its line already
+  // created, whatever that bill's name and whatever the voucher's number is now (a date moved into another period gives
+  // a new number). Lines match by number and ledger; reordered lines match by ledger when the voucher has exactly one
+  // line and one stored creating row for it. A name the client sends, or a changed ledger, decides the bill instead.
+  const creating = (kind: BillKind) => kind === 'new_ref' || kind === 'advance';
+  const storedCreating = kept.filter(row => creating(row.kind) && row.billId !== null);
   for (const line of lines) {
     const sent = line.bills ?? [];
     if (!line.billWise) {
@@ -114,10 +120,15 @@ export async function planBills(context: LedgerContext, voucher: { kind: Voucher
       return { ...row, amount, side: row.side ?? line.side };
     });
     assertBillRowsFit(parsed, line.side, line.amount, exponent, `line ${line.lineNo}`);
+    const own = storedCreating.filter(stored => stored.lineNo === line.lineNo && stored.ledgerId === line.ledgerId);
+    const byLedger = storedCreating.filter(stored => stored.ledgerId === line.ledgerId);
+    const reusable = own.length ? own : byLedger.length === 1 && lines.filter(other => other.ledgerId === line.ledgerId).length === 1 ? byLedger : [];
     for (const row of parsed) {
       let name = row.name ?? null;
+      let billId = row.billId ?? null;
       let auto = false;
-      if (row.kind === 'new_ref' && name === null && row.billId === undefined) {
+      if (creating(row.kind) && name === null && billId === null && reusable.length) billId = reusable.shift()!.billId;
+      if (row.kind === 'new_ref' && name === null && billId === null) {
         // Observed defaults: a purchase's bill takes the supplier's invoice number, a sales bill the voucher number.
         if (voucher.kind === 'purchase' || voucher.kind === 'debit_note') {
           name = voucher.reference;
@@ -126,10 +137,10 @@ export async function planBills(context: LedgerContext, voucher: { kind: Voucher
           throw ledgerError(400, `An optional voucher has no number to name its bill by. Name the bill on line ${line.lineNo}.`, 'validation');
         } else auto = true;
       }
-      if (row.kind === 'advance' && name === null && row.billId === undefined) throw ledgerError(400, `Name the advance on line ${line.lineNo}.`, 'validation');
+      if (row.kind === 'advance' && name === null && billId === null) throw ledgerError(400, `Name the advance on line ${line.lineNo}.`, 'validation');
       const period = row.kind === 'new_ref' || row.kind === 'advance' ? row.creditPeriod ?? line.credit : null;
       rows.push({ lineNo: line.lineNo, ledgerId: line.ledgerId, kind: row.kind, side: row.side, amount: row.amount,
-        billId: row.billId ?? null, name, auto, period, kept: null, billDate: null });
+        billId, name, auto, period, kept: null, billDate: null });
     }
   }
   await resolveBills(context, rows);

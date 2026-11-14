@@ -415,6 +415,7 @@ test('every dataset in demo/ says its numbers were confirmed against the referen
 
 /** Vouchers for the number check: type, key, date, status, lines, expectedNumber. */
 const numbered = (...rows: [type: string, key: string, date: string, status: 'regular' | 'cancelled' | 'optional', lines: number, expectedNumber?: number][]) => ({
+  company: { financialYearStart: { month: 1, day: 1 } },
   vouchers: rows.map(([type, key, date, status, lines, expectedNumber]) => ({
     key, type, date, status, postDated: false, expectedNumber, lines: Array.from({ length: lines }, () => ({ ledger: 'x', side: 'Dr' as const, amount: '1.00' })),
   })),
@@ -443,6 +444,17 @@ test('checkNumbers names refused and absent vouchers, and a restart of numbering
   assert.equal(describeNumberDifference(check.differences[0]), 'voucher "s3" (sales): expected number 1, ten98-books assigned 3');
   const absent = checkNumbers(dataset as never, new Map([['s1', 1], ['s2', 2], ['s3', 3], ['s4', 4], ['p2', 1]]));
   assert.ok(describeNumberDifference(absent.differences[2]).endsWith('p1 (not in the books)'));
+});
+
+test('checkNumbers keys skipped vouchers by type and financial year, so a gap in one year explains nothing in the next', () => {
+  const dataset = { ...numbered(
+    ['journal', 'j1', '2027-03-20', 'cancelled', 0, 1], ['journal', 'j2', '2027-03-25', 'regular', 2, 2],
+    ['journal', 'j3', '2027-04-02', 'regular', 2, 2], ['journal', 'j4', '2027-04-03', 'regular', 2, 3],
+  ), company: { financialYearStart: { month: 4, day: 1 } } };
+  const check = checkNumbers(dataset as never, new Map([['j2', 1], ['j3', 1], ['j4', 2]]));
+  assert.deepEqual(check.differences.map(difference => [difference.key, difference.year, difference.holes.length, difference.explained]), [
+    ['j2', '2026-04-01', 1, true], ['j3', '2027-04-01', 0, false], ['j4', '2027-04-01', 0, false]],
+  'the cancelled March journal explains the March shift only; April starts a new financial year');
 });
 
 /** Cost categories, centres and currencies for a dataset whose lines use them. */
