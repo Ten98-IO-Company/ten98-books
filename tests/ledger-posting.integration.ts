@@ -119,7 +119,7 @@ test('numbers are gapless under 50 concurrent posts and never reused or renumber
   const afterDelete = await post(owner.browser, companyId, type, '2026-03-02', [[ids.sales, 'Cr', '5'], [cash, 'Dr', '5']]);
   assert.equal(afterDelete.number, 51, 'the deleted number stays a gap');
 
-  const altered = await owner.browser.call(url(`/${afterDelete.id}`), { date: '2026-01-15', narration: null, status: 'regular', postDated: false, revision: afterDelete.revision, lines: [{ ledgerId: ids.sales, side: 'Cr', amount: '6' }, { ledgerId: cash, side: 'Dr', amount: '6' }] });
+  const altered = await owner.browser.call(url(`/${afterDelete.id}`), { date: '2026-01-15', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: afterDelete.revision, lines: [{ ledgerId: ids.sales, side: 'Cr', amount: '6' }, { ledgerId: cash, side: 'Dr', amount: '6' }] });
   assert.equal(altered.status, 200, JSON.stringify(altered.body));
   assert.deepEqual([altered.body.voucher.number, altered.body.voucher.date, altered.body.voucher.total, altered.body.voucher.revision], [51, '2026-01-15', '6.00', 2], 'an altered voucher keeps its number when its date moves');
 
@@ -139,18 +139,18 @@ test('cancelled and optional vouchers have no accounting effect; a post-dated vo
   assert.equal(cancel.status, 200);
   assert.deepEqual([cancel.body.voucher.status, cancel.body.voucher.number, cancel.body.voucher.lines.length], ['cancelled', cancelled.number, 2], 'it keeps its number and row');
   assert.equal(await closing(ids.rent), rentBefore, 'a cancelled voucher has no effect');
-  assert.equal((await owner.browser.call(url(`/${cancelled.id}`), { date: '2026-04-02', narration: null, status: 'regular', postDated: false, revision: cancel.body.voucher.revision, lines: [] })).status, 409, 'and cannot be altered');
+  assert.equal((await owner.browser.call(url(`/${cancelled.id}`), { date: '2026-04-02', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: cancel.body.voucher.revision, lines: [] })).status, 409, 'and cannot be altered');
 
   const optional = await post(owner.browser, companyId, type, '2026-04-03', [[ids.rent, 'Dr', '50'], [cash, 'Cr', '50']], { status: 'optional' });
   assert.deepEqual([optional.status, optional.number], ['optional', null], 'an optional voucher takes no number');
   assert.equal(await closing(ids.rent), rentBefore, 'and stays out of the books');
   const next = await post(owner.browser, companyId, type, '2026-04-04', [[ids.rent, 'Dr', '1'], [cash, 'Cr', '1']]);
   assert.equal(next.number, cancelled.number + 1, 'the next regular voucher is not affected by the optional one');
-  const regular = await owner.browser.call(url(`/${optional.id}`), { date: '2026-04-03', narration: null, status: 'regular', postDated: false, revision: optional.revision, lines: optional.lines.map((line: { ledgerId: string; side: string; amount: string }) => ({ ledgerId: line.ledgerId, side: line.side, amount: line.amount })) });
+  const regular = await owner.browser.call(url(`/${optional.id}`), { date: '2026-04-03', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: optional.revision, lines: optional.lines.map((line: { ledgerId: string; side: string; amount: string }) => ({ ledgerId: line.ledgerId, side: line.side, amount: line.amount })) });
   assert.equal(regular.status, 200, JSON.stringify(regular.body));
   assert.deepEqual([regular.body.voucher.status, regular.body.voucher.number], ['regular', next.number + 1], 'made regular, it takes the next number then');
   assert.equal(await closing(ids.rent), rentBefore + 5100n);
-  const backToOptional = await owner.browser.call(url(`/${optional.id}`), { date: '2026-04-03', narration: null, status: 'optional', postDated: false, revision: regular.body.voucher.revision, lines: optional.lines.map((line: { ledgerId: string; side: string; amount: string }) => ({ ledgerId: line.ledgerId, side: line.side, amount: line.amount })) });
+  const backToOptional = await owner.browser.call(url(`/${optional.id}`), { date: '2026-04-03', narration: null, status: 'optional', postDated: false, reference: null, referenceDate: null, revision: regular.body.voucher.revision, lines: optional.lines.map((line: { ledgerId: string; side: string; amount: string }) => ({ ledgerId: line.ledgerId, side: line.side, amount: line.amount })) });
   assert.equal(backToOptional.status, 409);
 
   const postDated = await post(owner.browser, companyId, type, '2026-05-20', [[ids.rent, 'Dr', '700'], [ids.bank, 'Cr', '700']], { postDated: true });
@@ -177,7 +177,7 @@ test('an idempotency key returns the first result for the same body and refuses 
 test('a stale revision is refused for vouchers and masters', async () => {
   const cash = books.ledger('Cash');
   const voucher = await post(owner.browser, companyId, books.type('payment'), '2026-06-02', [[ids.rent, 'Dr', '5'], [cash, 'Cr', '5']]);
-  const change = { date: '2026-06-03', narration: null, status: 'regular', postDated: false, revision: voucher.revision, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '6' }, { ledgerId: cash, side: 'Cr', amount: '6' }] };
+  const change = { date: '2026-06-03', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: voucher.revision, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '6' }, { ledgerId: cash, side: 'Cr', amount: '6' }] };
   assert.equal((await owner.browser.call(url(`/${voucher.id}`), change)).status, 200);
   const stale = await owner.browser.call(url(`/${voucher.id}`), change);
   assert.equal(stale.status, 409);
@@ -190,7 +190,7 @@ test('a stale revision is refused for vouchers and masters', async () => {
 test('every change writes a complete revision log entry that the application role cannot change', async () => {
   const cash = books.ledger('Cash');
   const voucher = await post(owner.browser, companyId, books.type('payment'), '2026-07-01', [[ids.rent, 'Dr', '12.34'], [cash, 'Cr', '12.34']], { narration: 'Logged' });
-  const altered = (await owner.browser.call(url(`/${voucher.id}`), { date: '2026-07-02', narration: 'Logged again', status: 'regular', postDated: false, revision: 1, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '20' }, { ledgerId: cash, side: 'Cr', amount: '20' }] })).body.voucher;
+  const altered = (await owner.browser.call(url(`/${voucher.id}`), { date: '2026-07-02', narration: 'Logged again', status: 'regular', postDated: false, reference: null, referenceDate: null, revision: 1, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '20' }, { ledgerId: cash, side: 'Cr', amount: '20' }] })).body.voucher;
   const cancelled = (await owner.browser.call(url(`/${voucher.id}/cancel`), { revision: altered.revision })).body.voucher;
   assert.equal((await owner.browser.call(url(`/${voucher.id}/delete`), { revision: cancelled.revision })).status, 200);
   const history = (await owner.browser.call(url(`/${voucher.id}/revisions`))).body.revisions;
@@ -285,7 +285,7 @@ test('a locked period refuses new, altered, cancelled and deleted vouchers on or
   try {
     const refusals = [
       await attempt('payment', '2026-01-31', [[ids.rent, 'Dr', '3'], [cash, 'Cr', '3']]),
-      await owner.browser.call(url(`/${early.id}`), { date: '2026-02-05', narration: null, status: 'regular', postDated: false, revision: early.revision, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '3' }, { ledgerId: cash, side: 'Cr', amount: '3' }] }),
+      await owner.browser.call(url(`/${early.id}`), { date: '2026-02-05', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: early.revision, lines: [{ ledgerId: ids.rent, side: 'Dr', amount: '3' }, { ledgerId: cash, side: 'Cr', amount: '3' }] }),
       await owner.browser.call(url(`/${early.id}/cancel`), { revision: early.revision }),
       await owner.browser.call(url(`/${early.id}/delete`), { revision: early.revision }),
     ];

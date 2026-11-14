@@ -3,6 +3,7 @@ import {
   splitBalance, type BalanceSheetReport, type DayBookReport, type GroupSummaryReport, type LedgerMonthlyReport,
   type LedgerVouchersReport, type NodeAmounts, type ProfitAndLossReport, type StatementLine, type TrialBalanceReport,
 } from '../../lib/reports.ts';
+import type { AgeingBucket, AgeingReport, BillDetailReport, BillsOutstandingReport, PartyBillsReport } from '../../lib/bills.ts';
 
 /**
  * Each report as CSV rows through the runtime CSV helpers (RFC 4180, formula-injection-safe cells). Amounts are plain
@@ -73,5 +74,45 @@ export function dayBookCsv(report: DayBookReport, exponent: MoneyExponent): stri
     ...report.rows.map(row => [row.date, row.particulars, row.voucherTypeName, row.number === null ? '' : String(row.number), row.status,
       row.postDated ? 'yes' : 'no', row.side === 'Dr' ? money(row.amount) : '', row.side === 'Cr' ? money(row.amount) : '', row.narration ?? '']),
     ['', 'Total of regular vouchers', '', '', '', '', money(report.totals.debit), money(report.totals.credit), ''],
+  ];
+}
+
+const bucketLabel = (bucket: AgeingBucket) => bucket.toDays === null ? `Over ${bucket.fromDays} days` : `${bucket.fromDays} to ${bucket.toDays} days`;
+
+export function billsOutstandingCsv(report: BillsOutstandingReport, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  return [
+    ['Bill date', 'Bill', 'Party', 'Pending', 'Due date', 'Days overdue'],
+    ...report.bills.map(bill => [bill.billDate ?? '', bill.name, bill.ledgerName, money(bill.amount), bill.dueDate ?? '', String(bill.overdueDays)]),
+    ['', 'Total', '', money(report.total ?? 0n), '', ''],
+  ];
+}
+
+export function partyBillsCsv(report: PartyBillsReport, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  return [
+    ['Bill date', 'Bill', 'Method', 'Pending', 'Pending side', 'Due date', 'Days overdue'],
+    ...report.bills.map(bill => [bill.billDate ?? '', bill.name, bill.method, ...balance(money, bill.pending), bill.dueDate ?? '', String(bill.overdueDays)]),
+    ['', 'On account', '', ...balance(money, report.onAccount), '', ''],
+    ['', 'Balance', '', ...balance(money, report.balance), '', ''],
+  ];
+}
+
+export function billDetailCsv(report: BillDetailReport, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  return [
+    ['Date', 'Voucher type', 'Number', 'Method', 'Status', 'Debit', 'Credit', 'Pending', 'Pending side'],
+    ...report.rows.map(row => [row.date, row.voucherTypeName ?? 'Opening balance', row.number === null ? '' : String(row.number), row.method, row.status,
+      row.side === 'Dr' ? money(row.amount) : '', row.side === 'Cr' ? money(row.amount) : '', ...row.pending === null ? ['', ''] : balance(money, row.pending)]),
+  ];
+}
+
+export function ageingCsv(report: AgeingReport, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  const notDue = report.basis === 'due';
+  return [
+    ['Party', ...notDue ? ['Not yet due'] : [], ...report.buckets.map(bucketLabel), 'Total'],
+    ...report.parties.map(party => [party.name, ...notDue ? [money(party.notDue ?? 0n)] : [], ...party.buckets.map(money), money(party.total)]),
+    ['Total', ...notDue ? [money(report.totals.notDue ?? 0n)] : [], ...report.totals.buckets.map(money), money(report.totals.total)],
   ];
 }

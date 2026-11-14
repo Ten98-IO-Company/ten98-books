@@ -34,6 +34,17 @@ Each report except defaults has a CSV export at the same path plus `/export` (fo
 
 Amounts in JSON are decimal strings; a signed balance is positive on the debit side and negative on the credit side. Unknown or repeated query parameters are refused (400), as are a group id that names no group and a ledger id that names no ledger (404). A company the user is not a member of answers "not found" (404) for every route and export; a company is a workspace ([TENANCY.md](TENANCY.md)).
 
+### Bills (M2a slice 1)
+
+| Report | API (`GET /api/companies/<id>/reports/...`) | What it shows |
+|---|---|---|
+| Bills receivable or payable | `bills-outstanding?side=receivable\|payable[&groupId=]&asOf=[&limit=][&after=]` | Bills of the ledgers below the group (default: trade receivables or payables) pending on the side's natural side at the date: bill date, name, party, pending, due date, days overdue, by party and bill name, 200 a page (`limit` up to 1,000, `after` is the previous page's `next`). A page reads only the bills it returns (and the settled ones it passes), so walking every page costs about one full read; the total of every page comes with the first page and is null on later ones. Bills on the other side (advances, settlements left on their own) are not listed, as observed |
+| Party bills | `party-bills/<ledger id>?asOf=` | One party's bills pending on either side (method, dates, pending, overdue), its on-account amount and its balance. On account is computed from the lines (each line less its bill rows, and the opening balance less its opening bills), so bills plus on account equalling the balance is a check |
+| Bill detail | `bill/<bill id>?asOf=` | The bill's rows, opening rows first, then by date, voucher, line and row. Rows that count at the date carry the running pending; rows of cancelled, deleted or optional vouchers, and rows dated after the date, stand among them without one, marked by their status. The method shown is the dating row's own for that row and a settlement for every other live row |
+| Ageing | `ageing?side=receivable\|payable[&groupId=]&asOf=&basis=bill\|due` | The listed bills per party in the company's ageing columns (`ageing-buckets`, none until defined), always ending with an open-ended column (added after a closed last one, or the only one while none is defined) so the columns add up to the total, by days since the bill date or past the due date; a bill on a column boundary sits in the earlier column (observed: 90 days in "60 to 90"). By due date, bills not yet due have their own column (an assumption until observed) |
+
+A bill's date and due date are those of the row that dates it: its earliest-dated live new reference or advance, else its earliest-dated live settlement. The pending list for entry (`ledgers/<id>/bills`) offers only bills dated on or before the voucher date. Each report has `/export` with the same rules as the M1 exports. Bill lists have the statements' 30-second budget, one party's reports the ledger screens' 20 seconds.
+
 ## Drill-down and screens
 
 Enter goes down one level and Escape goes back one level, to the line it left from (D-05, D-09: drill-down is by route):
@@ -58,7 +69,7 @@ Measured on a generated company of 52,784 voucher lines (12,600 four-line vouche
 ## Not in M1
 
 - Stock: no opening or closing stock and no stock valuation in profit and loss or the balance sheet; no inventory columns in the day book.
-- Cost centres, bill-wise details, multi-currency columns, tax reports, budgets.
+- Cost centres, foreign-currency bills, interest on bills, multi-currency columns, tax reports, budgets; bill reports have no screens yet.
 - Comparative and additional columns (previous period, other periods, percentages), monthly views of a group, a cash-flow or funds-flow statement, ratio analysis.
 - Configurable layouts (vertical or horizontal statements, narrations in the day book, filters, saved views); the day book filter by voucher type.
 - Editing from a report: the voucher view is read-only.

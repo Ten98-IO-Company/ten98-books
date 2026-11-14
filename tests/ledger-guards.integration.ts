@@ -106,7 +106,7 @@ test('altering a voucher states its status and post-dated flag; omitting them is
   const optional = await post(owner.browser, companyId, books.type('payment'), '2026-01-14', [[ids.rent, 'Dr', '8'], [books.ledger('Cash'), 'Cr', '8']], { status: 'optional', postDated: true });
   const lines = [{ ledgerId: ids.rent, side: 'Dr', amount: '9' }, { ledgerId: books.ledger('Cash'), side: 'Cr', amount: '9' }];
   for (const omitted of ['status', 'postDated', 'narration']) {
-    const body: Record<string, unknown> = { date: '2026-01-14', narration: null, status: 'optional', postDated: true, lines, revision: optional.revision };
+    const body: Record<string, unknown> = { date: '2026-01-14', narration: null, status: 'optional', postDated: true, reference: null, referenceDate: null, lines, revision: optional.revision };
     delete body[omitted];
     const refused = await owner.browser.call(`${base()}/vouchers/${optional.id}`, body);
     assert.equal(refused.status, 400, omitted);

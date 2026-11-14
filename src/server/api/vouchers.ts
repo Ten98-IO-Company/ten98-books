@@ -63,14 +63,14 @@ export const vouchersApi: SignedInArea = async ({ request, url, path, user }) =>
   }
   if (action === 'cancel') {
     if (request.method !== 'POST') return notAllowed('POST');
-    return json({ voucher: await write((context, body) => cancelVoucher(context, voucherId, body)) });
+    return json(await write((context, body) => cancelVoucher(context, voucherId, body)));
   }
   if (action === 'delete') {
     if (request.method !== 'POST') return notAllowed('POST');
-    await write((context, body) => deleteVoucher(context, voucherId, body));
-    return json({ deleted: true });
+    const { warnings } = await write((context, body) => deleteVoucher(context, voucherId, body));
+    return json({ deleted: true, warnings });
   }
   if (request.method === 'GET') return json({ voucher: await runLedger(user.id, companyId, 'read', context => readVoucher(context, voucherId)) });
-  if (request.method === 'POST') return json({ voucher: await write((context, body) => alterVoucher(context, voucherId, body)) });
+  if (request.method === 'POST') return json(await write((context, body) => alterVoucher(context, voucherId, body)));
   return notAllowed('GET, POST');
 };
