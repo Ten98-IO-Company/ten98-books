@@ -10,8 +10,10 @@ import { checkNumbers, DemoError, dispositionOf, numbersKind, openingStockValue,
 import { findDemoCompany, findUserId, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
 
 /**
- * Compares a seeded company's figures, read through the report modules (never SQL of its own), with the dataset's
- * expected.json. Amounts are compared exactly in minor units. The result has three groups, and every figure is in
+ * Compares a seeded company's figures with the dataset's expected.json. Figures come from the report modules and the ledger
+ * module's list functions; the one thing read with SQL is the dataset's own vouchers (their idempotency key and number,
+ * `voucher` rows of this company, read-only inside `withCompany`), because the list functions do not expose the key that
+ * ties a voucher to its dataset entry. Amounts are compared exactly in minor units. The result has three groups, and every figure is in
  * exactly one: it matches, it differs, or it is not yet comparable with the reason stated. A known unsupported cause is
  * never counted as a difference and never hidden: a block ten98-books cannot compute is named in `notComparable`, and a
  * line whose expected figure the file itself contradicts carries a `reason` (and is listed in the third group).

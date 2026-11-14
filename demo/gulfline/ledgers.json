@@ -148,8 +148,8 @@
     }
   },
   {
-    "key": "sharjah-cables-factory",
-    "name": "Sharjah Cables Factory",
+    "key": "palmgate-cable-works",
+    "name": "Palmgate Cable Works",
     "group": "payables",
     "extras": {
       "creditPeriodDays": 30,
@@ -192,8 +192,8 @@
     }
   },
   {
-    "key": "gulf-union-bank-current",
-    "name": "Gulf Union Bank - Current",
+    "key": "saffron-shore-bank-current",
+    "name": "Saffron Shore Bank - Current",
     "group": "bank_accounts",
     "opening": {
       "amount": "450000.00",
@@ -202,13 +202,13 @@
     "extras": {
       "bank": {
         "accountNumber": "AE070331234567890123456",
-        "bankName": "Gulf Union Bank (UAE)"
+        "bankName": "Saffron Shore Bank (UAE)"
       }
     }
   },
   {
-    "key": "al-noor-islamic-bank-savings",
-    "name": "Al Noor Islamic Bank - Savings",
+    "key": "zephyr-gulf-bank-savings",
+    "name": "Zephyr Gulf Bank - Savings",
     "group": "bank_accounts",
     "opening": {
       "amount": "80000.00",
@@ -217,7 +217,7 @@
     "extras": {
       "bank": {
         "accountNumber": "AE460351111222233334444",
-        "bankName": "Al Noor Islamic Bank (UAE)"
+        "bankName": "Zephyr Gulf Bank (UAE)"
       }
     }
   },
@@ -267,8 +267,8 @@
     }
   },
   {
-    "key": "term-loan-gulf-union-bank",
-    "name": "Term Loan - Gulf Union Bank",
+    "key": "term-loan-saffron-shore-bank",
+    "name": "Term Loan - Saffron Shore Bank",
     "group": "secured_loans",
     "opening": {
       "amount": "200000.00",

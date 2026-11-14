@@ -414,6 +414,9 @@ test('company creation carries an idempotency key, so a rerun finds the first co
   // Renaming the company hides it from the name-based marker search; the key still returns the same company.
   const renamed = await user.browser.call(`/api/workspaces/${first.companyId}/rename`, { name: 'Starter Trading (renamed)' });
   assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  // Both commands find a renamed company through the creation key: compare used to say it had not been seeded.
+  const comparedRenamed = await compareDataset(user.userId, starter);
+  assert.deepEqual([comparedRenamed.companyId, comparedRenamed.companyName, comparedRenamed.differences], [first.companyId, 'Starter Trading (renamed)', 0]);
   const again = await seedDataset(user.userId, starter);
   assert.equal(again.companyId, first.companyId);
   assert.equal(again.companyCreated, false);

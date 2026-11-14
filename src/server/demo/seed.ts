@@ -27,6 +27,8 @@ import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositio
 export const supportedFeatures: ReadonlySet<string> = new Set(['accounting']);
 
 export const voucherKeyPrefix = (slug: string) => `demo:${slug}:`;
+/** The idempotency key the company is created under: one company per dataset and owner, however it is renamed later. */
+export const creationKey = (slug: string, userId: string) => `demo:${slug}:${userId}`;
 
 export type Counts = { created: number; present: number };
 export type SeedReport = {
@@ -84,12 +86,24 @@ async function holdsDataset(userId: string, companyId: string, dataset: Dataset)
 export type DemoCompany = { id: string; name: string; role: string };
 
 /**
- * The user's company that holds `dataset`, or null when there is none. Seeding considers only companies the user owns,
+ * The user's company that holds `dataset`, or null when there is none. The company created under this dataset's key
+ * (see `creationKey`) is found first, so a renamed company is still found by both commands; otherwise the name and the
+ * voucher-key marker decide. Seeding considers only companies the user owns,
  * so membership of somebody else's copy neither blocks nor redirects it; reading considers every company the user can
  * open and prefers the one they own. A same-named company that is not this dataset's, or two that are, stops the
  * command rather than guess.
  */
 export async function findDemoCompany(userId: string, dataset: Dataset, purpose: 'seed' | 'read'): Promise<DemoCompany | null> {
+  // company_creation holds creation keys only (no company data, outside row-level security): a read-only lookup.
+  const { rows: [created] } = await getDatabase().pool.query<{ company_id: string }>(
+    'SELECT company_id FROM company_creation WHERE user_id = $1 AND idempotency_key = $2', [userId, creationKey(dataset.slug, userId)]);
+  if (created) {
+    const keyed = (await listCompanies(userId)).find(company => company.id === created.company_id && company.company !== null && !company.twoFactorLocked);
+    if (keyed) {
+      if (purpose === 'seed' && keyed.role !== 'owner') throw new DemoError(`The company created for "${dataset.slug}" is no longer owned by this user (they are its ${keyed.role}); the seeder writes only to companies it owns.`);
+      return { id: keyed.id, name: keyed.name, role: keyed.role };
+    }
+  }
   const named = (await listCompanies(userId)).filter(company => company.company !== null && !company.twoFactorLocked && company.name === dataset.company.name
     && (purpose === 'read' || company.role === 'owner'));
   let ours: typeof named = [];
@@ -285,7 +299,7 @@ async function seedUnderLock(userId: string, dataset: Dataset): Promise<SeedRepo
     try {
       // The key (dataset slug and owner) makes a repeated create return the first company, beside the marker search and the lock.
       const { company: created, replayed } = await createCompany(userId, {
-        idempotencyKey: `demo:${dataset.slug}:${userId}`,
+        idempotencyKey: creationKey(dataset.slug, userId),
         name: settings.name, baseCurrency: settings.baseCurrency, financialYearStart: settings.financialYearStart, booksBeginning: settings.booksBeginning,
         timeZone: settings.timeZone, ...settings.secondLanguageName ? { secondLanguageName: settings.secondLanguageName } : {},
       });

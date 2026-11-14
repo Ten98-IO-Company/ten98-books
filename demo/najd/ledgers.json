@@ -148,8 +148,8 @@
     }
   },
   {
-    "key": "jeddah-cable-industries",
-    "name": "Jeddah Cable Industries",
+    "key": "hejaz-coast-cable-works",
+    "name": "Hejaz Coast Cable Works",
     "group": "payables",
     "extras": {
       "creditPeriodDays": 30,
@@ -192,8 +192,8 @@
     }
   },
   {
-    "key": "riyad-commercial-bank-current",
-    "name": "Riyad Commercial Bank - Current",
+    "key": "tuwaiq-plains-bank-current",
+    "name": "Tuwaiq Plains Bank - Current",
     "group": "bank_accounts",
     "opening": {
       "amount": "450000.00",
@@ -202,13 +202,13 @@
     "extras": {
       "bank": {
         "accountNumber": "SA0380000000608010167519",
-        "bankName": "Riyad Commercial Bank (Saudi Arabia)"
+        "bankName": "Tuwaiq Plains Bank (Saudi Arabia)"
       }
     }
   },
   {
-    "key": "al-bilad-savings-account",
-    "name": "Al Bilad Savings Account",
+    "key": "dune-crest-savings-account",
+    "name": "Dune Crest Savings Account",
     "group": "bank_accounts",
     "opening": {
       "amount": "80000.00",
@@ -217,7 +217,7 @@
     "extras": {
       "bank": {
         "accountNumber": "SA4420000001234567891234",
-        "bankName": "Al Bilad Savings (Saudi Arabia)"
+        "bankName": "Dune Crest Savings (Saudi Arabia)"
       }
     }
   },
@@ -267,8 +267,8 @@
     }
   },
   {
-    "key": "term-loan-riyad-commercial-bank",
-    "name": "Term Loan - Riyad Commercial Bank",
+    "key": "term-loan-tuwaiq-plains-bank",
+    "name": "Term Loan - Tuwaiq Plains Bank",
     "group": "secured_loans",
     "opening": {
       "amount": "200000.00",
