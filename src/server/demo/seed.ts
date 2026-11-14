@@ -60,9 +60,9 @@ export type SeedReport = {
   /**
    * Bill rows. `openingBills` were set with the ledgers created in this run; `rowsPosted` were sent with vouchers posted in
    * this run; `skipped` are the dataset's rows ten98-books leaves out, each with its reason (every run lists them);
-   * `warnings` are the ledger module's own answers to the postings of this run, by code, each naming the voucher.
+   * `warnings` are the ledger module's own answers to the postings of this run, by code, each naming the voucher; `keptWithoutBills` are vouchers an earlier seed posted without bill rows, kept as they were.
    */
-  bills: { openingBills: number; rowsPosted: number; skipped: string[]; warnings: Record<string, string[]> };
+  bills: { openingBills: number; rowsPosted: number; skipped: string[]; warnings: Record<string, string[]>; keptWithoutBills: string[] };
 };
 
 export async function findUserId(email: string): Promise<string> {
@@ -290,10 +290,10 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         narration: voucher.narration ?? null, status: voucher.status === 'optional' ? 'optional' : 'regular', postDated: voucher.postDated,
         lines: voucher.lines.map((line, index) => ({ ledgerId: ledgerByKey[line.ledger], side: line.side, amount: line.amount, ...bills.lines.get(voucher.key)?.[index] ? { bills: bills.lines.get(voucher.key)![index] } : {} })),
       };
-      const done = await runLedger(userId, companyId, 'write', async context => {
-        let { voucher: posted, replayed, warnings } = await createVoucher(context, body);
+      const send = (payload: typeof body) => runLedger(userId, companyId, 'write', async context => {
+        let { voucher: posted, replayed, warnings } = await createVoucher(context, payload);
         if (!replayed) {
-          report.bills.rowsPosted += body.lines.reduce((sum, line) => sum + ('bills' in line ? line.bills!.length : 0), 0);
+          report.bills.rowsPosted += payload.lines.reduce((sum, line) => sum + ('bills' in line ? line.bills!.length : 0), 0);
           for (const warning of warnings) (report.bills.warnings[warning.code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}${warning.billName ? ` bill "${warning.billName}"` : ''}`);
         }
         let cancelled = false;
@@ -303,6 +303,17 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         }
         return { number: posted.number, replayed, cancelled };
       });
+      let done: Awaited<ReturnType<typeof send>>;
+      try { done = await send(body); }
+      catch (error) {
+        // A company seeded before bill rows were sent holds this voucher without them, so its request hash differs. Replay
+        // it as it was posted (the key proves it is this dataset's voucher) and say so; any other mismatch still stops.
+        if (!(error instanceof FoundationError && error.code === 'idempotency_mismatch' && body.lines.some(line => 'bills' in line))) throw error;
+        const plain = { ...body, lines: body.lines.map(({ ledgerId, side, amount }) => ({ ledgerId, side, amount })) };
+        try { done = await send(plain as typeof body); } catch { throw error; }
+        if (!done.replayed) throw error;
+        report.bills.keptWithoutBills.push(voucher.key);
+      }
       if (done.replayed && !done.cancelled) report.vouchers.present++; else report.vouchers.created++;
       if (done.cancelled) report.vouchers.cancelled++;
       assigned.set(voucher.key, done.number);
@@ -354,7 +365,7 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
     groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
     unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0, kind: numbersKind(dataset) },
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
-    mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {} },
+    mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {}, keptWithoutBills: [] },
   };
   if (!company) {
     try {
@@ -399,6 +410,7 @@ export function formatSeedReport(report: SeedReport): string[] {
   if (report.bills.openingBills) lines.push(`  opening bills: ${report.bills.openingBills} set with the ledgers created`);
   const typeCounts = (counts: Record<string, number>) => Object.entries(counts).map(([type, count]) => `${count} ${type.replace(/_/g, ' ')}`).join(', ');
   if (report.bills.rowsPosted) lines.push(`  bill rows: ${report.bills.rowsPosted} posted with the vouchers`);
+  if (report.bills.keptWithoutBills.length) lines.push(`  vouchers already posted before bill rows were sent, kept as they were without bill rows: ${report.bills.keptWithoutBills.length} (e.g. ${report.bills.keptWithoutBills.slice(0, 3).join(', ')}); seed into a new company to get their bills`);
   if (report.bills.skipped.length) lines.push('  bill rows left out:', ...report.bills.skipped.map(line => `    ${line}`));
   const warningCodes = Object.entries(report.bills.warnings);
   if (warningCodes.length) lines.push('  bill warnings raised by the postings:', ...warningCodes.map(([code, which]) => `    ${code}: ${which.length} (e.g. ${which.slice(0, 3).join('; ')})`));

@@ -32,7 +32,14 @@ const usd = { currency: 'USD', currencyAmount: '100.00', rate: '3.67' };
  * joins the first one's name, a foreign-currency invoice and its settlement, a settlement of a bill nothing creates, and a
  * supplier bill in the first spelling (`type`, `ref`).
  */
-const billsDataset = (expectedDebtor: Record<string, { pending: string; side: 'Dr' | 'Cr'; dueDate: string }>): Dataset => parseDataset({
+type Pending = Record<string, { pending: string; side: 'Dr' | 'Cr'; dueDate: string }>;
+/**
+ * Variations on the dataset: `summary` adds the receivable and payable counts and totals; `creditor` replaces the
+ * creditor's expected bills; `voided` adds a voucher of the creditor that is cancelled without lines; `baseOnUsd` adds a
+ * base-currency bill on the party that also has foreign-currency lines.
+ */
+type Options = { summary?: { receivables?: { pendingBills: number; pendingTotal: string }; payables?: { pendingBills: number; pendingTotal: string } }; creditor?: Pending; voided?: boolean; baseOnUsd?: boolean };
+const billsDataset = (expectedDebtor: Pending, options: Options = {}): Dataset => parseDataset({
   company: { slug: 'bills-check', name: 'Bills Check', country: 'AE', baseCurrency: 'AED', minorUnits: 2, financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai', features: ['accounting', 'billWise'] },
   ledgers: [
     { key: 'cash', name: 'Cash', group: 'cash_in_hand', standard: 'cash' },
@@ -62,12 +69,16 @@ const billsDataset = (expectedDebtor: Record<string, { pending: string; side: 'D
       line('cash', 'Dr', '10.00'), line('debtor', 'Cr', '10.00', { bills: [{ kind: 'against', name: 'GHOST-1', amount: '10.00' }] })] },
     { key: 'purchase-1', type: 'purchase', date: '2026-03-15', status: 'regular', postDated: false, lines: [
       line('purchases', 'Dr', '200.00'), line('creditor', 'Cr', '200.00', { bills: [{ type: 'new', ref: 'SI-9', amount: '200.00', creditDays: 15 }] })] },
+    ...options.voided ? [{ key: 'receipt-void', type: 'receipt', date: '2026-03-20', status: 'cancelled', postDated: false, lines: [], extras: { party: 'creditor' } }] : [],
+    ...options.baseOnUsd ? [{ key: 'sales-4', type: 'sales', date: '2026-03-25', status: 'regular', postDated: false, lines: [
+      line('debtor-usd', 'Dr', '50.00', { bills: [{ kind: 'new', name: 'BASE-1', creditDays: 30, amount: '50.00' }] }), line('sales', 'Cr', '50.00')] }] : [],
   ],
   expected: {
     period: { from: '2026-01-01', to: '2026-12-31' },
+    ...options.summary,
     outstanding: { asOf: '2026-12-31', ledgers: {
       debtor: { bills: { bills: expectedDebtor } },
-      creditor: { bills: { bills: { 'SI-9': { pending: '200.00', side: 'Cr', dueDate: '30-Mar-26' } } } },
+      creditor: { bills: { bills: options.creditor ?? { 'SI-9': { pending: '200.00', side: 'Cr', dueDate: '30-Mar-26' } } } },
       'debtor-usd': { bills: { bills: { 'USD-1': { pending: '367.00', side: 'Dr', dueDate: '4-Apr-26' } } } },
     } },
   },
@@ -183,4 +194,73 @@ test('masters only: the company, groups and ledgers with their bill settings and
     assert.equal(vouchers.length, 10, 'the nine seeded vouchers and the one entered by hand');
     assert.ok(vouchers.some(voucher => voucher.id === handEntered));
   });
+});
+
+test('the receivable and payable summaries are not yet comparable only when a row left out lies below that side\'s group', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  // The only rows left out are on Debtor USD and Debtor (receivables), so a wrong payable summary is a difference, and a wrong receivable one is explained.
+  const wrongBoth = { receivables: { pendingBills: 4, pendingTotal: '5517.00' }, payables: { pendingBills: 2, pendingTotal: '300.00' } };
+  await seedDataset(user.userId, billsDataset(pendingDebtor));
+  const result = await compareDataset(user.userId, billsDataset(pendingDebtor, { summary: wrongBoth }));
+  const summary = (label: string) => result.lines.find(item => item.label === label)!;
+  assert.deepEqual([summary('Pending payable bills (count)').ok, summary('Pending payable bills (count)').reason], [false, undefined]);
+  assert.deepEqual([summary('Pending payable bills (total)').expected, summary('Pending payable bills (total)').actual], ['300.00', '200.00']);
+  assert.match(summary('Pending receivable bills (total)').reason!, /3 bill row\(s\) on ledgers below receivables were left out/);
+  assert.equal(summary('Pending receivable bills (total)').actual, '5150.00');
+  // With the figures the books really hold, both sides match.
+  const right = await compareDataset(user.userId, billsDataset(pendingDebtor, { summary: { receivables: { pendingBills: 3, pendingTotal: '5150.00' }, payables: { pendingBills: 1, pendingTotal: '200.00' } } }));
+  assert.deepEqual(right.lines.filter(item => item.label.startsWith('Pending ') && item.label.includes('bills (')).map(item => item.ok), [true, true, true, true]);
+});
+
+test('an expected bill no posted row names is a difference unless a voucher of that party was carried without lines', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const typo = { 'SI-9': { pending: '200.00', side: 'Cr' as const, dueDate: '30-Mar-26' }, 'SI-99': { pending: '75.00', side: 'Cr' as const, dueDate: '30-Mar-26' } };
+  await seedDataset(user.userId, billsDataset(pendingDebtor));
+  const hidden = await compareDataset(user.userId, billsDataset(pendingDebtor, { creditor: typo }));
+  const line = hidden.lines.find(item => item.label === 'Pending bills of Creditor')!;
+  assert.equal(line.ok, false);
+  assert.equal(line.reason, undefined, 'a name nothing explains stays a difference');
+  assert.match(line.note!, /SI-99: expected 75\.00 Cr, not pending in the books \(no posted voucher of the dataset names this bill\)/);
+  // The same bill with a cancelled-without-lines voucher of the creditor in the dataset is explained, and listed as not yet comparable.
+  const explained = await compareDataset(user.userId, billsDataset(pendingDebtor, { creditor: typo, voided: true }));
+  assert.equal(explained.lines.find(item => item.label === 'Pending bills of Creditor')!.ok, true);
+  const pending = explained.lines.find(item => item.label.startsWith('Pending bills not compared (bill not created) of Creditor'))!;
+  assert.deepEqual([pending.expected, pending.ok], ['1 bill(s), 75.00 Cr', false]);
+  assert.match(pending.reason!, /the party has a voucher the dataset carries without lines/);
+});
+
+test('bills the books hold that expected.json does not list are listed, also on a party with foreign-currency lines', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  await seedDataset(user.userId, billsDataset(pendingDebtor, { baseOnUsd: true }));
+  const result = await compareDataset(user.userId, billsDataset(pendingDebtor, { baseOnUsd: true }));
+  const books = result.lines.find(item => item.label === 'Pending bills of Debtor USD')!;
+  assert.equal(books.ok, false);
+  assert.equal(books.reason, undefined);
+  assert.match(books.note!, /BASE-1: pending 50\.00 Dr in the books, not in expected\.json/);
+  // The foreign-currency bill itself is still not compared.
+  assert.ok(result.lines.some(item => item.label.startsWith('Pending bills not compared (foreign currency) of Debtor USD') && item.reason));
+});
+
+test('a company seeded before bill rows were sent is replayed as it was posted, and the output says so', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const full = billsDataset(pendingDebtor);
+  // What an earlier seeder posted: the same vouchers without their bill rows.
+  const before = structuredClone(full);
+  for (const voucher of before.vouchers) for (const row of voucher.lines) if (row.extras) delete (row.extras as { bills?: unknown }).bills;
+  const first = await seedDataset(user.userId, before);
+  assert.equal(first.vouchers.created, 9);
+  assert.equal(first.bills.rowsPosted, 0);
+
+  const again = await seedDataset(user.userId, full);
+  assert.deepEqual([again.companyId, again.vouchers.created, again.vouchers.present], [first.companyId, 0, 9]);
+  // Six vouchers carry bill rows the books lack; the other three had none to send (foreign-currency or left-out rows).
+  assert.deepEqual(again.bills.keptWithoutBills, ['sales-1', 'receipt-1', 'receipt-2', 'receipt-3', 'sales-2', 'purchase-1']);
+  assert.equal(again.bills.rowsPosted, 0);
+  assert.match(formatSeedReport(again).join('\n'), /vouchers already posted before bill rows were sent, kept as they were without bill rows: 6 \(e\.g\. sales-1, receipt-1, receipt-2\); seed into a new company to get their bills/);
+
+  // Only that mismatch is forgiven: a voucher whose amount changed still stops the seed.
+  const changed = structuredClone(full);
+  changed.vouchers[0].lines[0].amount = '1051.00';
+  changed.vouchers[0].lines[1].amount = '1051.00';
+  await assert.rejects(() => seedDataset(user.userId, changed), /already used for a different voucher/);
 });

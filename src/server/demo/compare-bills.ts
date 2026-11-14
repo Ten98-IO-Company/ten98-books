@@ -5,7 +5,7 @@ import { billsOutstandingReport, partyBillsReport } from '../reports/bills.ts';
 import { parseDueDate, readLineBills } from './bill-rows.ts';
 import { planBills, type BillPlan } from './bills.ts';
 import type { CompareLine } from './compare.ts';
-import { toMinor, type Dataset } from './dataset.ts';
+import { dispositionOf, toMinor, type Dataset } from './dataset.ts';
 
 /**
  * The bill figures of expected.json (pending bills per party at the end of the period, the count and total of pending
@@ -21,7 +21,7 @@ type Expected = { asOf: string; block: string; ledgers: Record<string, Record<st
 const reasons = {
   foreign: 'a bill of a party with foreign-currency lines: ten98-books keeps bills in the base currency only, so those rows were left out of the postings (the reference also shows such bills restated at the report date)',
   unknown: 'a settlement of this bill was left out because the bill is created by a foreign-currency line or by a voucher the dataset carries without lines, which ten98-books cannot post',
-  uncreated: 'no voucher ten98-books posts creates this bill; the dataset can only create it with a voucher it carries without lines (cancelled or with no accounting effect)',
+  uncreated: 'no voucher ten98-books posts creates this bill, and the party has a voucher the dataset carries without lines (cancelled or with no accounting effect), which ten98-books cannot post',
 } as const;
 
 /** Every date the dataset states pending bills for, with the figures, the end of the period first. */
@@ -60,11 +60,16 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
       if (!ledger) { lines.push({ block, label: label('Pending bills'), expected: `${wanted.size} bill(s)`, actual: 'ledger missing', difference: 'n/a', ok: false }); continue; }
       const report = await partyBillsReport(context, ledger.id, { asOf });
       const actual = new Map(report.bills.map(bill => [bill.name.toLowerCase(), bill]));
+      // A bill is left out of the comparison only for a reason the dataset itself shows. Bills the books hold that
+      // expected.json does not list are always compared, also on a party with foreign-currency lines.
+      const unposted = dataset.vouchers.some(voucher => dispositionOf(voucher) !== 'post' && voucher.extras?.party === key);
       const exclusion = (name: string): keyof typeof reasons | undefined => {
-        if (plan.foreignLedgers.has(key)) return 'foreign';
         const affected = plan.affected.get(key)?.get(name);
         if (affected) return affected;
-        return wanted.has(name) && !actual.has(name) && !plan.created.get(key)?.has(name) ? 'uncreated' : undefined;
+        if (!wanted.has(name)) return undefined;
+        if (plan.foreignLedgers.has(key)) return 'foreign';
+        // Not named by any posted row: evidence is a voucher of this party that cannot be posted (it has no lines); without it, a typo in the name would hide here.
+        return !actual.has(name) && !plan.created.get(key)?.has(name) && unposted ? 'uncreated' : undefined;
       };
       const names = [...new Set([...wanted.keys(), ...actual.keys()])].sort();
       const compared = names.filter(name => !exclusion(name));
@@ -74,7 +79,7 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
       const differing: string[] = [];
       for (const name of compared) {
         const [want, have] = [wanted.get(name), actual.get(name)];
-        if (!have) differing.push(`${want!.name}: expected ${signed(want!.pending)}, not pending in the books`);
+        if (!have) differing.push(`${want!.name}: expected ${signed(want!.pending)}, not pending in the books${plan.created.get(key)?.has(name) ? '' : ' (no posted voucher of the dataset names this bill)'}`);
         else if (!want) differing.push(`${have.name}: pending ${signed(have.pending)} in the books, not in expected.json`);
         else if (want.pending !== have.pending) differing.push(`${want.name}: expected ${signed(want.pending)}, books ${signed(have.pending)}`);
       }
@@ -130,7 +135,13 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
         other.which.push(`${bill.name} on ${entry.name} (${keys.join(', ')})`);
       }
     }
-    const reason = plan.skipped.length ? `${plan.skipped.length} bill row(s) of the dataset were left out of the postings (see the seed output), so the pending bills cannot be reproduced exactly` : undefined;
+    // Only rows left out on a ledger below this side's group can explain a gap in its count or total.
+    const within = (group: string | undefined, root: string): boolean => {
+      for (let key = group, guard = 0; key && guard < 50; key = dataset.groups.find(candidate => candidate.key === key)?.under, guard++) if (key === root) return true;
+      return false;
+    };
+    const left = plan.skipped.filter(row => within(dataset.ledgers.find(candidate => candidate.key === row.ledger)?.group, name));
+    const reason = left.length ? `${left.length} bill row(s) on ledgers below ${name} were left out of the postings (see the seed output), so the pending bills cannot be reproduced exactly` : undefined;
     const explained = other.count > 0 && count + other.count === figures.pendingBills && addMoney(total, other.total) === wanted;
     const cause = explained ? `the difference is exactly ${other.count} pending ${side} bill(s) lying on ledgers below ${otherGroup} (${money(other.total)}): ${other.which.join('; ')}; the reference lists bills by the side they lie on, ten98-books by the ledgers below the group` : undefined;
     const add = (label: string, expectedText: string, actualText: string, difference: string, ok: boolean) =>
