@@ -35,7 +35,7 @@ export const missingAs = (replacement: FoundationError) => (error: unknown): nev
 };
 const field = (labels: Record<string, string>, fallback: string) => (path: readonly PropertyKey[]) => labels[String(path[0])] ?? fallback;
 const groupFields = field({ name: 'the group name', secondLanguageName: 'the second-language name', parentId: 'the parent group', nature: 'the nature', grossProfit: 'the gross profit setting', revision: 'the revision' }, 'the group details');
-const ledgerFields = field({ name: 'the ledger name', secondLanguageName: 'the second-language name', groupId: 'the group', opening: 'the opening balance', revision: 'the revision' }, 'the ledger details');
+const ledgerFields = field({ name: 'the ledger name', secondLanguageName: 'the second-language name', groupId: 'the group', opening: 'the opening balance', costCentres: 'the cost centres setting', revision: 'the revision' }, 'the ledger details');
 const typeFields = field({ name: 'the voucher type name', secondLanguageName: 'the second-language name', revision: 'the revision' }, 'the voucher type details');
 
 const groupRefusals = {
@@ -52,6 +52,7 @@ const ledgerRefusals = {
   ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group.', 'family_rule'),
   ledger_bill_wise_family: ledgerError(400, 'Cash, bank and the profit and loss ledger keep no bills: they cannot be bill-wise, and a ledger with bills cannot move under the cash and bank groups.', 'family_rule'),
   bill_allocation_opening_locked: ledgerError(409, 'Opening bills are locked with the opening balances.', 'locked_period'),
+  ledger_cost_centres_group: ledgerError(400, 'The profit and loss ledger takes no cost centres.', 'family_rule'),
 };
 const ledgerInUse = { ...ledgerRefusals, '23503': ledgerError(409, 'This ledger is used in vouchers and cannot be deleted.', 'in_use') };
 const typeRefusals = { voucher_type_name_idx: ledgerError(409, 'A voucher type with this name already exists.', 'duplicate_name') };
@@ -207,7 +208,7 @@ const ledgerSelect = (inUse: boolean) => `WITH RECURSIVE ${groupTreeSql}
     l.second_language_name AS "secondLanguageName", coalesce(t.cash_bank, false) AS "cashOrBank",
     l.opening_amount AS "openingAmount", l.opening_side AS "openingSide", l.revision, l.bill_wise AS "billWise",
     l.credit_count AS "creditCount", l.credit_unit AS "creditUnit", to_char(l.credit_due_date, 'YYYY-MM-DD') AS "creditDueDate",
-    l.credit_days_check AS "creditDaysCheck",
+    l.credit_days_check AS "creditDaysCheck", l.cost_centres AS "costCentres",
     coalesce((SELECT json_agg(json_build_object('kind', a.kind, 'billId', a.bill_id, 'billName', b.name, 'billDate', a.bill_date,
         'dueDate', a.due_date, 'creditCount', a.credit_count, 'creditUnit', a.credit_unit, 'amount', a.amount::text, 'side', a.side) ORDER BY a.id)
       FROM bill_allocation a LEFT JOIN bill b ON b.company_id = a.company_id AND b.id = a.bill_id
@@ -267,11 +268,13 @@ export async function createLedger(context: LedgerContext, value: unknown): Prom
   // New ledgers under trade receivables or payables keep bills by default (observed), as in the reference.
   const billWise = input.billWise ?? await inPartyGroups(context, group.id);
   const credit = creditColumns(input.creditPeriod ?? null);
+  // New income and expense ledgers take cost centres by default (M2a slice 2), as existing ones were set by migration 0008.
+  const costCentres = input.costCentres ?? (group.nature === 'income' || group.nature === 'expense');
   const { rows } = await context.client.query<{ id: string }>(
-    `INSERT INTO ledger (company_id, group_id, name, second_language_name, opening_amount, opening_side, bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+    `INSERT INTO ledger (company_id, group_id, name, second_language_name, opening_amount, opening_side, bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check, cost_centres)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
     [context.company.companyId, group.id, input.name, input.secondLanguageName, opening.amount, opening.side, billWise, credit.count, credit.unit, credit.dueDate,
-      input.creditDaysCheck ?? false]).catch(error => refusal(error, ledgerRefusals));
+      input.creditDaysCheck ?? false, costCentres]).catch(error => refusal(error, ledgerRefusals));
   if (input.opening?.bills?.length) {
     const plan = await planOpeningBills(context, { id: rows[0].id, billWise, credit: input.creditPeriod ?? null }, opening, input.opening.bills);
     await writeBills(context, null, plan).catch(error => refusal(error, ledgerRefusals));
@@ -306,13 +309,14 @@ export async function alterLedger(context: LedgerContext, ledgerId: string, valu
   const billWise = input.billWise ?? before.billWise;
   const creditPeriod = input.creditPeriod === undefined ? before.creditPeriod : input.creditPeriod;
   const credit = creditColumns(creditPeriod);
-  // Turning bill-wise off keeps the ledger's bills (observed); new rows on it are dropped from then on.
+  // Turning bill-wise off keeps the ledger's bills (observed); new rows on it are dropped from then on. Turning cost
+  // centres off likewise keeps the allocation rows posted (vouchers.ts keeps them through an alter).
   await context.client.query(
     `UPDATE ledger SET group_id = $3, name = $4, second_language_name = $5, opening_amount = $6, opening_side = $7, bill_wise = $8,
-       credit_count = $9, credit_unit = $10, credit_due_date = $11, credit_days_check = $12, revision = revision + 1
+       credit_count = $9, credit_unit = $10, credit_due_date = $11, credit_days_check = $12, cost_centres = $13, revision = revision + 1
      WHERE company_id = $1 AND id = $2`,
     [context.company.companyId, ledgerId, groupId, input.name, input.secondLanguageName, opening.amount, opening.side, billWise,
-      credit.count, credit.unit, credit.dueDate, input.creditDaysCheck ?? before.creditDaysCheck]).catch(error => refusal(error, ledgerRefusals));
+      credit.count, credit.unit, credit.dueDate, input.creditDaysCheck ?? before.creditDaysCheck, input.costCentres ?? before.costCentres]).catch(error => refusal(error, ledgerRefusals));
   // Opening rows kept as they are must still fit a changed opening balance.
   if (openingBills === undefined && before.openingBills.length) assertBillRowsFit(before.openingBills, opening.side, opening.amount, context.company.exponent, 'the opening balance');
   if (openingBills !== undefined) {

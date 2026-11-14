@@ -3,10 +3,11 @@ import { addMoney, assertMoneyInRange, compareMoney, formatMoney } from '@ten98/
 import { isCalendarDate } from '../../lib/company.ts';
 import {
   revisionInput, voucherAlterInput, voucherCreateInput, voucherListQuery,
-  type BillRow, type BillRowInput, type BillWarning, type CreditPeriod, type CreditUnit, type Side, type Voucher, type VoucherKind,
+  type BillRow, type BillRowInput, type BillWarning, type CostAllocationInput, type CreditPeriod, type CreditUnit, type Side, type Voucher, type VoucherKind,
   type VoucherLine, type VoucherPage, type VoucherSummary, type VoucherType,
 } from '../../lib/ledger.ts';
 import { billsCreatedBy, billWarnings, planBills, storedBillRows, writeBills, type BillLine, type BillPlan } from './bills.ts';
+import { costRowsByLine, planCost, storedCostRows, writeCost, type CostLine } from './cost-centres.ts';
 import { conflict, ledgerError, parseAmount, parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql, missingAs, readVoucherType } from './masters.ts';
 import { logRevision } from './revisions.ts';
@@ -24,6 +25,7 @@ const voucherFields = (path: readonly PropertyKey[]): string => {
   const [first, index, inner] = path;
   if (first === 'lines' && typeof index === 'number') {
     if (inner === 'bills') return `the bill rows on line ${index + 1}`;
+    if (inner === 'costAllocations') return `the cost rows on line ${index + 1}`;
     return `the ${inner === 'ledgerId' ? 'ledger' : inner === 'side' ? 'Dr or Cr side' : 'amount'} on line ${index + 1}`;
   }
   return ({ idempotencyKey: 'the idempotency key', voucherTypeId: 'the voucher type', date: 'the date', narration: 'the narration',
@@ -44,7 +46,7 @@ export async function readVoucher(context: LedgerContext, voucherId: string, loc
   if (lock) await client.query('SELECT 1 FROM voucher WHERE company_id = $1 AND id = $2 FOR UPDATE', [company.companyId, voucherId]);
   const { rows } = await client.query<VoucherSummary>(`${headerSelect} AND v.id = $2`, [company.companyId, voucherId]);
   if (!rows[0]) throw voucherNotFound;
-  const lines = await client.query<Omit<VoucherLine, 'bills'>>(
+  const lines = await client.query<Omit<VoucherLine, 'bills' | 'costAllocations'>>(
     `SELECT l.line_no AS "lineNo", l.ledger_id AS "ledgerId", led.name AS "ledgerName", l.side, l.amount, l.currency,
        l.currency_amount AS "currencyAmount", l.fx_rate::text AS "fxRate"
      FROM voucher_line l JOIN ledger led ON led.company_id = l.company_id AND led.id = l.ledger_id
@@ -60,7 +62,8 @@ export async function readVoucher(context: LedgerContext, voucherId: string, loc
     list.push({ ...row, creditPeriod: creditCount !== null && creditUnit !== null ? { count: creditCount, unit: creditUnit } : null });
     byLine.set(lineNo, list);
   }
-  return { ...rows[0], lines: lines.rows.map(line => ({ ...line, bills: byLine.get(line.lineNo) ?? [] })) };
+  const costs = await costRowsByLine(context, voucherId);
+  return { ...rows[0], lines: lines.rows.map(line => ({ ...line, bills: byLine.get(line.lineNo) ?? [], costAllocations: costs.get(line.lineNo) ?? [] })) };
 }
 
 const cursorShape = /^(\d{4}-\d{2}-\d{2})~([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
@@ -93,8 +96,8 @@ function assertDateOpen(context: LedgerContext, date: string): void {
   if (lockedThrough !== null && date <= lockedThrough) throw ledgerError(409, `The books are locked through ${lockedThrough}. Choose a later date or ask an owner to unlock the period.`, 'locked_period');
 }
 
-type PreparedLine = BillLine;
-type LineInput = { ledgerId: string; side: Side; amount: string; bills?: BillRowInput[] };
+type PreparedLine = BillLine & CostLine;
+type LineInput = { ledgerId: string; side: Side; amount: string; bills?: BillRowInput[]; costAllocations?: CostAllocationInput[] };
 
 /**
  * Applies the posting rules to a voucher body and returns its lines in minor units. Contra moves money between cash and
@@ -109,7 +112,8 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
   const lines = body.lines.map((line, index): PreparedLine => {
     const amount = parseAmount(line.amount, company.exponent, `The amount on line ${index + 1}`);
     if (amount <= 0n) throw ledgerError(400, `The amount on line ${index + 1} must be more than zero.`, 'validation');
-    return { lineNo: index + 1, ledgerId: line.ledgerId, side: line.side, amount, billWise: false, credit: null, bills: line.bills };
+    return { lineNo: index + 1, ledgerId: line.ledgerId, side: line.side, amount, billWise: false, credit: null, bills: line.bills,
+      costCentres: false, costAllocations: line.costAllocations };
   });
   let debit = 0n, credit = 0n;
   for (const line of lines) if (line.side === 'Dr') debit = addMoney(debit, line.amount); else credit = addMoney(credit, line.amount);
@@ -123,9 +127,9 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
   // in the same order (and waits for this posting), so the two never deadlock.
   const ledgerIds = [...new Set(lines.map(line => line.ledgerId))].sort();
   await client.query('SELECT 1 FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR KEY SHARE', [company.companyId, ledgerIds]);
-  const { rows } = await client.query<{ id: string; cash_bank: boolean; bill_wise: boolean; credit: CreditPeriod | null }>(
+  const { rows } = await client.query<{ id: string; cash_bank: boolean; bill_wise: boolean; cost_centres: boolean; credit: CreditPeriod | null }>(
     `WITH RECURSIVE ${groupTreeSql}
-     SELECT l.id, coalesce(t.cash_bank, false) AS cash_bank, l.bill_wise,
+     SELECT l.id, coalesce(t.cash_bank, false) AS cash_bank, l.bill_wise, l.cost_centres,
        CASE WHEN l.credit_count IS NOT NULL THEN json_build_object('count', l.credit_count, 'unit', l.credit_unit)
          WHEN l.credit_due_date IS NOT NULL THEN json_build_object('dueDate', l.credit_due_date) END AS credit
      FROM ledger l LEFT JOIN tree t ON t.id = l.group_id
@@ -138,6 +142,7 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
     const fact = facts.get(line.ledgerId)!;
     line.billWise = fact.bill_wise;
     line.credit = fact.credit;
+    line.costCentres = fact.cost_centres;
   }
 
   const isCash = (line: PreparedLine) => cashBank.get(line.ledgerId) === true;
@@ -195,7 +200,7 @@ async function movesPeriod(context: LedgerContext, before: Voucher, date: string
 
 const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');
 
-/** A posting's answer: the voucher plus what happened to its bill rows that the caller may not expect. */
+/** A posting's answer: the voucher plus what happened to its bill and cost rows that the caller may not expect. */
 export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };
 
 /**
@@ -228,6 +233,7 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   }
   const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found')));
   const lines = await prepareLines(context, type.kind, body);
+  const cost = await planCost(context, lines);
   const plan = await planBills(context, { kind: type.kind, reference: body.reference, optional: body.status === 'optional' }, lines);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO voucher (company_id, voucher_type_id, series, date, narration, status, post_dated, reference, reference_date, idempotency_key, request_hash, created_by)
@@ -235,11 +241,12 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
     [company.companyId, type.id, type.numberingSeries, body.date, body.narration, body.status, body.postDated, body.reference, body.referenceDate, idempotencyKey, hash, userId]);
   const voucherId = rows[0].id;
   await insertLines(context, voucherId, lines);
+  await writeCost(context, voucherId, cost.rows);
   // An optional voucher takes no number until it is made regular.
   await writeVoucherBills(context, { id: voucherId, date: body.date, typeId: type.id, series: type.numberingSeries }, plan, body.status === 'regular', null);
   const voucher = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'create', null, voucher);
-  return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows)] };
+  return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows), ...cost.warnings] };
 }
 
 /** The voucher, locked, if it may still change: not deleted and at the revision the editor read. */
@@ -258,7 +265,8 @@ async function changeable(context: LedgerContext, voucherId: string, revision: n
  * number of the period of its (new) date, and a numbered voucher cannot become optional again. Each row finds its bill
  * by name again, so an unchanged name keeps the bill; a renamed reference or a changed
  * party leaves other vouchers' rows on the old bill, which then stands on its own (observed; answered with
- * `bill_split`). A line whose ledger is no longer bill-wise keeps the rows it had (`bills_kept`).
+ * `bill_split`). A line whose ledger is no longer bill-wise keeps the rows it had (`bills_kept`); a line whose ledger (or
+ * company) no longer takes cost centres keeps or rebalances its cost rows (`planCost`).
  */
 export async function alterVoucher(context: LedgerContext, voucherId: string, value: unknown): Promise<VoucherResult> {
   const { client, company } = context;
@@ -269,6 +277,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   assertDateOpen(context, before.date);
   const crossing = await movesPeriod(context, before, input.date);
   const lines = await prepareLines(context, before.kind, input);
+  const cost = await planCost(context, lines, await storedCostRows(context, voucherId));
   const stored = await storedBillRows(context, voucherId);
   const plan = await planBills(context, { kind: before.kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
   const created = await billsCreatedBy(context, voucherId);
@@ -278,12 +287,13 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
     [company.companyId, voucherId, input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate]);
   await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
   await insertLines(context, voucherId, lines);
+  await writeCost(context, voucherId, cost.rows);
   const numbering = (before.status === 'optional' && input.status === 'regular') || crossing;
   await writeVoucherBills(context, { id: voucherId, date: input.date, typeId: before.voucherTypeId, series: before.series }, plan, numbering, before.number);
   const after = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'alter', before, after);
   const held = new Set(stored.flatMap(row => row.billId ? [row.billId] : []));
-  return { voucher: after, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows, created, held)] };
+  return { voucher: after, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows, created, held), ...cost.warnings] };
 }
 
 /**

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import pg from 'pg';
-import { migrationFiles } from '../src/server/db.ts';
+import { join } from 'node:path';
+import { createMigrationLedger } from '@ten98/runtime';
+import { migrationFiles, migrationLockKey } from '../src/server/db.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 
@@ -47,7 +49,9 @@ before(async () => {
   await admin.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate)
     VALUES ($1, $2, 1, $3, 'Dr', 100, 'AED', 100, 1), ($1, $2, 2, $4, 'Cr', 100, 'AED', 100, 1)`, [workspace, voucher, ledgers['Posted Debtor'], ledgers.Rent]);
   await admin.query('COMMIT');
-  await migrateDatabase({ log: () => undefined });
+  // This migration alone: later ones (0008 flips income and expense ledgers to cost centres) have their own tests.
+  const through = migrationFiles.slice(0, migrationFiles.indexOf(thisMigration) + 1);
+  await migrateDatabase({ ledger: createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: through, lockKey: migrationLockKey }), log: () => undefined });
 });
 after(async () => { await admin?.end(); await database?.drop(); });
 
@@ -62,5 +66,5 @@ test('only receivables and payables ledgers without history become bill-wise, ea
   assert.deepEqual([debtor.before.billWise, debtor.before.revision, debtor.after.billWise, debtor.after.revision, debtor.after.name, debtor.after.openingBills],
     [false, 1, true, 2, 'Clean Debtor', []]);
   assert.equal(Number((await admin.query('SELECT count(*) FROM bill_allocation')).rows[0].count), 0, 'no bill rows are created');
-  assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
+  assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.indexOf(thisMigration) + 1);
 });
