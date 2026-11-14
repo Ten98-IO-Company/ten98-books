@@ -18,7 +18,7 @@ export const costCategoryCreateInput = z.object({
   name, secondLanguageName, allocateRevenue: z.boolean().optional(), allocateNonRevenue: z.boolean().optional(),
 }).strict();
 export const costCategoryAlterInput = costCategoryCreateInput.extend({ revision }).strict();
-/** A centre: its category and, optionally, the centre it sits under (of the same category when set). */
+/** A centre: its category and, optionally, the centre it sits under (placed there in that centre's category). */
 export const costCentreCreateInput = z.object({
   name, secondLanguageName, categoryId: id, parentId: id.nullish().transform(value => value ?? null),
 }).strict();
@@ -48,12 +48,13 @@ export type CostFigures = { opening: bigint; debit: bigint; credit: bigint; clos
 export type CostSummaryCentre = CostFigures & { costCentreId: string; name: string };
 export type CostSummaryCategory = CostFigures & { categoryId: string; name: string; centres: CostSummaryCentre[] };
 /**
- * The cost category summary: per category (as each centre stands today), its root centres (no parent, or a parent in
- * another category) with their same-category sub-centres folded in; the category's figures are the sum of its centres'.
+ * The cost category summary: per category (as each centre stands today), its top-level centres (no parent) with every
+ * sub-centre folded in, whatever the sub-centres' own categories (observed); the category's figures are the sum of its
+ * centres' (a total of our own: the reference's cost reports show none).
  */
 export type CostCategorySummary = { from: string; to: string; categories: CostSummaryCategory[] };
 export type CostBreakupRow = CostFigures & { kind: 'centre' | 'ledger'; id: string; name: string };
-/** One centre: its direct same-category sub-centres (each with its own sub-centres) and the ledgers of its own rows. */
+/** One centre: its direct sub-centres, whatever their categories (each with its own sub-centres), and the ledgers of its own rows. */
 export type CostCentreBreakup = {
   from: string; to: string; centre: { id: string; name: string; categoryId: string; categoryName: string };
   rows: CostBreakupRow[]; totals: CostFigures;

@@ -223,8 +223,8 @@ export type Voucher = {
 export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached', 'bill_over_settled', 'bill_both_sides', 'bill_split',
   // Cost allocations (M2a slice 2): rows dropped on a line that takes no cost centres; a line's earlier rows kept, or
   // rows sent accepted, after its ledger or the company stopped taking cost centres; kept rows rebalanced on their last
-  // row to a new line amount.
-  'cost_ignored', 'cost_kept', 'cost_rebalanced'] as const;
+  // row to a new line amount; kept rows dropped because the body sent an empty list for them.
+  'cost_ignored', 'cost_kept', 'cost_rebalanced', 'cost_dropped'] as const;
 export type BillWarningCode = (typeof billWarningCodes)[number];
 export type BillWarning = { code: BillWarningCode; line: number | null; billId: string | null; billName: string | null; amount: bigint | null };
 export type VoucherSummary = Omit<Voucher, 'lines'>;

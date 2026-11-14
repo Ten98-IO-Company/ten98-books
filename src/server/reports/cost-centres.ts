@@ -10,8 +10,9 @@ import { countsSql, reportBudget } from '../ledger/reports.ts';
  * The two observed cost centre reports (M2a slice 2): the cost category summary and one centre's break-up. Allocation
  * rows count when their voucher does (regular, undeleted; a post-dated voucher from its own date). Reports group rows
  * by each centre's category as it is today, not the category a row was saved with (observed). A centre's figures
- * are its own rows plus those of its sub-centres in the same category, at any depth; a sub-centre in another category
- * is a root of that category, so every row counts once. Opening (observed default): rows dated before the period on
+ * are its own rows plus those of its sub-centres at any depth, whatever their categories: the summary rolls every
+ * centre into its top-most ancestor's row, in that ancestor's category (observed after a parent moved to another
+ * category), so every row counts once. Opening (observed default): rows dated before the period on
  * balance-sheet ledgers carry forward; rows on income and expense ledgers show the period movement only. No figure
  * for line amounts left without centres. The summary gets the statements' 30-second budget, one centre 20 seconds.
  */
@@ -37,7 +38,7 @@ async function centres(context: LedgerContext): Promise<Centre[]> {
   return rows;
 }
 
-/** Each centre's root: walking up while the parent is in the centre's own (current) category. */
+/** Each centre's root: its top-most ancestor (itself when it has no parent). */
 function rootsOf(list: Centre[]): Map<string, string> {
   const byId = new Map(list.map(centre => [centre.id, centre]));
   const roots = new Map<string, string>();
@@ -45,7 +46,7 @@ function rootsOf(list: Centre[]): Map<string, string> {
     const known = roots.get(centre.id);
     if (known) return known;
     const parent = centre.parentId ? byId.get(centre.parentId) : undefined;
-    const root = parent && parent.categoryId === centre.categoryId ? rootOf(parent) : centre.id;
+    const root = parent ? rootOf(parent) : centre.id;
     roots.set(centre.id, root);
     return root;
   };
@@ -96,8 +97,8 @@ export async function costCategorySummary(context: LedgerContext, value: unknown
 }
 
 /**
- * One centre: its direct sub-centres in its own category (each with their same-category sub-centres) and the ledgers of
- * its own rows. The total equals the centre's figures in the summary (its row there when it is a root).
+ * One centre: its direct sub-centres, whatever their categories (each with its own sub-centres; observed), and the
+ * ledgers of its own rows. The total equals the centre's figures in the summary (its row there when it is a root).
  */
 export async function costCentreBreakup(context: LedgerContext, centreId: string, value: unknown): Promise<CostCentreBreakup> {
   const query = parseInput(costBreakupQuery, value, queryFields);
@@ -105,11 +106,11 @@ export async function costCentreBreakup(context: LedgerContext, centreId: string
   const list = await centres(context);
   const centre = list.find(item => item.id === centreId);
   if (!centre) throw ledgerError(404, 'Cost centre not found.', 'not_found');
-  const children = list.filter(item => item.parentId === centre.id && item.categoryId === centre.categoryId).sort(byName);
-  // Which direct sub-centre each same-category descendant rolls up into.
+  const children = list.filter(item => item.parentId === centre.id).sort(byName);
+  // Which direct sub-centre each descendant rolls up into.
   const branch = new Map<string, string>();
   const walk = (parentId: string, top: string) => {
-    for (const item of list) if (item.parentId === parentId && item.categoryId === centre.categoryId && !branch.has(item.id)) { branch.set(item.id, top); walk(item.id, top); }
+    for (const item of list) if (item.parentId === parentId && !branch.has(item.id)) { branch.set(item.id, top); walk(item.id, top); }
   };
   for (const child of children) { branch.set(child.id, child.id); walk(child.id, child.id); }
   const own = await ownFigures(context, query.from, query.to, [centre.id, ...branch.keys()]);

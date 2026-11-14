@@ -240,9 +240,11 @@ export async function storedCostRows(context: LedgerContext, voucherId: string):
 /**
  * Applies the cost rules to a voucher's lines. A line takes rows when the company keeps cost centres and its ledger
  * takes them; otherwise sent rows are dropped (`cost_ignored`), except on an alter of a line that already had rows (same
- * line number and ledger): rows sent are then accepted (`cost_kept`), and with none sent the earlier rows are kept, the
- * last row of each category taking the difference to a changed line amount (`cost_rebalanced`; its side turns when the
- * difference passes it, and a row reaching zero is dropped). Decided, awaiting observation.
+ * line number and ledger): rows sent are then accepted (`cost_kept`); with the list left out the earlier rows are kept,
+ * the last row of each category taking the difference to a changed line amount (`cost_rebalanced`; its side turns when
+ * the difference passes it, and a row reaching zero is dropped); an empty list drops them (`cost_dropped`). Observed:
+ * the reference keeps such rows in its reports and drops them silently when the voucher is saved again; keeping them
+ * unless told is a declared difference. The company feature switched off is treated alike (awaiting observation).
  *
  * Refusals: an unknown centre; a category other than the centre's own unless the voucher already stores that pair; one
  * centre twice in one category on a line; a category whose rows do not net, towards the line, to the line amount.
@@ -259,6 +261,9 @@ export async function planCost(context: LedgerContext, lines: CostLine[], stored
     if (costCentresEnabled && line.costCentres) { if (sent.length) accepted.push({ line, sent }); continue; }
     if (!earlier.length) { if (sent.length) warnings.push(warning('cost_ignored', line.lineNo)); continue; }
     if (sent.length) { accepted.push({ line, sent }); warnings.push(warning('cost_kept', line.lineNo)); continue; }
+    // Declared difference: the reference drops such rows without a word when the voucher is saved again. Here rows
+    // are dropped only when the body says so with an empty list.
+    if (line.costAllocations) { warnings.push(warning('cost_dropped', line.lineNo)); continue; }
     rows.push(...rebalance(line, earlier, warnings));
   }
 

@@ -108,6 +108,8 @@ test('the general category is seeded and kept; names are unique across centres; 
   assert.deepEqual([(await b.call(`/cost-categories/${channel}/delete`, { revision: 1 })).body.code], ['in_use'], 'a category holding centres');
   assert.deepEqual([(await b.call(`/cost-centres/${showroom}/delete`, { revision: 1 })).body.code], ['in_use'], 'a centre holding sub-centres');
 
+  await b.centre('Channel', seeded.id);
+  assert.equal((await b.ok('/cost-categories')).costCategories.length, 2, 'a category and a centre may share a name (separate name spaces)');
   const spare = await b.centre('Spare', channel);
   assert.equal((await b.ok(`/cost-centres/${spare}/delete`, { revision: 1 }, 200)).deleted, true, 'an unused centre is deleted (P7)');
   assert.deepEqual(((await b.ok(`/cost-centres/${spare}/revisions`)).revisions as any[]).map(row => row.action), ['create', 'delete']);
@@ -231,6 +233,9 @@ test('after the ledger stops taking cost centres, an alter keeps rows sent (cost
   await step('300', null, ['Showroom:Channel:Cr:500.00', 'Online:Channel:Dr:200.00', 'P-North:Projects:Cr:300.00'], ['cost_rebalanced@2']);
   await step('500', null, ['Showroom:Channel:Cr:500.00', 'P-North:Projects:Cr:500.00'], ['cost_rebalanced@2']);
   await step('500', null, ['Showroom:Channel:Cr:500.00', 'P-North:Projects:Cr:500.00'], ['cost_kept@2']);
+  const omitted = await b.alter(voucher, { narration: 'rows as read' });
+  assert.deepEqual(codes(omitted), ['cost_kept@2'], 'rows re-sent as read are kept');
+  voucher = omitted.voucher;
   const mismatch = await b.call(`/vouchers/${voucher.id}`, { date: voucher.date, narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null,
     revision: voucher.revision, lines: [line(party, 'Dr', '500'), line(consulting, 'Cr', '500', [[showroom, '400']])] });
   assert.deepEqual([mismatch.status, mismatch.body.code], [400, 'allocation_total'], 'rows sent while off still add up to the line');
@@ -243,6 +248,10 @@ test('after the ledger stops taking cost centres, an alter keeps rows sent (cost
   const kept = await b.alter(voucher, { narration: 'feature off' });
   assert.deepEqual([codes(kept), rowsOf(kept.voucher.lines[1])], [['cost_kept@2'], ['Showroom:Channel:Cr:500.00', 'P-North:Projects:Cr:500.00']]);
   assert.deepEqual(await b.figures('2026-01-01', '2026-12-31'), ['Channel 0.00/500.00: Online 0.00+0.00-0.00=0.00, Showroom 0.00+0.00-500.00=-500.00', 'General 0.00/0.00: ', 'Projects 0.00/500.00: P-North 0.00+0.00-500.00=-500.00']);
+  // Declared difference: the reference drops such rows silently when the voucher is saved again; here only an empty list
+  // drops them, and the answer says so.
+  const dropped = await b.alter(kept.voucher, { lines: [line(party, 'Dr', '500'), line(consulting, 'Cr', '500', [])] });
+  assert.deepEqual([codes(dropped), dropped.voucher.lines[1].costAllocations], [['cost_dropped@2'], []]);
 });
 
 test('bill rows and cost rows on one line stay through an alter and a date moved into the next financial year', async () => {
@@ -261,7 +270,32 @@ test('bill rows and cost rows on one line stay through an alter and a date moved
   assert.deepEqual(await b.figures('2027-01-01', '2027-12-31'), ['General 0.00/0.00: ', 'Projects 1050.00/1050.00: P-North 0.00+1050.00-1050.00=0.00']);
 });
 
-test('the summary folds same-category sub-centres into their root, counts a sub-centre left in another category once, carries only balance-sheet rows forward (P5, P6), and leaves out optional, cancelled and deleted vouchers', async () => {
+/** The summary's categories each equal the sum of their rows. */
+function assertCategoryTotals(summary: any) {
+  for (const category of summary.categories) {
+    for (const key of ['opening', 'debit', 'credit', 'closing']) {
+      const sum = category.centres.reduce((total: bigint, row: any) => total + BigInt(row[key].replace('.', '')), 0n);
+      assert.equal(BigInt(category[key].replace('.', '')), sum, `${category.name} ${key}`);
+    }
+  }
+}
+
+test('a parent moved to another category carries its child: counted once, in the parent\'s row and its new category; the break-up of the parent includes the child', async () => {
+  const b = await books('Cost Parent Moves');
+  await b.enable();
+  const sales = await b.ledger('Sales', 'sales'), party = await b.ledger('Party', 'receivables');
+  const old = await b.category('Old'), fresh = await b.category('New');
+  const parent = await b.centre('Parent', old), child = await b.centre('Child', old, parent);
+  await b.voucher('sales', '2026-02-01', [line(party, 'Dr', '100'), line(sales, 'Cr', '100', [[parent, '100']])]);
+  await b.voucher('sales', '2026-02-02', [line(party, 'Dr', '40'), line(sales, 'Cr', '40', [[child, '40']])]);
+  await b.moveCentre(parent, { categoryId: fresh });
+  assert.deepEqual(await b.figures('2026-01-01', '2026-12-31'), ['General 0.00/0.00: ', 'New 0.00/140.00: Parent 0.00+0.00-140.00=-140.00', 'Old 0.00/0.00: ']);
+  assertCategoryTotals(await b.summary('2026-01-01', '2026-12-31'));
+  const breakup = (await b.ok(`/reports/cost-centre-breakup/${parent}?from=2026-01-01&to=2026-12-31`)).report;
+  assert.deepEqual([breakup.rows.map((row: any) => `${row.kind} ${row.name} ${row.credit}`), breakup.totals.credit], [['centre Child 40.00', 'ledger Sales 100.00'], '140.00']);
+});
+
+test('the summary folds sub-centres into their top-level centre, carries only balance-sheet rows forward (P5, P6), and leaves out optional, cancelled and deleted vouchers', async () => {
   const b = await books('Cost Reports');
   await b.enable();
   const sales = await b.ledger('Sales', 'sales'), equipment = await b.ledger('Equipment', 'fixed_assets', { costCentres: true }), party = await b.ledger('Party', 'receivables');
@@ -285,15 +319,16 @@ test('the summary folds same-category sub-centres into their root, counts a sub-
   await b.moveCentre(away, { categoryId: other });
 
   assert.deepEqual(await b.figures('2026-02-01', '2026-02-28'), [
-    'Area 0.00/179.00: Grand 0.00+0.00-20.00=-20.00, Root 70.00+0.00-159.00=-89.00',
+    'Area 0.00/209.00: Root 70.00+0.00-209.00=-139.00',
     'General 0.00/0.00: ',
-    'Other 0.00/30.00: Away 0.00+0.00-30.00=-30.00',
-  ], 'Root holds Kid; Away is a root of Other and Grand, under Away, a root of Area; the January sale does not open, the equipment row does');
+    'Other 0.00/0.00: ',
+  ], 'Root holds Kid, Away (now in Other) and Grand under it; the January sale does not open, the equipment row does');
+  assertCategoryTotals(await b.summary('2026-02-01', '2026-02-28'));
   const breakup = (await b.ok(`/reports/cost-centre-breakup/${root}?from=2026-02-01&to=2026-02-28`)).report;
   assert.deepEqual([breakup.centre.categoryName, breakup.rows.map((row: any) => `${row.kind} ${row.name} ${row.opening}+${row.debit}-${row.credit}`), breakup.totals.closing],
-    ['Area', ['centre Kid 0.00+0.00-50.00', 'ledger Equipment 70.00+0.00-0.00', 'ledger Sales 0.00+0.00-109.00'], '-89.00'], 'the break-up totals the summary row');
+    ['Area', ['centre Away 0.00+0.00-50.00', 'centre Kid 0.00+0.00-50.00', 'ledger Equipment 70.00+0.00-0.00', 'ledger Sales 0.00+0.00-109.00'], '-139.00'], 'the break-up totals the summary row');
   const filtered = (await b.ok(`/reports/cost-category-summary?from=2026-02-01&to=2026-02-28&categoryId=${other}`)).report;
-  assert.deepEqual(filtered.categories.map((row: any) => row.name), ['Other']);
+  assert.deepEqual(filtered.categories.map((row: any) => [row.name, row.centres.length]), [['Other', 0]]);
   assert.deepEqual([(await b.call('/reports/cost-category-summary?from=2026-03-01&to=2026-02-01')).body.code, (await b.call(`/reports/cost-category-summary?from=2026-02-01&to=2026-02-28&categoryId=${randomUUID()}`)).body.code,
     (await b.call('/reports/cost-category-summary?from=2026-02-01&to=2026-02-28&extra=1')).body.code], ['validation', 'not_found', 'validation']);
 
@@ -301,8 +336,8 @@ test('the summary folds same-category sub-centres into their root, counts a sub-
   assert.deepEqual([csv.status, csv.headers.get('content-type')], [200, 'text/csv; charset=utf-8']);
   const text = await csv.text();
   assert.match(text, /"Category","Cost centre","Kind","Opening balance","Opening side","Debit","Credit","Closing balance","Closing side"/);
-  assert.match(text, /"Area","","category","70\.00","Dr","0\.00","179\.00","109\.00","Cr"\r\n"Area","Grand",[^\n]*\n"Area","Root","centre","70\.00","Dr","0\.00","159\.00","89\.00","Cr"/);
-  assert.match(await (await raw(`/api/companies/${b.companyId}/reports/cost-centre-breakup/${root}/export?from=2026-02-01&to=2026-02-28`)).text(), /"Total","total","70\.00","Dr","0\.00","159\.00","89\.00","Cr"/);
+  assert.match(text, /"Area","","category","70\.00","Dr","0\.00","209\.00","139\.00","Cr"\r\n"Area","Root","centre","70\.00","Dr","0\.00","209\.00","139\.00","Cr"/);
+  assert.match(await (await raw(`/api/companies/${b.companyId}/reports/cost-centre-breakup/${root}/export?from=2026-02-01&to=2026-02-28`)).text(), /"Total","total","70\.00","Dr","0\.00","209\.00","139\.00","Cr"/);
 
   // Reconciliation (not a report column): per cost-centre ledger and stored category, allocated plus unallocated line
   // amounts equal the ledger's trial balance movement for the period.
