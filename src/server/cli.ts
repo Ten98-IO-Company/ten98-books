@@ -83,10 +83,10 @@ function demoOptions(args: string[], confirms: boolean) {
   try {
     const { values, positionals } = parseArgs({
       args: args.filter(arg => arg !== '--'), allowPositionals: true,
-      options: { owner: { type: 'string' }, company: { type: 'string' }, all: { type: 'boolean' }, yes: { type: 'boolean' } },
+      options: { owner: { type: 'string' }, company: { type: 'string' }, all: { type: 'boolean' }, yes: { type: 'boolean' }, 'masters-only': { type: 'boolean' } },
     });
-    if (positionals.length || !values.owner || (values.yes && !confirms)) throw new CliError('');
-    return { email: values.owner, company: values.company, all: values.all, yes: values.yes === true };
+    if (positionals.length || !values.owner || ((values.yes || values['masters-only']) && !confirms)) throw new CliError('');
+    return { email: values.owner, company: values.company, all: values.all, yes: values.yes === true, mastersOnly: values['masters-only'] === true };
   } catch (error) {
     if (error instanceof DemoError) throw error;
     throw new CliError('');
@@ -95,7 +95,7 @@ function demoOptions(args: string[], confirms: boolean) {
 
 /** Demo commands read dataset files and the database; a DemoError is already a plain message naming the file and key. */
 async function demo(command: 'seed-demo' | 'demo-compare', args: string[]) {
-  const usage = command === 'seed-demo' ? 'Usage: pnpm seed:demo -- --owner <email> [--company <slug> | --all] --yes' : 'Usage: pnpm demo:compare -- --owner <email> [--company <slug> | --all]';
+  const usage = command === 'seed-demo' ? 'Usage: pnpm seed:demo -- --owner <email> [--company <slug> | --all] [--masters-only] --yes' : 'Usage: pnpm demo:compare -- --owner <email> [--company <slug> | --all]';
   try {
     const options = demoOptions(args, command === 'seed-demo');
     await assertSchema();

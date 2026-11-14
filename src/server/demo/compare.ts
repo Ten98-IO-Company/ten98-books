@@ -6,6 +6,7 @@ import { listLedgers } from '../ledger/masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
 import { listVouchers } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
+import { compareBills } from './compare-bills.ts';
 import { checkNumbers, DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 import { findDemoCompany, findUserId, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
 
@@ -29,7 +30,7 @@ export type CompareResult = {
   lines: CompareLine[]; notComparable: string[]; matches: number; differences: number; pending: number;
 };
 
-const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
+const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet', 'outstanding', 'receivables', 'payables'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'],
   profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets', 'unrealisedExchangeDifference'] };
 
@@ -39,10 +40,7 @@ const annotations = ['source', 'voucherCountNote', 'report', 'note'];
 /** Why a whole block of expected.json cannot be compared yet; any other block gets the general reason. */
 const blockReasons: Record<string, string> = {
   stockSummary: 'needs inventory',
-  receivables: 'needs bill-wise receivables, which ten98-books does not track yet',
-  payables: 'needs bill-wise payables, which ten98-books does not track yet',
   vat: 'needs the VAT return, which ten98-books does not compute yet',
-  outstanding: 'needs pending bills (bill-wise tracking), which ten98-books does not have yet',
   costCentres: 'needs cost centres, which ten98-books does not model yet',
   exchangeDifferences: 'needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately',
 };
@@ -279,6 +277,9 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         }
       }
     }
+
+    // Pending bills (per party at each stated date, and the count and total per side), against the bill reports.
+    lines.push(...await compareBills(context, dataset));
   }).catch(error => {
     // A refusal of the report (a period the reports do not take) is a problem in expected.json, named as such.
     if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/expected.json: the reports refused the period ${from} to ${to}: ${error.message}`);
