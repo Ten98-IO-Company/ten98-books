@@ -98,6 +98,14 @@ test('a February trial balance starts income and expense at zero and carries Jan
   // The profit and loss row opens the profit and loss ledger, whose opening balance is the carried result.
   const carried = await read(c, `reports/ledger-monthly/${profitLedger}?from=2026-02-01&to=2026-02-28`);
   assert.deepEqual([carried.opening, carried.months.at(-1).closing], ['1500.00', '1500.00']);
+  // From the year start its months close at zero, but a later month's vouchers are a period of their own and open
+  // with the result carried up to that month (documented exception).
+  const fromYearStart = await read(c, `reports/ledger-monthly/${profitLedger}?from=2026-01-01&to=2026-03-31`);
+  assert.deepEqual([fromYearStart.opening, ...fromYearStart.months.map((month: any) => month.closing)], ['0.00', '0.00', '0.00', '0.00']);
+  for (const [from, to, carriedIn] of [['2026-02-01', '2026-02-28', '1500.00'], ['2026-03-01', '2026-03-31', '-11355.00']]) {
+    const month = await read(c, `reports/ledger-vouchers/${profitLedger}?from=${from}&to=${to}`);
+    assert.deepEqual([month.opening, month.rows.length, month.totals.closing], [carriedIn, 0, carriedIn], `${from} carries the result before it`);
+  }
 
   // The statements do not change: profit and loss is the period's movement, the balance sheet the year to date.
   assert.equal((await read(c, 'reports/profit-and-loss?from=2026-02-01&to=2026-02-28')).netProfit, '12855.00');
