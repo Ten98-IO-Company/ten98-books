@@ -54,6 +54,7 @@ export const commands = {
   'home.profit-and-loss': { title: 'Profit and loss', context: 'company-home', bar: false },
   'home.trial-balance': { title: 'Trial balance', context: 'company-home', bar: false },
   'home.ledger': { title: 'Ledger', context: 'company-home', bar: false },
+  'home.cost-centres': { title: 'Cost categories and centres', context: 'company-home', bar: false },
 
   'list.create': { title: 'Create', context: 'list' },
   'list.delete': { title: 'Delete the selected item', context: 'list' },
@@ -94,6 +95,10 @@ export const commands = {
   'list.history': { title: 'Show the history of the selected item', context: 'list' },
   'list.cancel': { title: 'Clear the filter, then go back', context: 'list' },
   'entry.history': { title: 'Show the history of this entry', context: 'entry' },
+
+  // Cost categories and centres: moving a centre and switching the company feature are list actions of that screen.
+  'list.move': { title: 'Move the selected cost centre', context: 'list' },
+  'list.switch': { title: 'Switch cost centres on or off', context: 'list' },
 } as const satisfies Record<string, CommandDefinition>
 
 export type CommandId = keyof typeof commands
