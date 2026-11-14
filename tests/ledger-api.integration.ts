@@ -34,7 +34,7 @@ after(async () => { await database?.drop(); });
 const base = () => `/api/companies/${companyId}`;
 const keys = (value: object) => Object.keys(value).sort();
 const revisionKeys = ['action', 'actorId', 'actorName', 'after', 'at', 'before', 'entity', 'entityId', 'id'];
-const ledgerKeys = ['billWise', 'cashOrBank', 'creditDaysCheck', 'creditPeriod', 'groupId', 'groupName', 'id', 'name', 'nature', 'opening', 'openingBills', 'revision', 'secondLanguageName', 'systemKey'];
+const ledgerKeys = ['billWise', 'cashOrBank', 'costCentres', 'creditDaysCheck', 'creditPeriod', 'groupId', 'groupName', 'id', 'name', 'nature', 'opening', 'openingBills', 'revision', 'secondLanguageName', 'systemKey'];
 const groupKeys = ['grossProfit', 'id', 'name', 'nature', 'parentId', 'revision', 'secondLanguageName', 'systemKey'];
 
 test('revision rows name the actor inside the company, never by email, and null once the user is gone', async () => {

@@ -1,4 +1,4 @@
-import { assertMoneyInRange, parseMoney, type MoneyExponent } from '@ten98/runtime';
+import { assertMoneyInRange, parseMoney, type MoneyExponent, type WorkspaceRole } from '@ten98/runtime';
 import type { PoolClient } from 'pg';
 import type { z } from 'zod';
 import type { LedgerErrorCode } from '../../lib/ledger.ts';
@@ -11,17 +11,22 @@ import { InputError, readJson } from '../validation.ts';
 export type LedgerCompany = {
   companyId: string; baseCurrency: string; exponent: MoneyExponent; booksBeginning: string; lockedThrough: string | null;
   financialYearStart: { month: number; day: number };
+  /** Whether the company keeps cost centres (M2a slice 2; off by default). */
+  costCentresEnabled: boolean;
 };
-/** A company-scoped transaction (opened by withCompany) plus who acts and the company's settings. */
-export type LedgerContext = { client: PoolClient; userId: string; company: LedgerCompany };
+/**
+ * A company-scoped transaction (opened by withCompany) plus who acts and the company's settings. `role` is the caller's
+ * role in the company when the context came through runLedger (company settings need an owner or admin).
+ */
+export type LedgerContext = { client: PoolClient; userId: string; company: LedgerCompany; role?: WorkspaceRole };
 
 /**
  * Loads the company settings. Writers share-lock the company row, so advancing the locked-through date waits for
  * postings already in flight and cannot slip between a posting's date check and its commit.
  */
 export async function ledgerContext(client: PoolClient, companyId: string, userId: string, mode: CompanyMode): Promise<LedgerContext> {
-  const { rows } = await client.query<{ base_currency: string; currency_minor_units: number; books_beginning: string; locked_through: string | null; fy_start_month: number; fy_start_day: number }>(
-    `SELECT base_currency, currency_minor_units, books_beginning, locked_through, fy_start_month, fy_start_day FROM company WHERE company_id = $1${mode === 'write' ? ' FOR SHARE' : ''}`,
+  const { rows } = await client.query<{ base_currency: string; currency_minor_units: number; books_beginning: string; locked_through: string | null; fy_start_month: number; fy_start_day: number; cost_centres_enabled: boolean }>(
+    `SELECT base_currency, currency_minor_units, books_beginning, locked_through, fy_start_month, fy_start_day, cost_centres_enabled FROM company WHERE company_id = $1${mode === 'write' ? ' FOR SHARE' : ''}`,
     [companyId]);
   const row = rows[0];
   // withCompany already admitted a member, so a missing row is a company (workspace) without books settings yet.
@@ -31,7 +36,7 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
     company: {
       companyId, baseCurrency: row.base_currency, exponent: row.currency_minor_units as MoneyExponent,
       booksBeginning: row.books_beginning, lockedThrough: row.locked_through,
-      financialYearStart: { month: row.fy_start_month, day: row.fy_start_day },
+      financialYearStart: { month: row.fy_start_month, day: row.fy_start_day }, costCentresEnabled: row.cost_centres_enabled,
     },
   };
 }
@@ -43,7 +48,7 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
 export async function runLedger<T>(userId: string, companyId: string, mode: CompanyMode, run: (context: LedgerContext) => Promise<T>): Promise<Wire<T>> {
   try {
     return await withCompany(userId, companyId, mode, async (client, access) => {
-      const context = await ledgerContext(client, access.companyId, userId, mode);
+      const context = { ...await ledgerContext(client, access.companyId, userId, mode), role: access.role };
       return moneyToWire(await run(context), context.company.exponent);
     });
   } catch (error) {

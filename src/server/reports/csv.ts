@@ -4,6 +4,7 @@ import {
   type LedgerVouchersReport, type NodeAmounts, type ProfitAndLossReport, type StatementLine, type TrialBalanceReport,
 } from '../../lib/reports.ts';
 import type { AgeingBucket, AgeingReport, BillDetailReport, BillsOutstandingReport, PartyBillsReport } from '../../lib/bills.ts';
+import type { CostCategorySummary, CostCentreBreakup, CostFigures } from '../../lib/cost-centres.ts';
 
 /**
  * Each report as CSV rows through the runtime CSV helpers (RFC 4180, formula-injection-safe cells). Amounts are plain
@@ -114,5 +115,29 @@ export function ageingCsv(report: AgeingReport, exponent: MoneyExponent): string
     ['Party', ...notDue ? ['Not yet due'] : [], ...report.buckets.map(bucketLabel), 'Total'],
     ...report.parties.map(party => [party.name, ...notDue ? [money(party.notDue ?? 0n)] : [], ...party.buckets.map(money), money(party.total)]),
     ['Total', ...notDue ? [money(report.totals.notDue ?? 0n)] : [], ...report.totals.buckets.map(money), money(report.totals.total)],
+  ];
+}
+
+const costFigures = (money: Money, row: CostFigures) => [...balance(money, row.opening), money(row.debit), money(row.credit), ...balance(money, row.closing)];
+const costHeader = ['Opening balance', 'Opening side', 'Debit', 'Credit', 'Closing balance', 'Closing side'];
+
+/** The cost category summary: a row per category (its total) followed by its root centres. */
+export function costCategorySummaryCsv(report: CostCategorySummary, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  return [
+    ['Category', 'Cost centre', 'Kind', ...costHeader],
+    ...report.categories.flatMap(category => [
+      [category.name, '', 'category', ...costFigures(money, category)],
+      ...category.centres.map(centre => [category.name, centre.name, 'centre', ...costFigures(money, centre)]),
+    ]),
+  ];
+}
+
+export function costCentreBreakupCsv(report: CostCentreBreakup, exponent: MoneyExponent): string[][] {
+  const money: Money = amount => formatMoney(amount, exponent);
+  return [
+    ['Particulars', 'Kind', ...costHeader],
+    ...report.rows.map(row => [row.name, row.kind, ...costFigures(money, row)]),
+    ['Total', 'total', ...costFigures(money, report.totals)],
   ];
 }
