@@ -177,16 +177,19 @@ async function insertLines(context: LedgerContext, voucherId: string, lines: Pre
  * that period, entered whenever, takes the number after it. Two statements, so the database's number check sees the
  * counter row this transaction has just written.
  */
-async function issueNumber(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }): Promise<number> {
+async function issueNumber(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string; moved?: boolean }): Promise<number> {
   const { client, company } = context;
   const { rows } = await client.query<{ last_number: number; period_start: string }>(
     `INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number)
      SELECT $1, $2, $3, r.period_start, r.starting_number FROM ledger_numbering_rule($1, $2, $4::date) r
      ON CONFLICT (company_id, voucher_type_id, series, period_start) DO UPDATE SET last_number = voucher_counter.last_number + 1
      RETURNING last_number, to_char(period_start, 'YYYY-MM-DD') AS period_start`, [company.companyId, voucher.typeId, voucher.series, voucher.date]);
-  // The type and series are written with the number: a voucher moved to another type takes that type's number here.
-  await client.query('UPDATE voucher SET number = $3, number_period = $4, voucher_type_id = $5, series = $6 WHERE company_id = $1 AND id = $2',
-    [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start, voucher.typeId, voucher.series]);
+  // A voucher moved to another type takes that type's number here, written together with the type and series (the
+  // database refuses a numbered voucher's type change without its new number).
+  await client.query(voucher.moved
+    ? 'UPDATE voucher SET number = $3, number_period = $4, voucher_type_id = $5, series = $6 WHERE company_id = $1 AND id = $2'
+    : 'UPDATE voucher SET number = $3, number_period = $4 WHERE company_id = $1 AND id = $2',
+  [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start, ...voucher.moved ? [voucher.typeId, voucher.series] : []]);
   return rows[0].last_number;
 }
 
@@ -209,7 +212,7 @@ export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };
  * number, then the rows named by that number (a new reference left unnamed on a voucher numbered now). The number is
  * issued through `issueNumber` only; `numbering` is false when the voucher keeps the number it has or stays optional.
  */
-async function writeVoucherBills(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }, plan: BillPlan, numbering: boolean, number: number | null): Promise<number | null> {
+async function writeVoucherBills(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string; moved?: boolean }, plan: BillPlan, numbering: boolean, number: number | null): Promise<number | null> {
   const later = plan.rows.filter(row => row.auto);
   await writeBills(context, voucher, plan.rows.filter(row => !row.auto));
   const issued = numbering ? await issueNumber(context, voucher) : number;
@@ -319,7 +322,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   await insertLines(context, voucherId, lines);
   await writeCost(context, voucherId, cost.rows);
   const numbering = (before.status === 'optional' && input.status === 'regular') || crossing || (type !== null && before.number !== null);
-  await writeVoucherBills(context, { id: voucherId, date: input.date, typeId, series }, plan, numbering, before.number);
+  await writeVoucherBills(context, { id: voucherId, date: input.date, typeId, series, moved: type !== null && before.number !== null }, plan, numbering, before.number);
   const after = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'alter', before, after);
   const held = new Set(stored.flatMap(row => row.billId ? [row.billId] : []));
