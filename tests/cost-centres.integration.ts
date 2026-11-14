@@ -170,7 +170,7 @@ test('posting: each category nets to the line, the last row may be negative, cat
     ['over the line (P4: 40 of 30)', [[showroom, '40'], [online, '20']], 400, 'allocation_total'],
     ['to the other side', [[showroom, '50', { side: 'Dr' }]], 400, 'allocation_total'],
     ['one category short while another adds up', [[showroom, '50'], [north, '30']], 400, 'allocation_total'],
-    ['the same centre twice (P4: "Duplicate Entry!")', [[showroom, '25'], [showroom, '25']], 400, 'validation'],
+    ['the same centre twice in one category (P4)', [[showroom, '25'], [showroom, '25']], 400, 'validation'],
     ['an unknown centre', [[randomUUID(), '50']], 400, 'not_found'],
     ['a category the voucher never stored for the centre', [[showroom, '50', { categoryId: projects }]], 400, 'validation'],
     ['a zero row', [[showroom, '0'], [online, '50']], 400, 'validation'],

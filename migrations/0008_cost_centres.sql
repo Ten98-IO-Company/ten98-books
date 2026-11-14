@@ -71,7 +71,7 @@ CREATE TABLE cost_allocation (
   FOREIGN KEY (company_id, category_id) REFERENCES cost_category (company_id, id),
   FOREIGN KEY (company_id, cost_centre_id) REFERENCES cost_centre (company_id, id)
 );
--- A centre once per line and stored category (observed: "Duplicate Entry!"); also the per-line check's index.
+-- A centre once per line and stored category (observed: a duplicate is refused); also the per-line check's index.
 CREATE UNIQUE INDEX cost_allocation_line_idx ON cost_allocation (company_id, voucher_id, line_no, category_id, cost_centre_id);
 CREATE INDEX cost_allocation_centre_idx ON cost_allocation (company_id, cost_centre_id) INCLUDE (side, amount, voucher_id, ledger_id);
 -- The last-used centre of a ledger (most recently entered row) and the reads by ledger.
