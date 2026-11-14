@@ -7,7 +7,7 @@ import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Voucher, VoucherLine } from '../../lib/ledger'
 import type { Wire } from '../../lib/money'
-import { longDate } from '../../lib/reports'
+import { longDate, voucherParent } from '../../lib/reports'
 
 /**
  * A voucher, read-only: the last level of the drill-down, read through the voucher API (read mode, the same
@@ -29,9 +29,7 @@ function VoucherScreen() {
   const voucher = useReport<Wire<Voucher>>(search.voucher ? `/api/companies/${screen.company.id}/vouchers/${search.voucher}` : null, 'voucher')
   const data = voucher.data
   const title = data ? `${data.voucherTypeName} ${data.number ?? '(optional)'}` : 'Voucher'
-  const back = () => screen.back(!data ? null : search.ledger
-    ? { report: 'ledger-vouchers', search: { from: search.from, to: search.to, ledger: search.ledger } }
-    : { report: 'day-book', search: { from: data.date, to: data.date } })
+  const back = () => screen.back(data ? voucherParent(search, data.date) : null)
   return <ReportScreen title={title} search={search} periodKind='none' back={back} onRetry={voucher.reload}
     status={search.voucher ? voucher.status : 'error'} error={search.voucher ? voucher.error : 'Choose a voucher first.'}>
     {data && <Stack gap={4}>
