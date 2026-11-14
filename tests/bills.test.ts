@@ -32,5 +32,7 @@ test('bill rows name their bill as their method requires', () => {
   assert.equal(ok({ kind: 'new_ref', name: 'S-1', billId: '01a1da22-31f4-79ac-98f0-c2b0c153b9d2', amount: '10' }), false);
   assert.equal(billRowInput.parse({ kind: 'new_ref', name: '  S-1 ', amount: '10' }).name, 'S-1', 'names are trimmed');
   assert.equal(openingBillInput.safeParse({ kind: 'new_ref', amount: '10' }).success, false, 'an opening bill is named');
-  assert.equal(openingBillInput.safeParse({ kind: 'on_account', amount: '10', billDate: '2025-12-31' }).success, true);
+  assert.equal(openingBillInput.safeParse({ name: 'OB-1', amount: '10', billDate: '2025-12-31' }).success, true);
+  for (const kind of ['advance', 'against_ref', 'on_account']) assert.equal(openingBillInput.safeParse({ kind, name: 'OB-1', amount: '10' }).success, false, `no ${kind} opening rows (observed)`);
+  assert.equal(openingBillInput.safeParse({ name: 'OB-1', amount: '10', side: 'Cr' }).success, false, 'opening bills are on the opening side');
 });

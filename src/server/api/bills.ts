@@ -17,11 +17,11 @@ const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405
 
 type Report = {
   keys: readonly string[];
-  read: (context: LedgerContext, subject: string | null, query: Record<string, string>) => Promise<unknown>;
+  read: (context: LedgerContext, subject: string | null, query: Record<string, string>, all: boolean) => Promise<unknown>;
   csv: (report: never, exponent: MoneyExponent) => string[][];
 };
 const reports: Record<string, Report> = {
-  'bills-outstanding': { keys: ['side', 'groupId', 'asOf'], read: (context, _subject, query) => billsOutstandingReport(context, query), csv: billsOutstandingCsv },
+  'bills-outstanding': { keys: ['side', 'groupId', 'asOf', 'limit', 'after'], read: (context, _subject, query, all) => billsOutstandingReport(context, query, all), csv: billsOutstandingCsv },
   ageing: { keys: ['side', 'groupId', 'asOf', 'basis'], read: (context, _subject, query) => ageingReport(context, query), csv: ageingCsv },
   'party-bills': { keys: ['asOf'], read: (context, subject, query) => partyBillsReport(context, subject!, query), csv: partyBillsCsv },
   bill: { keys: ['asOf'], read: (context, subject, query) => billDetailReport(context, subject!, query), csv: billDetailCsv },
@@ -41,10 +41,10 @@ export const billsApi: SignedInArea = async ({ request, url, path, user }) => {
     const name = match[2].toLowerCase(), subject = subjectless ? null : match[3].toLowerCase(), exported = subjectless ? match[3] : match[4];
     const report = reports[name];
     const query = queryOf(url, report.keys);
-    if (!exported) return json({ report: await runLedger(user.id, match[1], 'read', context => report.read(context, subject, query)) });
+    if (!exported) return json({ report: await runLedger(user.id, match[1], 'read', context => report.read(context, subject, query, false)) });
     await limit(`reports-export:${user.id}`, exportsPerMinute);
     const body = await runLedger(user.id, match[1], 'read', async context =>
-      csvDocument(report.csv(await report.read(context, subject, query) as never, context.company.exponent)));
+      csvDocument(report.csv(await report.read(context, subject, query, true) as never, context.company.exponent)));
     return csvResponse(`${name}-${query.asOf ?? 'report'}.csv`, body);
   }
   match = path.match(ledgerRoute);

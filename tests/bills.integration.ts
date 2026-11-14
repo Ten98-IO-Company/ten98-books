@@ -121,7 +121,17 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
   // Observed ageing at 20 Mar by bill date with columns 0-30, 30-60, 60-90, over 90: OB-2 (90 days old) and S-1 in
   // 60 to 90, S-2 in 30 to 60. A bill on a boundary day sits in the earlier column.
   const noColumns = await g.report('ageing?side=receivable&asOf=2026-03-20');
-  assert.deepEqual([noColumns.buckets, noColumns.totals.buckets, noColumns.totals.total], [[], [], '13925.00'], 'no default columns');
+  assert.deepEqual([noColumns.buckets, noColumns.totals.buckets, noColumns.totals.total], [[{ fromDays: 0, toDays: null }], ['13925.00'], '13925.00'],
+    'no columns are defined by default; one open column keeps the total');
+  // A closed last column gets an open one after it, so the columns add up to the total.
+  assert.equal((await g.call('/ageing-buckets', { buckets: [{ fromDays: 0, toDays: 30 }] })).status, 200);
+  const closed = await g.report('ageing?side=receivable&asOf=2026-03-20');
+  assert.deepEqual([closed.buckets, closed.totals.buckets], [[{ fromDays: 0, toDays: 30 }, { fromDays: 30, toDays: null }], ['0.00', '13925.00']]);
+  // The list pages; the total covers every page.
+  const first = await g.report('bills-outstanding?side=receivable&asOf=2026-02-28&limit=2');
+  assert.deepEqual([first.bills.map((bill: any) => bill.name), first.total], [['OB-2', 'S-1'], '13925.00']);
+  const second = await g.report(`bills-outstanding?side=receivable&asOf=2026-02-28&limit=2&after=${first.next}`);
+  assert.deepEqual([second.bills.map((bill: any) => bill.name), second.total, second.next], [['S-2'], '13925.00', null]);
   const saved = await g.call('/ageing-buckets', { buckets: [{ fromDays: 0, toDays: 30 }, { fromDays: 30, toDays: 60 }, { fromDays: 60, toDays: 90 }, { fromDays: 90, toDays: null }] });
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   const ageing = await g.report('ageing?side=receivable&asOf=2026-03-20&basis=bill');
@@ -224,7 +234,7 @@ test('renaming a settled reference or changing its party leaves the settlement o
   assert.equal(history.at(-1).after.lines[0].bills[0].billName, 'N-3R', 'the revision snapshot records the bill rows');
 });
 
-test('the creating row is the first in storage order: a back-dated settlement does not take over the bill\'s dates', async () => {
+test('a bill is dated by its earliest new reference; a back-dated settlement does not take over its dates', async () => {
   const g = await books('Order Bills');
   const sales = await g.ledger('Sales', 'sales'), bank = await g.ledger('Bank', 'bank_accounts'), p = await g.ledger('Party', 'receivables');
   await g.voucher('sales', '2026-03-10', [[p, 'Dr', '1000', [newRef('N-7', '1000', days(30))]], [sales, 'Cr', '1000']]);
@@ -233,7 +243,35 @@ test('the creating row is the first in storage order: a back-dated settlement do
   const [bill] = (await g.partyBills(p, '2026-03-20')).bills;
   assert.deepEqual([bill.pending, bill.billDate, bill.dueDate, bill.overdueDays], ['600.00', '2026-03-10', '2026-04-09', 0]);
   const [early] = (await g.partyBills(p, '2026-03-07')).bills;
-  assert.deepEqual([early.pending, early.billDate], ['-400.00', '2026-03-05'], 'before the invoice\'s date only the receipt counts');
+  assert.deepEqual([early.pending, early.billDate], ['-400.00', '2026-03-10'], 'before the invoice\'s date only the receipt counts; the invoice still dates the bill');
+  assert.deepEqual((await g.call(`/ledgers/${p}/bills?asOf=2026-03-07`)).body.bills, [], 'the pending list for a voucher dated before the bill does not offer it');
+
+  // Observed (N-9): invoice on 10 Jun, a receipt of 400 on 5 Jun, then a second new reference on 3 Jun for 200: one bill,
+  // pending 800, dated 3 Jun and due 3 Jul (the earliest new reference's date and credit days).
+  await g.voucher('sales', '2026-06-10', [[p, 'Dr', '1000', [newRef('N-9', '1000', days(30))]], [sales, 'Cr', '1000']]);
+  await g.voucher('receipt', '2026-06-05', [[bank, 'Dr', '400'], [p, 'Cr', '400', [against('N-9', '400')]]]);
+  await g.voucher('sales', '2026-06-03', [[p, 'Dr', '200', [newRef('N-9', '200', days(30))]], [sales, 'Cr', '200']]);
+  const n9 = async (asOf: string) => (await g.partyBills(p, asOf)).bills.find((bill: any) => bill.name === 'N-9');
+  const june = await n9('2026-06-20');
+  assert.deepEqual([june.pending, june.billDate, june.dueDate, june.overdueDays], ['800.00', '2026-06-03', '2026-07-03', 0]);
+  assert.equal((await n9('2026-07-05')).overdueDays, 2);
+});
+
+test('a settlement names a bill with live entries; its terms are copied when it is posted', async () => {
+  const g = await books('Settled Bills');
+  const sales = await g.ledger('Sales', 'sales'), bank = await g.ledger('Bank', 'bank_accounts'), p = await g.ledger('Party', 'receivables');
+  const first = (await g.voucher('sales', '2026-03-12', [[p, 'Dr', '1000', [newRef('T-1', '1000', days(30))]], [sales, 'Cr', '1000']])).voucher;
+  await g.voucher('receipt', '2026-03-13', [[bank, 'Dr', '100'], [p, 'Cr', '100', [against('T-1', '100')]]]);
+  await g.call(`/vouchers/${first.id}/delete`, { revision: first.revision });
+  const [kept] = (await g.partyBills(p, '2026-03-31')).bills;
+  assert.deepEqual([kept.name, kept.dueDate], ['T-1', '2026-04-12'], 'the receipt keeps the 30 days copied when it was posted');
+
+  const second = (await g.voucher('sales', '2026-03-12', [[p, 'Dr', '500', [newRef('T-2', '500', days(30))]], [sales, 'Cr', '500']])).voucher;
+  await g.call(`/vouchers/${second.id}/delete`, { revision: second.revision });
+  const refused = await g.voucher('receipt', '2026-03-13', [[bank, 'Dr', '100'], [p, 'Cr', '100', [against('T-2', '100')]]], {}, 409);
+  assert.equal(refused.code, 'bill_inactive', 'a bill without live entries is not offered for settlement');
+  const reused = await g.voucher('sales', '2026-03-20', [[p, 'Dr', '50', [newRef('T-2', '50')]], [sales, 'Cr', '50']]);
+  assert.equal(reused.voucher.lines[0].bills[0].billName, 'T-2', 'a new reference on that name still attaches (observed)');
 });
 
 test('partial, over and opposite-side rows are accepted as observed; rows beyond the line are refused', async () => {
@@ -316,8 +354,9 @@ test('credit periods are kept as entered; the credit-days check counts overdue b
   assert.deepEqual(dues, { 'W-1': '2026-02-14', 'M-1': '2026-02-28', 'D-1': '2026-03-15', 'L-1': '2026-03-27' }, 'weeks, a month from the 31st, a date, and days');
 
   const check = async (date: string) => (await g.call(`/ledgers/${p}/credit-check?date=${date}`)).body.creditCheck;
-  assert.deepEqual(await check('2026-02-14'), { check: true, overdueBills: 0 }, 'due today is not yet overdue');
-  assert.deepEqual(await check('2026-02-15'), { check: true, overdueBills: 1 });
+  assert.deepEqual(await check('2026-02-13'), { check: true, overdueBills: 0 });
+  assert.deepEqual(await check('2026-02-14'), { check: true, overdueBills: 1 }, 'a bill due on the voucher date counts (observed)');
+  assert.deepEqual(await check('2026-02-28'), { check: true, overdueBills: 2 }, 'the month bill is due that day');
   assert.deepEqual(await check('2026-06-30'), { check: true, overdueBills: 4 });
   const quiet = await g.ledger('Unchecked Party', 'receivables');
   await g.voucher('sales', '2026-01-31', [[quiet, 'Dr', '100', [newRef('Q-1', '100')]], [sales, 'Cr', '100']]);
@@ -357,27 +396,28 @@ test('bill-wise is a ledger setting: switched off it keeps old bills and drops n
   assert.deepEqual([move.status, move.body.code], [400, 'family_rule']);
 });
 
-test('opening bills: any method, dated before the books begin by default, within the opening balance', async () => {
+test('opening bills: new bills on the opening side, dated before the books begin by default, within the opening balance', async () => {
   const g = await books('Opening Bills');
   const p = await g.ledger('Opening Party', 'receivables', { opening: { amount: '1000', side: 'Dr', bills: [
-    { kind: 'new_ref', name: 'OB-1', amount: '600' }, { kind: 'advance', name: 'ADV-0', amount: '100', side: 'Cr' }, { kind: 'on_account', amount: '50' }] } });
+    { name: 'OB-1', amount: '600' }, { kind: 'new_ref', name: 'OB-2', amount: '100', billDate: '2025-11-30', creditPeriod: { count: 30, unit: 'day' } }] } });
   const ledger = (await g.call(`/ledgers/${p}`)).body.ledger;
   assert.deepEqual(ledger.openingBills.map((row: any) => [row.kind, row.billName, row.billDate, row.dueDate, row.amount, row.side]), [
-    ['new_ref', 'OB-1', '2025-12-31', '2025-12-31', '600.00', 'Dr'], ['advance', 'ADV-0', '2025-12-31', '2025-12-31', '100.00', 'Cr'],
-    ['on_account', null, '2025-12-31', null, '50.00', 'Dr']]);
+    ['new_ref', 'OB-1', '2025-12-31', '2025-12-31', '600.00', 'Dr'], ['new_ref', 'OB-2', '2025-11-30', '2025-12-30', '100.00', 'Dr']]);
   const read = await g.partyBills(p, '2026-01-01');
-  assert.deepEqual([read.bills.map((bill: any) => [bill.name, bill.pending, bill.method]), read.onAccount],
-    [[['ADV-0', '-100.00', 'advance'], ['OB-1', '600.00', 'new_ref']], '500.00']);
+  assert.deepEqual([read.bills.map((bill: any) => [bill.name, bill.pending]), read.onAccount], [[['OB-2', '100.00'], ['OB-1', '600.00']], '300.00'],
+    'the unallocated rest is on account');
 
   const refusals: [unknown, string][] = [
     [{ amount: '1000', side: 'Dr', bills: [{ kind: 'new_ref', name: 'A', amount: '1200' }] }, 'allocation_total'],
     [{ amount: '1000', side: 'Dr', bills: [{ kind: 'new_ref', name: 'A', amount: '100', billDate: '2026-01-02' }] }, 'validation'],
+    [{ amount: '1000', side: 'Dr', bills: [{ kind: 'advance', name: 'A', amount: '100' }] }, 'validation'],
+    [{ amount: '1000', side: 'Dr', bills: [{ kind: 'new_ref', name: 'A', amount: '100', side: 'Cr' }] }, 'validation'],
   ];
   for (const [opening, code] of refusals) {
     const refused = await g.call(`/ledgers/${p}`, { name: ledger.name, groupId: ledger.groupId, opening, revision: ledger.revision });
     assert.deepEqual([refused.status, refused.body.code], [400, code]);
   }
-  const lower = await g.call(`/ledgers/${p}`, { name: ledger.name, groupId: ledger.groupId, opening: { amount: '500', side: 'Dr' }, revision: ledger.revision });
+  const lower = await g.call(`/ledgers/${p}`, { name: ledger.name, groupId: ledger.groupId, opening: { amount: '600', side: 'Dr' }, revision: ledger.revision });
   assert.deepEqual([lower.status, lower.body.code], [400, 'allocation_total'], 'kept opening rows must fit a lower opening balance');
   const plain = await g.ledger('Plain', 'indirect_expenses');
   const plainLedger = (await g.call(`/ledgers/${plain}`)).body.ledger;
@@ -448,6 +488,17 @@ async function setupStranger() {
   const stranger = (await invite(owner.browser, await createCompany(owner.browser), 'editor')).browser;
   return stranger;
 }
+
+test('a ledger left with only a bill that has no rows can be deleted; the bill goes with it', async () => {
+  const g = await books('Leftover Bills');
+  const sales = await g.ledger('Sales', 'sales'), from = await g.ledger('From Party', 'receivables'), to = await g.ledger('To Party', 'receivables');
+  const invoice = (await g.voucher('sales', '2026-03-01', [[from, 'Dr', '10', [newRef('L-1', '10')]], [sales, 'Cr', '10']])).voucher;
+  await g.alter(invoice, { lines: [{ ledgerId: to, side: 'Dr', amount: '10', bills: [newRef('L-1', '10')] }, { ledgerId: sales, side: 'Cr', amount: '10' }] });
+  const left = (await g.call(`/ledgers/${from}`)).body.ledger;
+  assert.equal(left.inUse, false, 'a bill without rows does not keep the ledger in use');
+  const removed = await g.call(`/ledgers/${from}/delete`, { revision: left.revision });
+  assert.deepEqual([removed.status, removed.body], [200, { deleted: true }]);
+});
 
 test('the API addresses a bill and a ledger of this company only', async () => {
   const g = await books('Scoped Bills');

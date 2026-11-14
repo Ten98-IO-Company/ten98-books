@@ -87,11 +87,15 @@ test('the per-voucher check runs again after SET CONSTRAINTS ALL IMMEDIATE, for 
     await client.query('SET CONSTRAINTS ALL IMMEDIATE');
     await insertRow(client, { kind: 'on_account', bill_id: null, side: 'Dr', amount: 1, currency_amount: 1 });
   }), code('23514', 'bill_allocation_total'));
-  // A mark left in the session by another transaction never applies: the check still runs.
+  // The reviewed bypass: deleting one line of a 100/60/40 voucher and then setting a "checked" mark for the voucher in
+  // this transaction. No session setting skips the check any more.
+  const split = await post('journal', '2026-03-03', [{ ledgerId: ids.party, side: 'Dr', amount: '100' },
+    { ledgerId: ids.sales, side: 'Cr', amount: '60' }, { ledgerId: ids.second, side: 'Cr', amount: '40' }]);
   await assert.rejects(asApp(async client => {
-    await client.query("SELECT set_config('app.voucher_checked', $1, false)", [`1:${ids.invoice}`]);
-    await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2 AND line_no = 2', [companyId, ids.invoice]);
+    await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2 AND line_no = 3', [companyId, split.id]);
+    await client.query("SELECT set_config('app.voucher_checked', pg_current_xact_id()::text || ':' || $1, true)", [split.id]);
   }), code('23514', 'voucher_balanced'));
+  assert.equal(await count('SELECT count(*) FROM voucher_line WHERE voucher_id = $1', [split.id]), 3);
   assert.equal(await count('SELECT count(*) FROM voucher_line WHERE voucher_id = $1', [ids.invoice]), lines);
 });
 
@@ -111,7 +115,7 @@ test('bill rows are checked at commit and cannot be hidden by clearing or changi
 test('bills and bill rows keep their keys, shapes and families; nothing is updated in place or bypassed by the role', async () => {
   const rows = await billRows(), count0 = await bills();
   const cases: [string, (client: PoolClient) => Promise<unknown>, (error: unknown) => boolean][] = [
-    ['a row naming a bill of another ledger', client => insertRow(client, { ledger_id: ids.second, voucher_id: null, line_no: null, bill_date: '2025-12-31' }), code('23503')],
+    ['a row naming a bill of another ledger', client => insertRow(client, { ledger_id: ids.second, voucher_id: null, line_no: null, kind: 'new_ref', side: 'Dr', bill_date: '2025-12-31', due_date: '2025-12-31' }), code('23503')],
     ['a row on a line of another ledger', client => insertRow(client, { ledger_id: ids.second }), code('23514', 'bill_allocation_line')],
     ['a row in another currency than its line', client => insertRow(client, { currency: 'USD' }), code('23514', 'bill_allocation_line')],
     ['a row whose amounts differ', client => insertRow(client, { amount: 2, currency_amount: 1 }), code('23514', 'bill_allocation_base_currency_only')],
@@ -127,6 +131,7 @@ test('bills and bill rows keep their keys, shapes and families; nothing is updat
       await insertRow(client, { ledger_id: ids.bank, voucher_id: ids.receipt, line_no: receiptLine.rows[0].line_no, kind: 'new_ref', bill_id: bill.id, side: 'Dr', due_date: '2026-03-02' });
     }, code('23514', 'ledger_bill_wise_family')],
     ['renaming a bill', client => client.query('UPDATE bill SET name = $3 WHERE company_id = $1 AND id = $2', [companyId, ids.invoiceBill, 'B-9']), code('42501')],
+    ['deleting a bill that has rows', client => client.query('DELETE FROM bill WHERE company_id = $1 AND id = $2', [companyId, ids.invoiceBill]), code('23503')],
     ['changing a bill row', client => client.query('UPDATE bill_allocation SET amount = 1 WHERE company_id = $1', [companyId]), code('42501')],
     ['switching the guards off', client => client.query('ALTER TABLE bill_allocation DISABLE TRIGGER USER'), code('42501')],
     ['replica mode', client => client.query("SET session_replication_role = 'replica'"), code('42501')],
@@ -144,14 +149,17 @@ test('bill rows of a cancelled voucher are frozen; opening rows follow the openi
   assert.equal((await call(`/vouchers/${cancelled.id}/cancel`, { revision: cancelled.revision })).status, 200);
   await assert.rejects(asApp(client => client.query('DELETE FROM bill_allocation WHERE company_id = $1 AND voucher_id = $2', [companyId, cancelled.id])), code('23514', 'voucher_lines_frozen'));
 
-  const opening = (await call('/ledgers', { name: 'Opening Party', groupId: books.group('receivables'), opening: { amount: '100', side: 'Dr' } })).body.ledger.id as string;
-  const openingRow = (row: Record<string, unknown>) => (client: PoolClient) => insertRow(client, { ledger_id: opening, voucher_id: null, line_no: null, bill_id: null,
-    kind: 'on_account', bill_date: '2025-12-31', side: 'Dr', amount: 5000, currency_amount: 5000, ...row });
+  const opening = (await call('/ledgers', { name: 'Opening Party', groupId: books.group('receivables'),
+    opening: { amount: '100', side: 'Dr', bills: [{ name: 'OB-1', amount: '10' }] } })).body.ledger.id as string;
+  const openingBill = (await asAdmin(database.adminUrl, admin => admin.query('SELECT id FROM bill WHERE ledger_id = $1', [opening]))).rows[0].id;
+  const openingRow = (row: Record<string, unknown>) => (client: PoolClient) => insertRow(client, { ledger_id: opening, voucher_id: null, line_no: null, bill_id: openingBill,
+    kind: 'new_ref', bill_date: '2025-12-31', due_date: '2025-12-31', side: 'Dr', amount: 4000, currency_amount: 4000, ...row });
   await assert.rejects(asApp(openingRow({ amount: 15000, currency_amount: 15000 })), code('23514', 'bill_allocation_opening_total'));
-  await assert.rejects(asApp(openingRow({ side: 'Cr' })), code('23514', 'bill_allocation_opening_total'));
+  await assert.rejects(asApp(openingRow({ side: 'Cr' })), code('23514', 'bill_allocation_opening_total'), 'opening bills are on the opening side');
+  await assert.rejects(asApp(openingRow({ kind: 'on_account', bill_id: null, due_date: null })), code('23514', 'bill_allocation_opening_shape'), 'opening rows are new bills only');
   await assert.rejects(asApp(openingRow({ bill_date: '2026-01-02' })), code('23514', 'bill_allocation_opening_date'));
   await asApp(openingRow({}));
-  await assert.rejects(asApp(client => client.query('UPDATE ledger SET opening_amount = 1000 WHERE company_id = $1 AND id = $2', [companyId, opening])), code('23514', 'bill_allocation_opening_total'));
+  await assert.rejects(asApp(client => client.query('UPDATE ledger SET opening_amount = 4000 WHERE company_id = $1 AND id = $2', [companyId, opening])), code('23514', 'bill_allocation_opening_total'));
   await asAdmin(database.adminUrl, admin => admin.query("UPDATE company SET locked_through = '2026-01-31' WHERE company_id = $1", [companyId]));
   try {
     await assert.rejects(asApp(openingRow({ amount: 1000, currency_amount: 1000 })), code('23514', 'bill_allocation_opening_locked'));

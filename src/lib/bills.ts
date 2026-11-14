@@ -14,7 +14,10 @@ export const ageingBases = ['bill', 'due'] as const;
 export type AgeingBasis = (typeof ageingBases)[number];
 
 /** Bills receivable or payable: bills on the side's natural side (debit for receivables) under a group, at a date. */
-export const outstandingQuery = z.object({ side: z.enum(billSides), groupId: id.optional(), asOf: calendarDate }).strict();
+export const outstandingQuery = z.object({
+  side: z.enum(billSides), groupId: id.optional(), asOf: calendarDate,
+  limit: z.coerce.number().int().min(1).max(1000).default(200), after: z.string().max(500).optional(),
+}).strict();
 export const ageingQuery = z.object({ side: z.enum(billSides), groupId: id.optional(), asOf: calendarDate, basis: z.enum(ageingBases).default('bill') }).strict();
 export const asOfQuery = z.object({ asOf: calendarDate }).strict();
 export const pickerSorts = ['name', 'bill_date', 'due_date', 'pending', 'final_pending'] as const;
@@ -49,6 +52,8 @@ export type BillsOutstandingReport = {
   asOf: string; side: BillSide; group: { id: string; name: string };
   /** `amount` is the pending amount on the side's natural side (positive). */
   bills: (PendingBill & { amount: bigint })[]; total: bigint;
+  /** The cursor of the next page (`after`), or null on the last one; `total` covers every page. */
+  next: string | null;
 };
 export type PartyBillsReport = {
   asOf: string; ledger: { id: string; name: string; groupId: string | null; groupName: string | null; billWise: boolean };
@@ -73,7 +78,7 @@ export type BillDetailReport = {
 export type AgeingParty = { ledgerId: string; name: string; notDue: bigint | null; buckets: bigint[]; total: bigint };
 export type AgeingReport = {
   asOf: string; side: BillSide; basis: AgeingBasis; group: { id: string; name: string };
-  /** The company's columns; empty until they are defined (there are no default columns). */
+  /** The company's columns (none by default), always ending with an open-ended column, so the columns add up to the total. */
   buckets: AgeingBucket[];
   parties: AgeingParty[]; totals: { notDue: bigint | null; buckets: bigint[]; total: bigint };
 };

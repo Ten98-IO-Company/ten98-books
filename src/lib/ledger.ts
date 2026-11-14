@@ -37,6 +37,7 @@ export const ledgerErrorCodes = [
   'idempotency_mismatch', // the idempotency key was used for a different voucher body (or company, on company creation)
   'not_set_up', // the company has no books settings yet; members get this, non-members get not_found
   'allocation_total', // a line's (or an opening balance's) bill rows net to more than it, or to its other side
+  'bill_inactive', // a settlement names a bill whose vouchers were all deleted or cancelled
 ] as const;
 export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
 
@@ -88,12 +89,13 @@ const billRowRules = (row: BillRowShape, context: z.RefinementCtx) => {
 /** A bill row on a voucher line. A new reference without a name takes the default name (LEDGER.md, "Bills"). */
 export const billRowInput = z.object(billRowShape).strict().superRefine(billRowRules);
 export type BillRowInput = z.output<typeof billRowInput>;
-/** A bill row of a ledger's opening balance: named (unless on account), dated (default the day before the books begin). */
-const { billId: _billId, ...openingBillShape } = billRowShape;
-export const openingBillInput = z.object({ ...openingBillShape, billDate: calendarDate.optional() }).strict().superRefine((row, context) => {
-  billRowRules(row, context);
-  if (row.kind !== 'on_account' && row.name === undefined) context.addIssue({ code: 'custom', path: ['name'], message: 'Name the opening bill.' });
-});
+/**
+ * A bill of a ledger's opening balance (observed: new bills only, on the opening side): named, dated (default the day
+ * before the books begin), with an optional credit period.
+ */
+export const openingBillInput = z.object({
+  kind: z.literal('new_ref').default('new_ref'), name: billName, billDate: calendarDate.optional(), creditPeriod: creditPeriod.optional(), amount: moneyText,
+}).strict();
 export type OpeningBillInput = z.output<typeof openingBillInput>;
 
 const opening = z.object({ amount: moneyText, side: z.enum(sides), bills: z.array(openingBillInput).max(500).optional() }).strict();

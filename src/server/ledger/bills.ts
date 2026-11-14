@@ -5,18 +5,29 @@ import { ledgerError, parseAmount, type LedgerContext } from './context.ts';
 /**
  * Bills (M2a slice 1, base currency). A bill is one party ledger's reference name, compared without regard to case: a
  * row finds its bill by name when it is posted, a new reference on a name the party already has joins that bill, and a
- * bill's pending amount is the signed sum of its live rows (observed behaviour of the reference workflow). Which row
- * created a bill is derived: the first live row in storage order (opening rows, then by voucher entry time, voucher,
- * line and row), so cancelling, deleting or renaming one voucher never rewrites another. Behaviour the reference shows
- * without a refusal is reproduced and reported back as a warning instead (`BillWarning`).
+ * bill's pending amount is the signed sum of its live rows (observed behaviour of the reference workflow). The row that
+ * dates a bill is derived (`creatorOrderSql`): its earliest-dated live new reference or advance, or, when none is
+ * live, its earliest-dated live settlement (observed), so cancelling, deleting or renaming one voucher never rewrites
+ * another. Behaviour the reference shows without a refusal is reproduced and reported back as a warning instead
+ * (`BillWarning`).
  */
 
-/** Live bill rows (opening rows and rows of regular, undeleted vouchers) with their date and storage-order keys; $1 is the company. */
-export const liveBillRowsSql = `SELECT a.*, coalesce(a.bill_date, v.date) AS row_date, (a.voucher_id IS NULL) AS opening, v.created_at AS entered_at
-  FROM bill_allocation a LEFT JOIN voucher v ON v.company_id = a.company_id AND v.id = a.voucher_id
-  WHERE a.company_id = $1 AND (a.voucher_id IS NULL OR (v.status = 'regular' AND v.deleted_at IS NULL))`;
-/** Storage order of rows from liveBillRowsSql: the first row of a bill in this order is the row that created it. */
-export const storageOrderSql = 'opening DESC, entered_at, voucher_id, line_no, id';
+/**
+ * Live bill rows matching `filter` (SQL over `a`, a bill_allocation row; $1 is the company): rows of regular,
+ * undeleted vouchers, each with its voucher looked up by key, plus opening rows, with their date. The two parts keep
+ * each read on the row indexes instead of a scan of every voucher.
+ */
+export const liveBillRowsSql = (filter: string) => `SELECT a.*, v.date AS row_date, false AS opening
+    FROM bill_allocation a CROSS JOIN LATERAL (SELECT x.date FROM voucher x WHERE x.company_id = a.company_id AND x.id = a.voucher_id
+      AND x.status = 'regular' AND x.deleted_at IS NULL) v
+    WHERE a.company_id = $1 AND a.voucher_id IS NOT NULL AND ${filter}
+  UNION ALL
+  SELECT a.*, a.bill_date AS row_date, true AS opening FROM bill_allocation a WHERE a.company_id = $1 AND a.voucher_id IS NULL AND ${filter}`;
+/**
+ * The order whose first row of a bill dates it (observed): new references and advances before settlements, then the
+ * earliest date, then storage order (opening rows, then voucher, line and row; ids are time-ordered).
+ */
+export const creatorOrderSql = "(kind IN ('new_ref', 'advance')) DESC, row_date, opening DESC, voucher_id, line_no, id";
 /** The due date of a bill whose creating row is `r`: its own, or for a settlement turned creator its copied terms from its date. */
 export const creatorDueSql = (r: string) => `CASE WHEN ${r}.kind IN ('new_ref', 'advance') THEN ${r}.due_date
   WHEN ${r}.credit_count IS NOT NULL THEN bill_due_date(${r}.row_date, ${r}.credit_count, ${r}.credit_unit)
@@ -140,26 +151,36 @@ async function resolveBills(context: LedgerContext, rows: PlannedRow[]): Promise
     if (!found[index]) throw ledgerError(400, `No bill named "${row.name}" is pending for this ledger (${where(row)}).`, 'not_found');
     row.billId = found[index];
   });
+  // A settlement names a bill that still has a live row (the entry screen offers pending bills only): one whose
+  // vouchers were all deleted or cancelled cannot be settled, so its terms never depend on the order of events.
+  const settled = [...new Set(rows.flatMap(row => row.kind === 'against_ref' && !row.kept ? [row.billId!] : []))];
+  if (settled.length) {
+    const { rows: live } = await context.client.query<{ billId: string }>(
+      `SELECT DISTINCT r.bill_id AS "billId" FROM (${liveBillRowsSql('a.bill_id = ANY($2::uuid[])')}) r`, [context.company.companyId, settled]);
+    const alive = new Set(live.map(row => row.billId));
+    const dead = rows.find(row => row.kind === 'against_ref' && !row.kept && !alive.has(row.billId!));
+    if (dead) throw ledgerError(409, `The bill on ${where(dead)} has no entries left: its vouchers were deleted or cancelled. Enter a new reference with its name instead.`, 'bill_inactive');
+  }
 }
 const where = (row: PlannedRow) => row.lineNo === null ? 'the opening balance' : `line ${row.lineNo}`;
 
 /**
- * Plans a ledger's opening bill rows (replacing the ones it had): every method is accepted, dated on or before the books
- * begin (default the day before), with the rows netting towards the opening side to at most the opening amount.
+ * Plans a ledger's opening bill rows (replacing the ones it had): new bills on the opening side, dated on or before the
+ * books begin (default the day before), together at most the opening amount (the rest is on account).
  */
 export async function planOpeningBills(context: LedgerContext, ledger: { id: string; billWise: boolean; credit: CreditPeriod | null },
   opening: { amount: bigint; side: Side }, bills: OpeningBillInput[]): Promise<PlannedRow[]> {
   const { exponent, booksBeginning } = context.company;
   if (bills.length && !ledger.billWise) throw ledgerError(400, 'Opening bills need a bill-wise ledger. Turn bill-wise on first.', 'validation');
+  // Observed: opening bills are new bills on the opening balance's side; the rest of the balance stays on account.
   const dayBefore = new Date(Date.parse(`${booksBeginning}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
   const rows = bills.map((row, index): PlannedRow => {
     const amount = parseAmount(row.amount, exponent, `The amount of opening bill ${index + 1}`);
     if (amount <= 0n) throw ledgerError(400, `The amount of opening bill ${index + 1} must be more than zero.`, 'validation');
     const billDate = row.billDate ?? dayBefore;
     if (billDate > booksBeginning) throw ledgerError(400, `Opening bill ${index + 1} is dated after the books begin on ${booksBeginning}.`, 'validation');
-    const creating = row.kind === 'new_ref' || row.kind === 'advance';
-    return { lineNo: null, ledgerId: ledger.id, kind: row.kind, side: row.side ?? opening.side, amount, billId: null,
-      name: row.name ?? null, auto: false, period: creating ? row.creditPeriod ?? ledger.credit : null, kept: null, billDate };
+    return { lineNo: null, ledgerId: ledger.id, kind: 'new_ref', side: opening.side, amount, billId: null,
+      name: row.name, auto: false, period: row.creditPeriod ?? ledger.credit, kept: null, billDate };
   });
   assertBillRowsFit(rows, opening.side, opening.amount, exponent, 'the opening balance');
   await resolveBills(context, rows);
@@ -189,15 +210,15 @@ export async function writeBills(context: LedgerContext, voucher: { id: string; 
     const found = await billsByName(context, creating.map(row => ({ ledgerId: row.ledgerId, name: row.name! })));
     creating.forEach((row, index) => { row.billId = found[index]; });
   }
-  // Settlement rows carry their bill's terms as they stand (the reference copies them), so a settlement that becomes
-  // the bill's first row, after its invoice is cancelled or renamed, still has a due date.
+  // Settlement rows copy, when posted, the terms of the row that dates their bill (the reference copies them), and keep
+  // them: a settlement that later dates the bill, after its invoice is cancelled or renamed, still has a due date.
   const settlingIds = [...new Set(rows.flatMap(row => row.kind === 'against_ref' && !row.kept ? [row.billId!] : []))];
   const terms = new Map<string, { dueDate: string | null; creditCount: number | null; creditUnit: CreditUnit | null }>();
   if (settlingIds.length) {
     const { rows: found } = await client.query<{ billId: string; dueDate: string | null; creditCount: number | null; creditUnit: CreditUnit | null }>(
       `SELECT DISTINCT ON (r.bill_id) r.bill_id AS "billId", r.due_date AS "dueDate", r.credit_count AS "creditCount", r.credit_unit AS "creditUnit"
-       FROM (${liveBillRowsSql}) r WHERE r.bill_id = ANY($2::uuid[]) AND (r.due_date IS NOT NULL OR r.credit_count IS NOT NULL)
-       ORDER BY r.bill_id, ${storageOrderSql}`, [company.companyId, settlingIds]);
+       FROM (${liveBillRowsSql('a.bill_id = ANY($2::uuid[])')}) r
+       ORDER BY r.bill_id, ${creatorOrderSql}`, [company.companyId, settlingIds]);
     for (const row of found) terms.set(row.billId, row);
   }
   const values = rows.map(row => {
@@ -230,13 +251,13 @@ export async function writeBills(context: LedgerContext, voucher: { id: string; 
       values.map(value => value.due), values.map(value => value.count), values.map(value => value.unit), values.map(value => value.baseDate)]);
 }
 
-/** Bills on which `voucherId` holds the creating row while other vouchers (or the opening) hold live rows too. */
+/** Bills that `voucherId` dates (`creatorOrderSql`) while other vouchers (or the opening) hold live rows too. */
 export async function billsCreatedBy(context: LedgerContext, voucherId: string): Promise<Set<string>> {
   const { rows } = await context.client.query<{ billId: string }>(
-    `WITH live AS (${liveBillRowsSql} AND a.bill_id IN (SELECT bill_id FROM bill_allocation WHERE company_id = $1 AND voucher_id = $2 AND bill_id IS NOT NULL)),
-     creators AS (SELECT DISTINCT ON (bill_id) bill_id, voucher_id FROM live WHERE bill_id IS NOT NULL ORDER BY bill_id, ${storageOrderSql})
-     SELECT c.bill_id AS "billId" FROM creators c WHERE c.voucher_id = $2
-       AND EXISTS (SELECT 1 FROM live o WHERE o.bill_id = c.bill_id AND o.voucher_id IS DISTINCT FROM $2)`,
+    `WITH live AS (${liveBillRowsSql('a.bill_id IN (SELECT bill_id FROM bill_allocation WHERE company_id = $1 AND voucher_id = $2 AND bill_id IS NOT NULL)')}),
+     ranked AS (SELECT bill_id, voucher_id, row_number() OVER (PARTITION BY bill_id ORDER BY ${creatorOrderSql}) AS rank FROM live)
+     SELECT bill_id AS "billId" FROM ranked GROUP BY bill_id
+     HAVING bool_or(rank = 1 AND voucher_id = $2) AND bool_or(voucher_id IS DISTINCT FROM $2)`,
     [context.company.companyId, voucherId]);
   return new Set(rows.map(row => row.billId));
 }
@@ -256,7 +277,7 @@ export async function billWarnings(context: LedgerContext, voucherId: string, pl
   const billIds = [...new Set([...own.map(row => row.billId!), ...createdBefore])];
   if (!billIds.length) return warnings;
   const { rows } = await client.query<{ billId: string; name: string; mine: bigint; others: bigint; othersLive: boolean; mineLive: boolean }>(
-    `WITH live AS (${liveBillRowsSql} AND a.bill_id = ANY($3::uuid[]))
+    `WITH live AS (${liveBillRowsSql('a.bill_id = ANY($3::uuid[])')})
      SELECT b.id AS "billId", b.name,
        coalesce(sum(${signedSql('l')}) FILTER (WHERE l.voucher_id = $2), 0)::bigint AS mine,
        coalesce(sum(${signedSql('l')}) FILTER (WHERE l.voucher_id IS DISTINCT FROM $2), 0)::bigint AS others,

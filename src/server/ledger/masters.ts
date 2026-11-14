@@ -70,7 +70,7 @@ const groupColumns = `id, parent_id AS "parentId", nature, gross_profit AS "gros
 const groupInUseSql = `(EXISTS (SELECT 1 FROM account_group c WHERE c.company_id = g.company_id AND c.parent_id = g.id)
   OR EXISTS (SELECT 1 FROM ledger x WHERE x.company_id = g.company_id AND x.group_id = g.id))`;
 const ledgerInUseSql = `(EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = l.company_id AND x.ledger_id = l.id)
-  OR EXISTS (SELECT 1 FROM bill x WHERE x.company_id = l.company_id AND x.ledger_id = l.id))`;
+  OR EXISTS (SELECT 1 FROM bill_allocation x WHERE x.company_id = l.company_id AND x.ledger_id = l.id))`;
 
 /** Groups as the list and read routes answer them: the group plus whether a delete would be refused for use. */
 export async function listGroups(context: LedgerContext): Promise<GroupListItem[]> {
@@ -352,6 +352,8 @@ export async function deleteLedger(context: LedgerContext, ledgerId: string, val
   // Soft-deleted and cancelled vouchers still reference the ledger: their history must stay readable.
   const { rows: [use] } = await context.client.query<{ used: boolean }>(`SELECT ${ledgerInUseSql} AS used FROM ledger l WHERE l.company_id = $1 AND l.id = $2`, [context.company.companyId, ledgerId]);
   if (use.used) throw ledgerInUse['23503'];
+  // Bills left without rows (their vouchers' lines moved elsewhere) go with the ledger.
+  await context.client.query('DELETE FROM bill WHERE company_id = $1 AND ledger_id = $2', [context.company.companyId, ledgerId]).catch(error => refusal(error, ledgerInUse));
   await context.client.query('DELETE FROM ledger WHERE company_id = $1 AND id = $2', [context.company.companyId, ledgerId]).catch(error => refusal(error, ledgerInUse));
   await logRevision(context, 'ledger', ledgerId, 'delete', before, null);
 }

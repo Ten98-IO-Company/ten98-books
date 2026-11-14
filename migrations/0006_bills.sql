@@ -1,7 +1,7 @@
 -- M2a slice 1: bills in the base currency (bill-wise receivables and payables). A bill is one party ledger's reference
 -- name, compared without regard to case; bill rows on voucher lines and on a ledger's opening balance point at it. A
--- bill's pending amount is the signed sum of its live rows, and which row created it is derived at read time (the first
--- row in storage order), so cancelling, deleting or renaming one voucher never rewrites another (design: M2a slice 1).
+-- bill's pending amount is the signed sum of its live rows, and the row that dates it is derived at read time (its
+-- earliest-dated live new reference), so cancelling, deleting or renaming one voucher never rewrites another.
 -- Every new table carries company_id, joins through composite keys that include it and forces the one company policy.
 
 -- ---- Ledger and voucher columns ----
@@ -68,7 +68,8 @@ CREATE TABLE bill_allocation (
   FOREIGN KEY (company_id, ledger_id) REFERENCES ledger (company_id, id),
   FOREIGN KEY (company_id, voucher_id, line_no) REFERENCES voucher_line (company_id, voucher_id, line_no) ON DELETE CASCADE,
   FOREIGN KEY (company_id, bill_id, ledger_id, currency) REFERENCES bill (company_id, id, ledger_id, currency),
-  CONSTRAINT bill_allocation_opening_shape CHECK ((voucher_id IS NULL) = (line_no IS NULL) AND (voucher_id IS NULL) = (bill_date IS NOT NULL)),
+  CONSTRAINT bill_allocation_opening_shape CHECK ((voucher_id IS NULL) = (line_no IS NULL) AND (voucher_id IS NULL) = (bill_date IS NOT NULL)
+    AND (voucher_id IS NOT NULL OR kind = 'new_ref')),
   CONSTRAINT bill_allocation_bill_shape CHECK ((kind = 'on_account') = (bill_id IS NULL)),
   CONSTRAINT bill_allocation_terms CHECK ((credit_count IS NULL) = (credit_unit IS NULL)
     AND (kind NOT IN ('new_ref', 'advance') OR due_date IS NOT NULL)
@@ -88,126 +89,35 @@ CREATE TABLE ageing_bucket (
   PRIMARY KEY (company_id, position)
 );
 
--- ---- One check per voucher, re-run whenever the voucher or a child row changes ----
+-- ---- Bill rows against their line ----
 
--- The vouchers already checked in this transaction, as '<transaction id>:<voucher>,<voucher>'. The per-row deferred
--- triggers on vouchers, lines and bill rows run the full check once per voucher and mark it; every guard that writes a
--- child row (or the voucher) clears the mark first, so SET CONSTRAINTS ALL IMMEDIATE followed by another write is checked
--- again. The transaction id keeps a value left in a pooled session from ever applying to a later transaction. Like
--- app.company_ids, the setting is written by the application role's own code: SQL that sets it on purpose is outside the
--- guards' trust boundary (they stop application bugs, not a hostile database session).
-CREATE FUNCTION ledger_voucher_mark(p_voucher uuid, p_checked boolean) RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+-- Each line's bill rows net, towards the line's side, to between zero and the line amount (the rest is on account; a
+-- row on the other side is a bill of its own). Checked at commit for every inserted or deleted row, on that row's line
+-- only: lines are never updated, so a line's amount changes only by deleting it, which removes its rows too. M1's
+-- voucher check (voucher_assert_balanced, on every voucher and line event) is untouched, and no session state can
+-- skip either check.
+CREATE FUNCTION bill_allocation_assert_line() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
-  v_prefix text := pg_current_xact_id()::text || ':';
-  v_value text := coalesce(current_setting('app.voucher_checked', true), '');
-  v_ids text[] := '{}';
+  v_row bill_allocation;
+  v_line voucher_line;
+  v_net numeric;
+  v_currency_net numeric;
 BEGIN
-  IF starts_with(v_value, v_prefix) AND length(v_value) > length(v_prefix) THEN
-    v_ids := string_to_array(substr(v_value, length(v_prefix) + 1), ',');
+  IF TG_OP = 'DELETE' THEN v_row := OLD; ELSE v_row := NEW; END IF;
+  -- Opening rows have no line; ledger_opening_bills checks them.
+  IF v_row.voucher_id IS NULL THEN RETURN NULL; END IF;
+  PERFORM ledger_assert_scope(v_row.company_id);
+  SELECT * INTO v_line FROM voucher_line WHERE company_id = v_row.company_id AND voucher_id = v_row.voucher_id AND line_no = v_row.line_no;
+  -- The line is gone, and its rows with it (an alter replaced it, or the company was removed): nothing left to check.
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  SELECT coalesce(sum(CASE side WHEN v_line.side THEN amount ELSE -amount END), 0),
+    coalesce(sum(CASE side WHEN v_line.side THEN currency_amount ELSE -currency_amount END), 0)
+    INTO v_net, v_currency_net
+  FROM bill_allocation WHERE company_id = v_row.company_id AND voucher_id = v_row.voucher_id AND line_no = v_row.line_no;
+  IF v_net < 0 OR v_net > v_line.amount OR v_currency_net < 0 OR v_currency_net > v_line.currency_amount THEN
+    RAISE EXCEPTION 'the bill rows of line % of voucher % exceed the line', v_line.line_no, v_line.voucher_id USING ERRCODE = '23514', CONSTRAINT = 'bill_allocation_total';
   END IF;
-  v_ids := array_remove(v_ids, p_voucher::text);
-  IF p_checked THEN v_ids := v_ids || p_voucher::text; END IF;
-  PERFORM set_config('app.voucher_checked', v_prefix || array_to_string(v_ids, ','), true);
-END $$;
-
-CREATE FUNCTION ledger_voucher_checked(p_voucher uuid) RETURNS boolean LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $$
-DECLARE
-  v_prefix text := pg_current_xact_id()::text || ':';
-  v_value text := coalesce(current_setting('app.voucher_checked', true), '');
-BEGIN
-  RETURN starts_with(v_value, v_prefix) AND p_voucher::text = ANY (string_to_array(substr(v_value, length(v_prefix) + 1), ','));
-END $$;
-
--- Replaces M1's balance check with the same rules plus the bill rows, deduplicated by the mark: at least two lines,
--- debits equal credits, a number exactly when not optional, and each line's bill rows netting, towards the line's side,
--- to between zero and the line amount (a remainder is on account; rows on the opposite side are their own bills).
-CREATE OR REPLACE FUNCTION voucher_assert_balanced() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
-DECLARE
-  v_company text;
-  v_voucher uuid;
-  v_status text;
-  v_number integer;
-  v_lines integer;
-  v_debit numeric;
-  v_credit numeric;
-  v_line smallint;
-BEGIN
-  IF TG_TABLE_NAME = 'voucher' THEN v_company := NEW.company_id; v_voucher := NEW.id;
-  ELSIF TG_OP = 'DELETE' THEN v_company := OLD.company_id; v_voucher := OLD.voucher_id;
-  ELSE v_company := NEW.company_id; v_voucher := NEW.voucher_id;
-  END IF;
-  -- An opening bill row has no voucher; ledger_opening_bills checks it.
-  IF v_voucher IS NULL THEN RETURN NULL; END IF;
-  PERFORM ledger_assert_scope(v_company);
-  IF ledger_voucher_checked(v_voucher) THEN RETURN NULL; END IF;
-  SELECT status, number INTO v_status, v_number FROM voucher WHERE company_id = v_company AND id = v_voucher;
-  IF NOT FOUND THEN
-    -- In scope, only a row removed together with its voucher (company removal) finds no voucher; never skip otherwise.
-    IF TG_OP = 'DELETE' THEN RETURN NULL; END IF;
-    RAISE EXCEPTION 'voucher % is not visible to its own check', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_balanced';
-  END IF;
-  SELECT count(*), coalesce(sum(amount) FILTER (WHERE side = 'Dr'), 0), coalesce(sum(amount) FILTER (WHERE side = 'Cr'), 0)
-    INTO v_lines, v_debit, v_credit FROM voucher_line WHERE company_id = v_company AND voucher_id = v_voucher;
-  IF v_lines < 2 OR v_debit <> v_credit THEN
-    RAISE EXCEPTION 'voucher % is not balanced', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_balanced';
-  END IF;
-  IF (v_status = 'optional') <> (v_number IS NULL) THEN
-    RAISE EXCEPTION 'voucher % has no number', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbered';
-  END IF;
-  SELECT l.line_no INTO v_line
-  FROM voucher_line l
-    JOIN LATERAL (
-      SELECT sum(CASE a.side WHEN l.side THEN a.amount ELSE -a.amount END) AS net,
-        sum(CASE a.side WHEN l.side THEN a.currency_amount ELSE -a.currency_amount END) AS currency_net
-      FROM bill_allocation a WHERE a.company_id = l.company_id AND a.voucher_id = l.voucher_id AND a.line_no = l.line_no) s ON s.net IS NOT NULL
-  WHERE l.company_id = v_company AND l.voucher_id = v_voucher
-    AND (s.net < 0 OR s.net > l.amount OR s.currency_net < 0 OR s.currency_net > l.currency_amount)
-  LIMIT 1;
-  IF FOUND THEN
-    RAISE EXCEPTION 'the bill rows of line % of voucher % exceed the line', v_line, v_voucher USING ERRCODE = '23514', CONSTRAINT = 'bill_allocation_total';
-  END IF;
-  PERFORM ledger_voucher_mark(v_voucher, true);
   RETURN NULL;
-END $$;
-
--- The voucher's own changes (status, date, number) need the check again too.
-CREATE OR REPLACE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
-BEGIN
-  PERFORM ledger_assert_scope(NEW.company_id);
-  IF TG_OP = 'UPDATE' THEN
-    IF OLD.deleted_at IS NOT NULL THEN
-      RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
-    END IF;
-    IF OLD.number IS NOT NULL AND NEW.number IS DISTINCT FROM OLD.number THEN
-      RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
-    END IF;
-    IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
-      RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
-    END IF;
-    PERFORM ledger_voucher_mark(NEW.id, false);
-  END IF;
-  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL) AND NOT EXISTS (
-    SELECT 1 FROM voucher_counter c WHERE c.company_id = NEW.company_id AND c.voucher_type_id = NEW.voucher_type_id AND c.series = NEW.series
-      AND c.last_number = NEW.number AND c.xmin = pg_current_xact_id()::xid) THEN
-    RAISE EXCEPTION 'voucher number was not issued by its counter' USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbered';
-  END IF;
-  RETURN NEW;
-END $$;
-
-CREATE OR REPLACE FUNCTION voucher_line_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
-DECLARE
-  v_row voucher_line;
-BEGIN
-  FOREACH v_row IN ARRAY CASE TG_OP WHEN 'INSERT' THEN ARRAY[NEW] WHEN 'DELETE' THEN ARRAY[OLD] ELSE ARRAY[OLD, NEW] END LOOP
-    PERFORM ledger_assert_scope(v_row.company_id);
-    -- A line removed with its whole company has no voucher record left to protect.
-    IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM company WHERE company_id = v_row.company_id) THEN RETURN OLD; END IF;
-    IF EXISTS (SELECT 1 FROM voucher v WHERE v.company_id = v_row.company_id AND v.id = v_row.voucher_id AND (v.status = 'cancelled' OR v.deleted_at IS NOT NULL)) THEN
-      RAISE EXCEPTION 'lines of a cancelled or deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lines_frozen';
-    END IF;
-    PERFORM ledger_voucher_mark(v_row.voucher_id, false);
-  END LOOP;
-  RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END;
 END $$;
 
 -- ---- Guards ----
@@ -270,7 +180,6 @@ BEGIN
       END IF;
     END IF;
     v_date := v_voucher.date;
-    PERFORM ledger_voucher_mark(v_row.voucher_id, false);
   ELSE
     IF v_company.locked_through IS NOT NULL AND v_company.locked_through >= v_company.books_beginning THEN
       RAISE EXCEPTION 'opening bills are inside the locked period' USING ERRCODE = '23514', CONSTRAINT = 'bill_allocation_opening_locked';
@@ -293,10 +202,10 @@ BEGIN
 END $$;
 CREATE TRIGGER bill_allocation_guard BEFORE INSERT OR DELETE ON bill_allocation FOR EACH ROW EXECUTE FUNCTION bill_allocation_guard();
 CREATE CONSTRAINT TRIGGER bill_allocation_balanced AFTER INSERT OR DELETE ON bill_allocation DEFERRABLE INITIALLY DEFERRED
-  FOR EACH ROW EXECUTE FUNCTION voucher_assert_balanced();
+  FOR EACH ROW EXECUTE FUNCTION bill_allocation_assert_line();
 
--- Opening bill rows net, towards the opening balance's side, to between zero and the opening amount (the rest is on
--- account). Checked at commit for the ledger whose opening or opening rows changed.
+-- Opening bills are new bills on the opening balance's side, together at most the opening amount (the rest is on
+-- account; observed). Checked at commit for the ledger whose opening or opening rows changed.
 CREATE FUNCTION ledger_assert_opening_bills() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
   v_company text;
@@ -316,9 +225,9 @@ BEGIN
   PERFORM ledger_assert_scope(v_company);
   SELECT opening_amount, opening_side INTO v_amount, v_side FROM ledger WHERE company_id = v_company AND id = v_ledger;
   IF NOT FOUND THEN RETURN NULL; END IF;
-  SELECT coalesce(sum(CASE side WHEN v_side THEN amount ELSE -amount END), 0) INTO v_net
+  SELECT coalesce(sum(amount), 0) INTO v_net
   FROM bill_allocation WHERE company_id = v_company AND ledger_id = v_ledger AND voucher_id IS NULL;
-  IF v_net < 0 OR v_net > v_amount THEN
+  IF v_net > v_amount OR EXISTS (SELECT 1 FROM bill_allocation WHERE company_id = v_company AND ledger_id = v_ledger AND voucher_id IS NULL AND side <> v_side) THEN
     RAISE EXCEPTION 'the opening bills of ledger % exceed its opening balance', v_ledger USING ERRCODE = '23514', CONSTRAINT = 'bill_allocation_opening_total';
   END IF;
   RETURN NULL;
@@ -441,11 +350,11 @@ END $$;
 -- deleted; bill rows are written and removed with their line or the opening balance, never updated.
 GRANT UPDATE (bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check) ON ledger TO books_app;
 GRANT UPDATE (reference, reference_date) ON voucher TO books_app;
-GRANT SELECT, INSERT ON bill TO books_app;
+GRANT SELECT, INSERT, DELETE ON bill TO books_app;
 GRANT SELECT, INSERT, DELETE ON bill_allocation TO books_app;
 GRANT SELECT, INSERT, DELETE ON ageing_bucket TO books_app;
-REVOKE ALL ON FUNCTION bill_due_date(date, integer, text), ledger_voucher_mark(uuid, boolean), ledger_voucher_checked(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION bill_due_date(date, integer, text), ledger_voucher_mark(uuid, boolean), ledger_voucher_checked(uuid) TO books_app;
+REVOKE ALL ON FUNCTION bill_due_date(date, integer, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bill_due_date(date, integer, text) TO books_app;
 
 -- ---- Existing companies ----
 
