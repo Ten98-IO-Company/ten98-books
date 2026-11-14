@@ -127,6 +127,8 @@ const voucherLine = z.object({
 const reference = z.string().trim().max(100).refine(clean);
 const narration = z.string().max(2000);
 const voucherStatus = z.enum(['regular', 'optional']);
+/** A voucher may be created cancelled, without lines (a void that keeps its number); it is never altered into one. */
+const createStatus = z.enum(['regular', 'optional', 'cancelled']);
 const lines = z.array(voucherLine).max(500);
 /** Creating a voucher. The idempotency key makes a retried request return the first result instead of posting twice. */
 export const voucherCreateInput = z.object({
@@ -134,7 +136,7 @@ export const voucherCreateInput = z.object({
   voucherTypeId: id,
   date: calendarDate,
   narration: narration.nullish().transform(value => value?.trim() || null),
-  status: voucherStatus.default('regular'),
+  status: createStatus.default('regular'),
   postDated: z.boolean().default(false),
   reference: reference.nullish().transform(value => value || null),
   referenceDate: calendarDate.nullish().transform(value => value ?? null),

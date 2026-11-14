@@ -232,6 +232,7 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
     return { voucher: await readVoucher(context, prior.rows[0].id), replayed: true, warnings: [] };
   }
   const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found')));
+  if (body.status === 'cancelled') return createVoid(context, type, idempotencyKey, hash, body);
   const lines = await prepareLines(context, type.kind, body);
   const cost = await planCost(context, lines);
   const plan = await planBills(context, { kind: type.kind, reference: body.reference, optional: body.status === 'optional' }, lines);
@@ -247,6 +248,26 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   const voucher = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'create', null, voucher);
   return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows), ...cost.warnings] };
+}
+
+/**
+ * A voucher created cancelled, without lines (a void): it takes the next number of its type in its date's period, has no
+ * accounting effect and is listed as cancelled. Like any cancelled voucher it is never altered or made regular again;
+ * it may be deleted. The database exempts it, and only it, from the two-balanced-lines check (`created_cancelled`).
+ */
+async function createVoid(context: LedgerContext, type: VoucherType, idempotencyKey: string, hash: string,
+  body: { date: string; narration: string | null; postDated: boolean; reference: string | null; referenceDate: string | null; lines: unknown[] }): Promise<VoucherResult & { replayed: boolean }> {
+  const { client, company, userId } = context;
+  if (body.lines.length) throw ledgerError(400, 'A voucher entered as cancelled has no lines.', 'validation');
+  assertDateOpen(context, body.date);
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO voucher (company_id, voucher_type_id, series, date, narration, status, post_dated, reference, reference_date, idempotency_key, request_hash, created_by)
+     VALUES ($1, $2, $3, $4, $5, 'cancelled', $6, $7, $8, $9, $10, $11) RETURNING id`,
+    [company.companyId, type.id, type.numberingSeries, body.date, body.narration, body.postDated, body.reference, body.referenceDate, idempotencyKey, hash, userId]);
+  await issueNumber(context, { id: rows[0].id, date: body.date, typeId: type.id, series: type.numberingSeries });
+  const voucher = await readVoucher(context, rows[0].id);
+  await logRevision(context, 'voucher', voucher.id, 'create', null, voucher);
+  return { voucher, replayed: false, warnings: [] };
 }
 
 /** The voucher, locked, if it may still change: not deleted and at the revision the editor read. */
