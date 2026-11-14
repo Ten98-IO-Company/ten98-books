@@ -10,7 +10,7 @@ import {
   ledgerPayload, natureSingular, openingLocked, plainAmount, resolveLookup, sideTitles, validateLedgerForm, type Choice, type LedgerField, type LedgerFormAction, type LedgerFormValues, type LedgerRow,
 } from '../../lib/masters'
 import type { Wire } from '../../lib/money'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import type { MasterFormProps } from './GroupForm'
 import { LookupField } from './LookupField'
@@ -63,6 +63,12 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const [confirm, dialog] = useConfirmDialog()
   const openings = useOpeningTotals(company.id, company.booksBeginning)
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
+  // A name another master already has is an error on the Name field, found by the server's code.
+  useEffect(() => {
+    if (failure?.code !== 'duplicate_name') return
+    setErrors(previous => ({ ...previous, name: failure.message }))
+    focusEntryField(form.current, 'name')
+  }, [failure])
   const leave = useLeave({ to: '/app/c/$companyId/masters/chart-of-accounts', params: { companyId: company.id } })
 
   const outsideGroups = existing?.systemKey === 'profit_and_loss'
@@ -92,6 +98,16 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
     let next = from
     for (const action of lookup.actions(result.value)) { next = ledgerFormReducer(next, action); dispatch(action) }
     return next
+  }
+
+  /** Enter on typed lookup text with no row highlighted: pick the one choice it names or show the error here; false when nothing was typed. */
+  function typedEnter(field: LookupName, text: string): boolean {
+    const lookup = lookups[field]
+    const result = resolveLookup(lookup.options, text, lookup.current(values))
+    if ('value' in result && result.value === lookup.current(values)) return false
+    // A pick moves on like Enter does after a highlighted row: once the new value is on screen.
+    if (settle(field, text, values)) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
+    return true
   }
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
@@ -172,7 +188,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
         : existing ? 'Change the ledger, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next ledger after every save, with the group kept.'} />
     {readOnly && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
-    <FailureAlert failure={failure} onReload={reloadData} />
+    <FailureAlert failure={failure?.code === 'duplicate_name' ? null : failure} onReload={reloadData} />
     {confirming && <SaveConfirm title={existing ? 'Save the changes?' : 'Save this ledger?'} description={summary()} onConfirm={() => { setConfirming(false); void save() }} onCancel={keepEditing} />}
     <Form ref={form} onSubmit={() => undefined} busy={busy} gap={4} fieldErrors={errors} aria-label={existing ? 'Alter ledger' : 'Create ledger'}>
       <Stack data-entry-field='name'>
@@ -186,7 +202,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       <Stack data-entry-field='groupId'>
         <LookupField label='Group' options={groupOptions} value={values.groupId} disabled={readOnly || outsideGroups} required={!outsideGroups} error={errors.groupId}
           description={outsideGroups ? 'The profit and loss ledger stays outside every group.' : group ? `Nature: ${natureSingular[group.nature]}. New balances default to ${group.nature === 'liability' || group.nature === 'income' ? 'credit' : 'debit'}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} onTypedEnter={text => typedEnter('groupId', text)} />
       </Stack>
       <Stack data-entry-field='amount'>
         <Field label='Opening balance' description={locked ? lockNote : `Optional, as of ${company.booksBeginning}, in ${company.baseCurrency}, for example ${amountExample(exponent)}.`} error={errors.amount}>
@@ -195,9 +211,9 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       </Stack>
       <Stack data-entry-field='side'>
         <LookupField label='Debit or credit' options={sideChoices} value={side} disabled={readOnly || locked} error={errors.side}
-          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} />
+          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} onTypedEnter={text => typedEnter('side', text)} />
       </Stack>
-      {existing && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
+      {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
         {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
         <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>

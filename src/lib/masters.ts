@@ -1,5 +1,5 @@
 import { formatMoney, parseMoney, type MoneyExponent } from '@ten98/runtime/browser';
-import { natures, sides, type AccountGroup, type Ledger, type Nature, type Revision, type Side } from './ledger.ts';
+import { natures, sides, type AccountGroup, type Ledger, type LedgerErrorCode, type Nature, type Revision, type Side } from './ledger.ts';
 import { normalizeAmountInput, type Wire } from './money.ts';
 
 /**
@@ -9,8 +9,9 @@ import { normalizeAmountInput, type Wire } from './money.ts';
  * only through `parseMoney` with the company's exponent, never a JavaScript number.
  */
 
-export type GroupRow = Wire<AccountGroup>;
-export type LedgerRow = Wire<Ledger>;
+/** `inUse` comes with the list and read routes (a delete would be refused); the answers to create and alter omit it. */
+export type GroupRow = Wire<AccountGroup> & { inUse?: boolean };
+export type LedgerRow = Wire<Ledger> & { inUse?: boolean };
 export type RevisionRow = Wire<Revision>;
 
 export const natureOrder: readonly Nature[] = natures;
@@ -196,12 +197,14 @@ export function ledgerGroupReason(ledger: LedgerRow | null, candidate: GroupRow,
 
 export function groupDeleteReason(group: GroupRow, groups: readonly GroupRow[], ledgers: readonly LedgerRow[]): string | null {
   if (group.systemKey) return 'Built-in groups can be renamed but not deleted.';
-  if (groups.some(other => other.parentId === group.id) || ledgers.some(ledger => ledger.groupId === group.id)) return 'This group still holds sub-groups or ledgers. Move or delete them first.';
-  return null;
+  // The server says whether a delete would be refused (`inUse`); the page's own lists answer only while that is missing.
+  const held = group.inUse ?? (groups.some(other => other.parentId === group.id) || ledgers.some(ledger => ledger.groupId === group.id));
+  return held ? 'This group still holds sub-groups or ledgers. Move or delete them first.' : null;
 }
 
-/** Whether a ledger is used in vouchers is not on the page, so only built-in ledgers are refused here; the server checks use. */
-export const ledgerDeleteReason = (ledger: LedgerRow): string | null => ledger.systemKey ? 'Built-in ledgers can be renamed but not deleted.' : null;
+/** A ledger is in use once a voucher line names it, which the server reports as `inUse`; built-in ledgers are refused on another ground. */
+export const ledgerDeleteReason = (ledger: LedgerRow): string | null =>
+  ledger.systemKey ? 'Built-in ledgers can be renamed but not deleted.' : ledger.inUse ? 'This ledger is used in vouchers and cannot be deleted.' : null;
 
 /** Opening balances are as of books beginning, so a lock through that date freezes them (D-09). */
 export const openingLocked = (company: { booksBeginning: string; lockedThrough: string | null }): boolean => company.lockedThrough !== null && company.lockedThrough >= company.booksBeginning;
@@ -402,17 +405,25 @@ export function nextFieldAfter<F extends string>(fields: readonly F[], current: 
 
 // ---- Failures in plain language ----
 
-export type Failure = { message: string; stale: boolean };
+export type Failure = { message: string; stale: boolean; code?: LedgerErrorCode | string };
 
-/** Classifies an API failure. The server's own sentences are already plain; the two it cannot make so are worded here. */
-export function describeFailure(status: number | undefined, message: string): Failure {
-  const stale = status === 409 && /changed by someone else/i.test(message);
-  if (status === 404) return { stale: false, message: 'This item no longer exists, or your role in the workspace cannot change it. Reload the list to check.' };
-  if (status === 429) return { stale: false, message: 'Too many changes in a short time. Wait a moment, then try again.' };
-  return { stale, message };
+/**
+ * Classifies an API failure by the server's stable `code`, never by its sentence. The server's sentences are already
+ * plain and are shown as they are; a missing item and a rate limit (which has no code) are worded here.
+ */
+export function describeFailure(status: number | undefined, message: string, code?: string): Failure {
+  if (code === 'not_found' || (code === undefined && status === 404)) return { stale: false, code, message: 'This item no longer exists, or your role in the workspace cannot change it. Reload the list to check.' };
+  if (status === 429) return { stale: false, code, message: 'Too many changes in a short time. Wait a moment, then try again.' };
+  return { stale: code === 'stale_revision', code, message };
 }
 
 // ---- History ----
+
+/** Who made a change: the signed-in user as "You", every other member by the name the server gives, and a gone member as such. */
+export function actorLabel(actorId: string, actorName: string | null, me: { id: string; name: string }): string {
+  if (actorId === me.id) return `You (${actorName ?? me.name})`;
+  return actorName ?? 'A member who has since left';
+}
 
 export const actionTitles: Record<RevisionRow['action'], string> = { create: 'Created', alter: 'Changed', cancel: 'Cancelled', delete: 'Deleted' };
 

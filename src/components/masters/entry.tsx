@@ -5,7 +5,8 @@ import { ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
-import { useAppCommand } from '../KeyboardShell'
+import { keepsEscape } from '../../lib/commands'
+import { useAppCommand, useBackOverride } from '../KeyboardShell'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
 export function EntryScope({ children }: { children: ReactNode }) {
@@ -28,6 +29,9 @@ function entryFields(form: HTMLElement | null): { name: string; control: HTMLInp
 
 /** The text a field's control shows right now (what a lookup displays, typed or chosen), or null when the field is not on screen. */
 export const entryText = (form: HTMLElement | null, name: string): string | null => entryFields(form).find(field => field.name === name)?.control.value ?? null
+
+/** The field after `name` in the form's order, or 'confirm' after the last one (what Enter does from a field). */
+export const nextEntryField = (form: HTMLElement | null, name: string): string => nextFieldAfter(entryFields(form).map(field => field.name), name)
 
 export function focusEntryField(form: HTMLElement | null, name: string) {
   const control = entryFields(form).find(field => field.name === name)?.control
@@ -70,10 +74,26 @@ export function useEntryCommands(options: {
     if (next === 'confirm') onLastField(); else focusEntryField(form.current, next)
   }, { allowInTextInput: true })
   useAppCommand('entry.accept', () => latest.current.onAccept(), { allowInTextInput: true, enabled: !options.readOnly })
-  // The registry delivers Escape from text fields too; a lookup's open list takes the key first.
-  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true })
+  // One Escape command at a time, so the bar and the help never list two: while a text field has focus the shell's
+  // back is off (it keeps Escape for the field) and entry.cancel runs; anywhere else back is this screen's cancel.
+  const inText = useTextFocus()
+  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true, enabled: inText })
+  useBackOverride(() => latest.current.onCancel())
   useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
   useAppCommand('entry.history', () => latest.current.onHistory?.(), { enabled: options.onHistory !== undefined })
+}
+
+/** Whether the focused element is a text field, select or lookup, which keep Escape for themselves. */
+function useTextFocus() {
+  const [text, setText] = useState(false)
+  useEffect(() => {
+    const update = () => setText(keepsEscape(document.activeElement))
+    update()
+    document.addEventListener('focusin', update)
+    document.addEventListener('focusout', update)
+    return () => { document.removeEventListener('focusin', update); document.removeEventListener('focusout', update) }
+  }, [])
+  return text
 }
 
 /** Leaves an entry screen one level: back to where the user came from, or to `fallback` after a direct visit. */
@@ -103,7 +123,7 @@ export function useMasterRequest() {
     try { return await task() }
     catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) unauthorized()
-      else setFailure(describeFailure(cause instanceof ApiError ? cause.status : undefined, errMsg(cause)))
+      else setFailure(describeFailure(cause instanceof ApiError ? cause.status : undefined, errMsg(cause), cause instanceof ApiError ? cause.code : undefined))
       return undefined
     } finally { setBusy(false) }
   }), [unauthorized])

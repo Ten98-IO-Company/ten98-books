@@ -8,7 +8,7 @@ import {
   emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, isolate, natureLockReason, natureSingular,
   parentReason, primaryChoice, resolveLookup, validateGroupForm, type Choice, type GroupField, type GroupFormAction, type GroupFormValues, type GroupRow, type LedgerRow,
 } from '../../lib/masters'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import { LookupField } from './LookupField'
 
@@ -50,6 +50,12 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const { busy, failure, run } = useMasterRequest()
   const [confirm, dialog] = useConfirmDialog()
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
+  // A name another master already has is an error on the Name field, found by the server's code.
+  useEffect(() => {
+    if (failure?.code !== 'duplicate_name') return
+    setErrors(previous => ({ ...previous, name: failure.message }))
+    focusEntryField(form.current, 'name')
+  }, [failure])
   const leave = useLeave({ to: '/app/c/$companyId/masters/chart-of-accounts', params: { companyId: company.id } })
 
   const parentChoices = useMemo(() => groupChoices(groups, { primary: true, reason: existing ? candidate => parentReason(existing, candidate, groups, ledgers) : undefined }), [groups, ledgers, existing])
@@ -84,6 +90,16 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
     let next = from
     for (const action of lookup.actions(result.value, from)) { next = groupFormReducer(next, action); dispatch(action) }
     return next
+  }
+
+  /** Enter on typed lookup text with no row highlighted: pick the one choice it names or show the error here; false when nothing was typed. */
+  function typedEnter(field: LookupName, text: string): boolean {
+    const lookup = lookups[field]
+    const result = resolveLookup(lookup.options, text, lookup.current(values))
+    if ('value' in result && result.value === lookup.current(values)) return false
+    // A pick moves on like Enter does after a highlighted row: once the new value is on screen.
+    if (settle(field, text, values)) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
+    return true
   }
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
@@ -159,7 +175,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
         : existing ? 'Change the group, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next group after every save.'} />
     {readOnly && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
-    <FailureAlert failure={failure} onReload={reloadData} />
+    <FailureAlert failure={failure?.code === 'duplicate_name' ? null : failure} onReload={reloadData} />
     {confirming && <SaveConfirm title={existing ? 'Save the changes?' : 'Save this group?'} description={`“${values.name.trim()}” under ${parentName}.`}
       onConfirm={() => { setConfirming(false); void save() }} onCancel={keepEditing} />}
     <Form ref={form} onSubmit={() => undefined} busy={busy} gap={4} fieldErrors={errors} aria-label={existing ? 'Alter group' : 'Create group'}>
@@ -174,17 +190,17 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
       <Stack data-entry-field='parentId'>
         <LookupField label='Under' options={parentChoices} value={values.parentId} disabled={readOnly} required error={errors.parentId}
           description={values.parentId === primaryChoice ? 'A primary group sits at the top of the chart and has its own nature.' : parent ? `Takes the nature of its parent: ${natureSingular[parent.nature]}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} onTypedEnter={text => typedEnter('parentId', text)} />
       </Stack>
       {fields.includes('nature') && <Stack data-entry-field='nature'>
         <LookupField label='Nature' options={natureChoices} value={values.nature} disabled={readOnly || natureLock !== null} required error={errors.nature}
-          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} />
+          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} onTypedEnter={text => typedEnter('nature', text)} />
       </Stack>}
       {fields.includes('grossProfit') && <Stack data-entry-field='grossProfit'>
         <LookupField label='Counts towards gross profit' options={yesNo} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly} error={errors.grossProfit}
-          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} />
+          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} onTypedEnter={text => typedEnter('grossProfit', text)} />
       </Stack>}
-      {existing && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
+      {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
         {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
         <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>

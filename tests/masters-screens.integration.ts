@@ -72,19 +72,24 @@ test('the rules the forms explain are refused by the server with the same senten
   const cashMove = await call(`ledgers/${cash.id}`, { name: 'Cash', groupId: books.group('fixed_assets'), revision: cash.revision });
   assert.equal(cashMove.status, 400);
   assert.match(cashMove.body.error, /cash ledger must stay/);
+  assert.equal(cashMove.body.code, 'family_rule');
   const capital = (await owner.browser.call(`${base()}/groups/${books.group('capital')}`)).body.group;
   const nature = await call(`groups/${capital.id}`, { name: capital.name, parentId: null, nature: 'asset', revision: capital.revision });
   assert.equal(nature.status, 400);
   assert.match(nature.body.error, /keeps its nature/);
+  assert.equal(nature.body.code, 'nature_fixed');
   const builtIn = await call(`groups/${capital.id}/delete`, { revision: capital.revision });
   assert.equal(builtIn.status, 409);
   assert.match(builtIn.body.error, /renamed but not deleted/);
+  assert.equal(builtIn.body.code, 'seeded_row');
   const duplicate = await call('groups', { name: 'Capital', parentId: null, nature: 'liability' });
   assert.equal(duplicate.status, 409);
   assert.match(duplicate.body.error, /already exists/);
+  assert.equal(duplicate.body.code, 'duplicate_name');
   const stale = await call(`ledgers/${cash.id}`, { name: 'Cash on hand', groupId: cash.groupId, revision: cash.revision - 1 || 99 });
   assert.equal(stale.status, 409);
   assert.match(stale.body.error, /changed by someone else/);
+  assert.equal(stale.body.code, 'stale_revision');
   // Another company's master is "not found", never a different company's data.
   const foreign = await owner.browser.call(`${base(other)}/ledgers/${cash.id}`);
   assert.equal(foreign.status, 404);

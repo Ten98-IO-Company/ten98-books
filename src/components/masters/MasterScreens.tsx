@@ -4,13 +4,13 @@ import { useEffect, useMemo, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
-import { actionTitles, describeChanges, type RevisionRow, isolate } from '../../lib/masters'
-import { EntryScope, useLeave } from './entry'
+import { actionTitles, actorLabel, describeChanges, type RevisionRow, isolate } from '../../lib/masters'
+import { useLeave } from './entry'
 import { rememberedGroup } from './flash'
 import { GroupForm } from './GroupForm'
 import { LedgerForm } from './LedgerForm'
 import { useMasterData } from './useMasterData'
-import { useAppCommand } from '../KeyboardShell'
+import { useBackOverride } from '../KeyboardShell'
 
 export type MasterKind = 'group' | 'ledger'
 
@@ -61,10 +61,6 @@ function Missing({ kind }: { kind: MasterKind }) {
 
 /** `/masters/history/group/$id` and `.../ledger/$id`: who changed the master, when and what. */
 export function MasterHistory({ kind, id }: { kind: MasterKind; id: string }) {
-  return <EntryScope><HistoryBody kind={kind} id={id} /></EntryScope>
-}
-
-function HistoryBody({ kind, id }: { kind: MasterKind; id: string }) {
   const company = useCompany()
   const { me, unauthorized } = useApp()
   const exponent = company.currencyMinorUnits as MoneyExponent
@@ -73,8 +69,8 @@ function HistoryBody({ kind, id }: { kind: MasterKind; id: string }) {
   const [revisions, setRevisions] = useState<RevisionRow[] | null>(null)
   const [error, setError] = useState('')
   const wanted = id.toLowerCase()
-  // Esc on a history screen goes back one level, to the row it was opened from.
-  useAppCommand('entry.cancel', leave, { allowInTextInput: true })
+  // Escape (the shell's go-back command, the only Escape command here) returns to the row this was opened from.
+  useBackOverride(leave)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -101,8 +97,8 @@ function HistoryBody({ kind, id }: { kind: MasterKind; id: string }) {
       emptyTitle='No history yet' emptyDescription={`Nothing has changed this ${kind}.`}
       columns={[
         { key: 'when', header: 'When', render: row => <Text as='time' dateTime={row.at}>{formatter.format(new Date(row.at))}</Text>, wrap: true },
-        // The log keeps who by id; names are not exposed to every role yet, so the signed-in user sees their own entries as "You".
-        { key: 'who', header: 'Who', render: row => row.actorId === me.user.id ? `You (${me.user.name || me.user.email})` : 'Another member', wrap: true },
+        // The server names every member; `actorName` is null once that user no longer exists.
+        { key: 'who', header: 'Who', render: row => actorLabel(row.actorId, row.actorName, me.user), wrap: true },
         { key: 'action', header: 'What happened', render: row => actionTitles[row.action] },
         { key: 'changes', header: 'Details', wrap: true, minWidth: 'lg', render: row => {
           const lines = describeChanges(row, exponent, groupName)

@@ -23,8 +23,6 @@ import { Route as AppCCompanyIdReportsRouteImport } from './routes/app/c.$compan
 import { Route as AppCCompanyIdSettingsRouteImport } from './routes/app/c.$companyId.settings'
 import { Route as AppCCompanyIdVouchersRouteImport } from './routes/app/c.$companyId.vouchers'
 import { Route as AppCCompanyIdMastersChartOfAccountsRouteImport } from './routes/app/c.$companyId.masters_.chart-of-accounts'
-import { Route as AppCCompanyIdMastersEditRouteImport } from './routes/app/c.$companyId.masters_.edit'
-import { Route as AppCCompanyIdMastersNewRouteImport } from './routes/app/c.$companyId.masters_.new'
 import { Route as AppCCompanyIdReportsBalanceSheetRouteImport } from './routes/app/c.$companyId.reports_.balance-sheet'
 import { Route as AppCCompanyIdReportsDayBookRouteImport } from './routes/app/c.$companyId.reports_.day-book'
 import { Route as AppCCompanyIdReportsGroupSummaryRouteImport } from './routes/app/c.$companyId.reports_.group-summary'
@@ -34,6 +32,14 @@ import { Route as AppCCompanyIdReportsLedgerVouchersRouteImport } from './routes
 import { Route as AppCCompanyIdReportsProfitAndLossRouteImport } from './routes/app/c.$companyId.reports_.profit-and-loss'
 import { Route as AppCCompanyIdReportsTrialBalanceRouteImport } from './routes/app/c.$companyId.reports_.trial-balance'
 import { Route as AppCCompanyIdReportsVoucherRouteImport } from './routes/app/c.$companyId.reports_.voucher'
+import { Route as AppCCompanyIdMastersEditIndexRouteImport } from './routes/app/c.$companyId.masters_.edit.index'
+import { Route as AppCCompanyIdMastersNewIndexRouteImport } from './routes/app/c.$companyId.masters_.new.index'
+import { Route as AppCCompanyIdMastersNewGroupRouteImport } from './routes/app/c.$companyId.masters_.new.group'
+import { Route as AppCCompanyIdMastersNewLedgerRouteImport } from './routes/app/c.$companyId.masters_.new.ledger'
+import { Route as AppCCompanyIdMastersEditGroupGroupIdRouteImport } from './routes/app/c.$companyId.masters_.edit.group.$groupId'
+import { Route as AppCCompanyIdMastersEditLedgerLedgerIdRouteImport } from './routes/app/c.$companyId.masters_.edit.ledger.$ledgerId'
+import { Route as AppCCompanyIdMastersHistoryGroupGroupIdRouteImport } from './routes/app/c.$companyId.masters_.history.group.$groupId'
+import { Route as AppCCompanyIdMastersHistoryLedgerLedgerIdRouteImport } from './routes/app/c.$companyId.masters_.history.ledger.$ledgerId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -106,17 +112,6 @@ const AppCCompanyIdMastersChartOfAccountsRoute =
     path: '/masters/chart-of-accounts',
     getParentRoute: () => AppCCompanyIdRoute,
   } as any)
-const AppCCompanyIdMastersEditRoute =
-  AppCCompanyIdMastersEditRouteImport.update({
-    id: '/masters_/edit',
-    path: '/masters/edit',
-    getParentRoute: () => AppCCompanyIdRoute,
-  } as any)
-const AppCCompanyIdMastersNewRoute = AppCCompanyIdMastersNewRouteImport.update({
-  id: '/masters_/new',
-  path: '/masters/new',
-  getParentRoute: () => AppCCompanyIdRoute,
-} as any)
 const AppCCompanyIdReportsBalanceSheetRoute =
   AppCCompanyIdReportsBalanceSheetRouteImport.update({
     id: '/reports_/balance-sheet',
@@ -171,6 +166,54 @@ const AppCCompanyIdReportsVoucherRoute =
     path: '/reports/voucher',
     getParentRoute: () => AppCCompanyIdRoute,
   } as any)
+const AppCCompanyIdMastersEditIndexRoute =
+  AppCCompanyIdMastersEditIndexRouteImport.update({
+    id: '/masters_/edit/',
+    path: '/masters/edit/',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersNewIndexRoute =
+  AppCCompanyIdMastersNewIndexRouteImport.update({
+    id: '/masters_/new/',
+    path: '/masters/new/',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersNewGroupRoute =
+  AppCCompanyIdMastersNewGroupRouteImport.update({
+    id: '/masters_/new/group',
+    path: '/masters/new/group',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersNewLedgerRoute =
+  AppCCompanyIdMastersNewLedgerRouteImport.update({
+    id: '/masters_/new/ledger',
+    path: '/masters/new/ledger',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersEditGroupGroupIdRoute =
+  AppCCompanyIdMastersEditGroupGroupIdRouteImport.update({
+    id: '/masters_/edit/group/$groupId',
+    path: '/masters/edit/group/$groupId',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersEditLedgerLedgerIdRoute =
+  AppCCompanyIdMastersEditLedgerLedgerIdRouteImport.update({
+    id: '/masters_/edit/ledger/$ledgerId',
+    path: '/masters/edit/ledger/$ledgerId',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersHistoryGroupGroupIdRoute =
+  AppCCompanyIdMastersHistoryGroupGroupIdRouteImport.update({
+    id: '/masters_/history/group/$groupId',
+    path: '/masters/history/group/$groupId',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
+const AppCCompanyIdMastersHistoryLedgerLedgerIdRoute =
+  AppCCompanyIdMastersHistoryLedgerLedgerIdRouteImport.update({
+    id: '/masters_/history/ledger/$ledgerId',
+    path: '/masters/history/ledger/$ledgerId',
+    getParentRoute: () => AppCCompanyIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -187,8 +230,6 @@ export interface FileRoutesByFullPath {
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId/': typeof AppCCompanyIdIndexRoute
   '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
-  '/app/c/$companyId/masters/edit': typeof AppCCompanyIdMastersEditRoute
-  '/app/c/$companyId/masters/new': typeof AppCCompanyIdMastersNewRoute
   '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
   '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
@@ -198,6 +239,14 @@ export interface FileRoutesByFullPath {
   '/app/c/$companyId/reports/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
   '/app/c/$companyId/reports/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
   '/app/c/$companyId/reports/voucher': typeof AppCCompanyIdReportsVoucherRoute
+  '/app/c/$companyId/masters/new/group': typeof AppCCompanyIdMastersNewGroupRoute
+  '/app/c/$companyId/masters/new/ledger': typeof AppCCompanyIdMastersNewLedgerRoute
+  '/app/c/$companyId/masters/edit/': typeof AppCCompanyIdMastersEditIndexRoute
+  '/app/c/$companyId/masters/new/': typeof AppCCompanyIdMastersNewIndexRoute
+  '/app/c/$companyId/masters/edit/group/$groupId': typeof AppCCompanyIdMastersEditGroupGroupIdRoute
+  '/app/c/$companyId/masters/edit/ledger/$ledgerId': typeof AppCCompanyIdMastersEditLedgerLedgerIdRoute
+  '/app/c/$companyId/masters/history/group/$groupId': typeof AppCCompanyIdMastersHistoryGroupGroupIdRoute
+  '/app/c/$companyId/masters/history/ledger/$ledgerId': typeof AppCCompanyIdMastersHistoryLedgerLedgerIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -212,8 +261,6 @@ export interface FileRoutesByTo {
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId': typeof AppCCompanyIdIndexRoute
   '/app/c/$companyId/masters/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
-  '/app/c/$companyId/masters/edit': typeof AppCCompanyIdMastersEditRoute
-  '/app/c/$companyId/masters/new': typeof AppCCompanyIdMastersNewRoute
   '/app/c/$companyId/reports/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
   '/app/c/$companyId/reports/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
@@ -223,6 +270,14 @@ export interface FileRoutesByTo {
   '/app/c/$companyId/reports/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
   '/app/c/$companyId/reports/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
   '/app/c/$companyId/reports/voucher': typeof AppCCompanyIdReportsVoucherRoute
+  '/app/c/$companyId/masters/new/group': typeof AppCCompanyIdMastersNewGroupRoute
+  '/app/c/$companyId/masters/new/ledger': typeof AppCCompanyIdMastersNewLedgerRoute
+  '/app/c/$companyId/masters/edit': typeof AppCCompanyIdMastersEditIndexRoute
+  '/app/c/$companyId/masters/new': typeof AppCCompanyIdMastersNewIndexRoute
+  '/app/c/$companyId/masters/edit/group/$groupId': typeof AppCCompanyIdMastersEditGroupGroupIdRoute
+  '/app/c/$companyId/masters/edit/ledger/$ledgerId': typeof AppCCompanyIdMastersEditLedgerLedgerIdRoute
+  '/app/c/$companyId/masters/history/group/$groupId': typeof AppCCompanyIdMastersHistoryGroupGroupIdRoute
+  '/app/c/$companyId/masters/history/ledger/$ledgerId': typeof AppCCompanyIdMastersHistoryLedgerLedgerIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -240,8 +295,6 @@ export interface FileRoutesById {
   '/app/c/$companyId/vouchers': typeof AppCCompanyIdVouchersRoute
   '/app/c/$companyId/': typeof AppCCompanyIdIndexRoute
   '/app/c/$companyId/masters_/chart-of-accounts': typeof AppCCompanyIdMastersChartOfAccountsRoute
-  '/app/c/$companyId/masters_/edit': typeof AppCCompanyIdMastersEditRoute
-  '/app/c/$companyId/masters_/new': typeof AppCCompanyIdMastersNewRoute
   '/app/c/$companyId/reports_/balance-sheet': typeof AppCCompanyIdReportsBalanceSheetRoute
   '/app/c/$companyId/reports_/day-book': typeof AppCCompanyIdReportsDayBookRoute
   '/app/c/$companyId/reports_/group-summary': typeof AppCCompanyIdReportsGroupSummaryRoute
@@ -251,6 +304,14 @@ export interface FileRoutesById {
   '/app/c/$companyId/reports_/profit-and-loss': typeof AppCCompanyIdReportsProfitAndLossRoute
   '/app/c/$companyId/reports_/trial-balance': typeof AppCCompanyIdReportsTrialBalanceRoute
   '/app/c/$companyId/reports_/voucher': typeof AppCCompanyIdReportsVoucherRoute
+  '/app/c/$companyId/masters_/new/group': typeof AppCCompanyIdMastersNewGroupRoute
+  '/app/c/$companyId/masters_/new/ledger': typeof AppCCompanyIdMastersNewLedgerRoute
+  '/app/c/$companyId/masters_/edit/': typeof AppCCompanyIdMastersEditIndexRoute
+  '/app/c/$companyId/masters_/new/': typeof AppCCompanyIdMastersNewIndexRoute
+  '/app/c/$companyId/masters_/edit/group/$groupId': typeof AppCCompanyIdMastersEditGroupGroupIdRoute
+  '/app/c/$companyId/masters_/edit/ledger/$ledgerId': typeof AppCCompanyIdMastersEditLedgerLedgerIdRoute
+  '/app/c/$companyId/masters_/history/group/$groupId': typeof AppCCompanyIdMastersHistoryGroupGroupIdRoute
+  '/app/c/$companyId/masters_/history/ledger/$ledgerId': typeof AppCCompanyIdMastersHistoryLedgerLedgerIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -269,8 +330,6 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId/'
     | '/app/c/$companyId/masters/chart-of-accounts'
-    | '/app/c/$companyId/masters/edit'
-    | '/app/c/$companyId/masters/new'
     | '/app/c/$companyId/reports/balance-sheet'
     | '/app/c/$companyId/reports/day-book'
     | '/app/c/$companyId/reports/group-summary'
@@ -280,6 +339,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/reports/profit-and-loss'
     | '/app/c/$companyId/reports/trial-balance'
     | '/app/c/$companyId/reports/voucher'
+    | '/app/c/$companyId/masters/new/group'
+    | '/app/c/$companyId/masters/new/ledger'
+    | '/app/c/$companyId/masters/edit/'
+    | '/app/c/$companyId/masters/new/'
+    | '/app/c/$companyId/masters/edit/group/$groupId'
+    | '/app/c/$companyId/masters/edit/ledger/$ledgerId'
+    | '/app/c/$companyId/masters/history/group/$groupId'
+    | '/app/c/$companyId/masters/history/ledger/$ledgerId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -294,8 +361,6 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId'
     | '/app/c/$companyId/masters/chart-of-accounts'
-    | '/app/c/$companyId/masters/edit'
-    | '/app/c/$companyId/masters/new'
     | '/app/c/$companyId/reports/balance-sheet'
     | '/app/c/$companyId/reports/day-book'
     | '/app/c/$companyId/reports/group-summary'
@@ -305,6 +370,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/reports/profit-and-loss'
     | '/app/c/$companyId/reports/trial-balance'
     | '/app/c/$companyId/reports/voucher'
+    | '/app/c/$companyId/masters/new/group'
+    | '/app/c/$companyId/masters/new/ledger'
+    | '/app/c/$companyId/masters/edit'
+    | '/app/c/$companyId/masters/new'
+    | '/app/c/$companyId/masters/edit/group/$groupId'
+    | '/app/c/$companyId/masters/edit/ledger/$ledgerId'
+    | '/app/c/$companyId/masters/history/group/$groupId'
+    | '/app/c/$companyId/masters/history/ledger/$ledgerId'
   id:
     | '__root__'
     | '/'
@@ -321,8 +394,6 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/vouchers'
     | '/app/c/$companyId/'
     | '/app/c/$companyId/masters_/chart-of-accounts'
-    | '/app/c/$companyId/masters_/edit'
-    | '/app/c/$companyId/masters_/new'
     | '/app/c/$companyId/reports_/balance-sheet'
     | '/app/c/$companyId/reports_/day-book'
     | '/app/c/$companyId/reports_/group-summary'
@@ -332,6 +403,14 @@ export interface FileRouteTypes {
     | '/app/c/$companyId/reports_/profit-and-loss'
     | '/app/c/$companyId/reports_/trial-balance'
     | '/app/c/$companyId/reports_/voucher'
+    | '/app/c/$companyId/masters_/new/group'
+    | '/app/c/$companyId/masters_/new/ledger'
+    | '/app/c/$companyId/masters_/edit/'
+    | '/app/c/$companyId/masters_/new/'
+    | '/app/c/$companyId/masters_/edit/group/$groupId'
+    | '/app/c/$companyId/masters_/edit/ledger/$ledgerId'
+    | '/app/c/$companyId/masters_/history/group/$groupId'
+    | '/app/c/$companyId/masters_/history/ledger/$ledgerId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -440,20 +519,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCCompanyIdMastersChartOfAccountsRouteImport
       parentRoute: typeof AppCCompanyIdRoute
     }
-    '/app/c/$companyId/masters_/edit': {
-      id: '/app/c/$companyId/masters_/edit'
-      path: '/masters/edit'
-      fullPath: '/app/c/$companyId/masters/edit'
-      preLoaderRoute: typeof AppCCompanyIdMastersEditRouteImport
-      parentRoute: typeof AppCCompanyIdRoute
-    }
-    '/app/c/$companyId/masters_/new': {
-      id: '/app/c/$companyId/masters_/new'
-      path: '/masters/new'
-      fullPath: '/app/c/$companyId/masters/new'
-      preLoaderRoute: typeof AppCCompanyIdMastersNewRouteImport
-      parentRoute: typeof AppCCompanyIdRoute
-    }
     '/app/c/$companyId/reports_/balance-sheet': {
       id: '/app/c/$companyId/reports_/balance-sheet'
       path: '/reports/balance-sheet'
@@ -517,6 +582,62 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCCompanyIdReportsVoucherRouteImport
       parentRoute: typeof AppCCompanyIdRoute
     }
+    '/app/c/$companyId/masters_/edit/': {
+      id: '/app/c/$companyId/masters_/edit/'
+      path: '/masters/edit'
+      fullPath: '/app/c/$companyId/masters/edit/'
+      preLoaderRoute: typeof AppCCompanyIdMastersEditIndexRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/new/': {
+      id: '/app/c/$companyId/masters_/new/'
+      path: '/masters/new'
+      fullPath: '/app/c/$companyId/masters/new/'
+      preLoaderRoute: typeof AppCCompanyIdMastersNewIndexRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/new/group': {
+      id: '/app/c/$companyId/masters_/new/group'
+      path: '/masters/new/group'
+      fullPath: '/app/c/$companyId/masters/new/group'
+      preLoaderRoute: typeof AppCCompanyIdMastersNewGroupRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/new/ledger': {
+      id: '/app/c/$companyId/masters_/new/ledger'
+      path: '/masters/new/ledger'
+      fullPath: '/app/c/$companyId/masters/new/ledger'
+      preLoaderRoute: typeof AppCCompanyIdMastersNewLedgerRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/edit/group/$groupId': {
+      id: '/app/c/$companyId/masters_/edit/group/$groupId'
+      path: '/masters/edit/group/$groupId'
+      fullPath: '/app/c/$companyId/masters/edit/group/$groupId'
+      preLoaderRoute: typeof AppCCompanyIdMastersEditGroupGroupIdRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/edit/ledger/$ledgerId': {
+      id: '/app/c/$companyId/masters_/edit/ledger/$ledgerId'
+      path: '/masters/edit/ledger/$ledgerId'
+      fullPath: '/app/c/$companyId/masters/edit/ledger/$ledgerId'
+      preLoaderRoute: typeof AppCCompanyIdMastersEditLedgerLedgerIdRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/history/group/$groupId': {
+      id: '/app/c/$companyId/masters_/history/group/$groupId'
+      path: '/masters/history/group/$groupId'
+      fullPath: '/app/c/$companyId/masters/history/group/$groupId'
+      preLoaderRoute: typeof AppCCompanyIdMastersHistoryGroupGroupIdRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
+    '/app/c/$companyId/masters_/history/ledger/$ledgerId': {
+      id: '/app/c/$companyId/masters_/history/ledger/$ledgerId'
+      path: '/masters/history/ledger/$ledgerId'
+      fullPath: '/app/c/$companyId/masters/history/ledger/$ledgerId'
+      preLoaderRoute: typeof AppCCompanyIdMastersHistoryLedgerLedgerIdRouteImport
+      parentRoute: typeof AppCCompanyIdRoute
+    }
   }
 }
 
@@ -527,8 +648,6 @@ interface AppCCompanyIdRouteChildren {
   AppCCompanyIdVouchersRoute: typeof AppCCompanyIdVouchersRoute
   AppCCompanyIdIndexRoute: typeof AppCCompanyIdIndexRoute
   AppCCompanyIdMastersChartOfAccountsRoute: typeof AppCCompanyIdMastersChartOfAccountsRoute
-  AppCCompanyIdMastersEditRoute: typeof AppCCompanyIdMastersEditRoute
-  AppCCompanyIdMastersNewRoute: typeof AppCCompanyIdMastersNewRoute
   AppCCompanyIdReportsBalanceSheetRoute: typeof AppCCompanyIdReportsBalanceSheetRoute
   AppCCompanyIdReportsDayBookRoute: typeof AppCCompanyIdReportsDayBookRoute
   AppCCompanyIdReportsGroupSummaryRoute: typeof AppCCompanyIdReportsGroupSummaryRoute
@@ -538,6 +657,14 @@ interface AppCCompanyIdRouteChildren {
   AppCCompanyIdReportsProfitAndLossRoute: typeof AppCCompanyIdReportsProfitAndLossRoute
   AppCCompanyIdReportsTrialBalanceRoute: typeof AppCCompanyIdReportsTrialBalanceRoute
   AppCCompanyIdReportsVoucherRoute: typeof AppCCompanyIdReportsVoucherRoute
+  AppCCompanyIdMastersNewGroupRoute: typeof AppCCompanyIdMastersNewGroupRoute
+  AppCCompanyIdMastersNewLedgerRoute: typeof AppCCompanyIdMastersNewLedgerRoute
+  AppCCompanyIdMastersEditIndexRoute: typeof AppCCompanyIdMastersEditIndexRoute
+  AppCCompanyIdMastersNewIndexRoute: typeof AppCCompanyIdMastersNewIndexRoute
+  AppCCompanyIdMastersEditGroupGroupIdRoute: typeof AppCCompanyIdMastersEditGroupGroupIdRoute
+  AppCCompanyIdMastersEditLedgerLedgerIdRoute: typeof AppCCompanyIdMastersEditLedgerLedgerIdRoute
+  AppCCompanyIdMastersHistoryGroupGroupIdRoute: typeof AppCCompanyIdMastersHistoryGroupGroupIdRoute
+  AppCCompanyIdMastersHistoryLedgerLedgerIdRoute: typeof AppCCompanyIdMastersHistoryLedgerLedgerIdRoute
 }
 
 const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
@@ -548,8 +675,6 @@ const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
   AppCCompanyIdIndexRoute: AppCCompanyIdIndexRoute,
   AppCCompanyIdMastersChartOfAccountsRoute:
     AppCCompanyIdMastersChartOfAccountsRoute,
-  AppCCompanyIdMastersEditRoute: AppCCompanyIdMastersEditRoute,
-  AppCCompanyIdMastersNewRoute: AppCCompanyIdMastersNewRoute,
   AppCCompanyIdReportsBalanceSheetRoute: AppCCompanyIdReportsBalanceSheetRoute,
   AppCCompanyIdReportsDayBookRoute: AppCCompanyIdReportsDayBookRoute,
   AppCCompanyIdReportsGroupSummaryRoute: AppCCompanyIdReportsGroupSummaryRoute,
@@ -562,6 +687,18 @@ const AppCCompanyIdRouteChildren: AppCCompanyIdRouteChildren = {
     AppCCompanyIdReportsProfitAndLossRoute,
   AppCCompanyIdReportsTrialBalanceRoute: AppCCompanyIdReportsTrialBalanceRoute,
   AppCCompanyIdReportsVoucherRoute: AppCCompanyIdReportsVoucherRoute,
+  AppCCompanyIdMastersNewGroupRoute: AppCCompanyIdMastersNewGroupRoute,
+  AppCCompanyIdMastersNewLedgerRoute: AppCCompanyIdMastersNewLedgerRoute,
+  AppCCompanyIdMastersEditIndexRoute: AppCCompanyIdMastersEditIndexRoute,
+  AppCCompanyIdMastersNewIndexRoute: AppCCompanyIdMastersNewIndexRoute,
+  AppCCompanyIdMastersEditGroupGroupIdRoute:
+    AppCCompanyIdMastersEditGroupGroupIdRoute,
+  AppCCompanyIdMastersEditLedgerLedgerIdRoute:
+    AppCCompanyIdMastersEditLedgerLedgerIdRoute,
+  AppCCompanyIdMastersHistoryGroupGroupIdRoute:
+    AppCCompanyIdMastersHistoryGroupGroupIdRoute,
+  AppCCompanyIdMastersHistoryLedgerLedgerIdRoute:
+    AppCCompanyIdMastersHistoryLedgerLedgerIdRoute,
 }
 
 const AppCCompanyIdRouteWithChildren = AppCCompanyIdRoute._addFileChildren(

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  amountExample, amountProblem, buildChartRows, cashFamilyIds, defaultSide, describeChanges, describeFailure, displayAmount, effectiveSide, emptyGroupForm, emptyLedgerForm,
+  actorLabel, amountExample, amountProblem, buildChartRows, cashFamilyIds, defaultSide, describeChanges, describeFailure, displayAmount, effectiveSide, emptyGroupForm, emptyLedgerForm,
   groupChoices, groupDeleteReason, groupFields, groupFormReducer, groupPayload, ledgerDeleteReason, ledgerFormReducer, ledgerGroupReason, ledgerPayload,
   isChoice, natureLockReason, nextFieldAfter, openingLocked, parentReason, plainAmount, primaryChoice, resolveLookup, singleFlight, validateGroupForm, validateLedgerForm,
   type GroupRow, type LedgerRow, type RevisionRow,
@@ -10,7 +10,7 @@ import {
 const group = (id: string, name: string, parentId: string | null, nature: GroupRow['nature'], systemKey: string | null = null): GroupRow =>
   ({ id, name, parentId, nature, grossProfit: false, systemKey, secondLanguageName: null, revision: 1 });
 const ledger = (id: string, name: string, groupId: string | null, nature: LedgerRow['nature'], extra: Partial<LedgerRow> = {}): LedgerRow =>
-  ({ id, name, groupId, groupName: null, nature, systemKey: null, secondLanguageName: null, cashOrBank: false, opening: { amount: '0.00', side: 'Dr' }, revision: 1, ...extra });
+  ({ id, name, groupId, groupName: null, nature, systemKey: null, secondLanguageName: null, cashOrBank: false, opening: { amount: '0.00', side: 'Dr' }, revision: 1, inUse: false, ...extra });
 
 const groups = [
   group('assets', 'Current Assets', null, 'asset', 'current_assets'), group('cash', 'Cash on Hand', 'assets', 'asset', 'cash_in_hand'), group('bank', 'Bank Accounts', 'assets', 'asset', 'bank_accounts'),
@@ -147,15 +147,32 @@ test('Enter moves through the fields in order and asks to save after the last', 
   assert.equal(nextFieldAfter(fields, 'nature'), 'confirm');
 });
 
-test('failures: a stale revision offers a reload, a missing item names the likely causes, and the server sentence otherwise passes through', () => {
-  assert.equal(describeFailure(409, 'This ledger was changed by someone else. Reload it and try again.').stale, true);
-  assert.equal(describeFailure(409, 'A group with this name already exists.').stale, false);
-  assert.equal(describeFailure(409, 'A group with this name already exists.').message, 'A group with this name already exists.');
-  assert.match(describeFailure(404, 'Company not found or unavailable.').message, /no longer exists/);
+test('failures are told apart by the server code, never by its sentence', () => {
+  assert.equal(describeFailure(409, 'any words at all', 'stale_revision').stale, true);
+  assert.equal(describeFailure(409, 'This ledger was changed by someone else. Reload it and try again.', 'duplicate_name').stale, false, 'the sentence alone decides nothing');
+  assert.equal(describeFailure(409, 'This ledger was changed by someone else.').stale, false, 'no code, no stale');
+  const duplicate = describeFailure(409, 'A group with this name already exists.', 'duplicate_name');
+  assert.deepEqual([duplicate.code, duplicate.message], ['duplicate_name', 'A group with this name already exists.']);
+  assert.match(describeFailure(404, 'Company not found or unavailable.', 'not_found').message, /no longer exists/);
+  assert.match(describeFailure(429, 'Too many.').message, /Too many changes/);
+});
+
+test('delete is explained in advance from the server\'s inUse flag, and the history names every member', () => {
+  const used = ledger('l-used', 'Used', 'capital', 'liability', { inUse: true });
+  assert.equal(ledgerDeleteReason(used), 'This ledger is used in vouchers and cannot be deleted.');
+  assert.equal(ledgerDeleteReason(ledger('l-free', 'Free', 'capital', 'liability')), null);
+  assert.match(ledgerDeleteReason(ledger('l-cash2', 'Cash', 'cash', 'asset', { systemKey: 'cash', inUse: true })) ?? '', /Built-in/);
+  const held = { ...group('held', 'Held', 'misc', 'expense'), inUse: true };
+  assert.match(groupDeleteReason(held, groups, ledgers) ?? '', /still holds/);
+  assert.equal(groupDeleteReason({ ...group('quiet', 'Quiet', 'misc', 'expense'), inUse: false }, groups, ledgers), null);
+  const me = { id: 'me', name: 'Mira' };
+  assert.equal(actorLabel('me', 'Mira K', me), 'You (Mira K)');
+  assert.equal(actorLabel('other', 'Omar', me), 'Omar');
+  assert.equal(actorLabel('gone', null, me), 'A member who has since left');
 });
 
 test('history lists what changed in words, resolving group ids and formatting minor units with the exponent', () => {
-  const revision = (action: RevisionRow['action'], before: unknown, after: unknown, entity: RevisionRow['entity'] = 'ledger'): RevisionRow => ({ id: '1', entity, entityId: 'x', action, actorId: 'u', at: '2026-01-01T00:00:00Z', before, after });
+  const revision = (action: RevisionRow['action'], before: unknown, after: unknown, entity: RevisionRow['entity'] = 'ledger'): RevisionRow => ({ id: '1', entity, entityId: 'x', action, actorId: 'u', actorName: null, at: '2026-01-01T00:00:00Z', before, after });
   const snapshot = (name: string, minor: string, side: string, groupName = 'Capital') => ({ name, secondLanguageName: null, groupName, opening: { amount: minor, side } });
   assert.deepEqual(describeChanges(revision('create', null, snapshot('Rent', '0', 'Dr')), 3, () => null), ['Name: Rent', 'Group: Capital']);
   assert.deepEqual(describeChanges(revision('alter', snapshot('Rent', '0', 'Dr'), snapshot('Rent', '1250500', 'Cr', 'Fixed')), 3, () => null), ['Group: Capital → Fixed', 'Opening balance: none → 1,250.500 Cr']);
