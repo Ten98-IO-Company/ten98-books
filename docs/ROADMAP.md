@@ -30,10 +30,10 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md) |
 | Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
-| Demo data: dataset format, `seed:demo`, `demo:compare` | in review | Same data is loaded into the reference installation for like-for-like checks |
+| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Three companies; the starter company matches the reference installation on every line |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | in progress | |
-| Voucher numbering that restarts each financial year, as accountants expect | planned | Found by the like-for-like comparison; rules being observed before the counters change |
+| Voucher numbers per voucher type and financial year of the voucher's date | in progress | Found by the like-for-like comparison; rules observed; counters being changed |
 
 Open items inside merged pieces:
 
@@ -81,4 +81,5 @@ Everything in the requirement inventory not covered above, in the order the evid
 | [LEDGER.md](LEDGER.md) | Data model, posting rules, numbering, ledger HTTP API |
 | [REPORTS.md](REPORTS.md) | Report definitions, period rules, reports HTTP API |
 | [KEYBOARD.md](KEYBOARD.md) | Commands and both keymaps |
+| [demo/README.md](../demo/README.md) | The demo dataset format, seeding and comparison |
 | [TENANCY.md](TENANCY.md) | Company model, roles, creation paths, what migration 0005 changes |
