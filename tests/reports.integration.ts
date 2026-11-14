@@ -344,7 +344,7 @@ test('another workspace\'s user gets "not found" for every report and export; a 
   const viewer = await invite(owner.browser, owner.workspaceId, 'viewer');
   const stranger = browser();
   for (const path of everyRoute(companyId)) {
-    assert.deepEqual(await intruder.browser.call(path), { status: 404, body: { error: companyNotFound } }, path);
+    assert.deepEqual(await intruder.browser.call(path), { status: 404, body: { error: companyNotFound, code: 'not_found' } }, path);
     assert.equal((await stranger.call(path)).status, 401, path);
     assert.equal((await rawGet(viewer.browser, path)).status, 200, path);
   }
