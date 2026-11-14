@@ -68,7 +68,9 @@ function ListBody() {
   const [confirm, dialog] = useConfirmDialog()
   const rows = useMemo(() => categories && centres ? buildCostRows(categories, centres) : [], [categories, centres])
   const entries = useMemo(() => rows.map(row => entryOf(row, centres ?? [])), [rows, centres])
-  const row = rows.find(item => item.key === active) ?? rows[0]
+  // After a refused delete the row can be gone on reload: the cursor then goes to the neighbour it would have gone to.
+  const neighbour = useRef<string | null>(null)
+  const row = rows.find(item => item.key === active) ?? rows.find(item => item.key === neighbour.current) ?? rows[0]
   const latest = useRef({ row })
   latest.current = { row }
   // A closed dialog and a reload can leave focus on the page; it returns to the list, where the cursor is.
@@ -106,6 +108,7 @@ function ListBody() {
     if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true })) { focusList(); return }
     const next = rows[rows.indexOf(target) + 1] ?? rows[rows.indexOf(target) - 1]
     setMessage('')
+    neighbour.current = next?.key ?? null
     const done = await run(() => api(`/api/companies/${company.id}/${centre ? 'cost-centres' : 'cost-categories'}/${target.id}/delete`, { method: 'POST', body: { revision } }))
     focusList()
     // A refusal can mean the list is out of date (changed by someone else, already gone): read it again.

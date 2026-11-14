@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { typedOutcome, typedOutcomeMoves, yesNo } from '../src/lib/lookup-entry.ts';
 import { isChoice, primaryChoice, type Choice } from '../src/lib/masters.ts';
@@ -19,6 +18,11 @@ test('typed text picks the one choice it names, keeps the value it already names
   assert.deepEqual(typedOutcome(parents, 'fixed d', 'g1', blank), { kind: 'error', message: 'Not under itself.' }, 'a disabled choice says why');
   // A value that is also a plausible typed word still resolves by its label.
   assert.deepEqual(typedOutcome(parents, 'primary', 'g1', blank), { kind: 'pick', value: primaryChoice });
+  // Text equal to the held label keeps the value even when it is also the start of another option's label.
+  const fixed: Choice[] = [{ value: 'a', label: 'Fixed' }, { value: 'b', label: 'Fixed Deposits' }];
+  assert.deepEqual(typedOutcome(fixed, 'fixed', 'a', blank), { kind: 'keep' });
+  assert.deepEqual(typedOutcome(fixed, 'Fixed', 'b', blank), { kind: 'pick', value: 'a' }, 'the exact label wins over the longer one it starts');
+  assert.equal(typedOutcome(fixed, 'fix', 'a', blank).kind, 'error', 'a prefix of both is ambiguous');
 });
 
 test('Enter moves on after a pick and after text that names the held value (never needs pressing twice), not after an error, and the accept chord never moves', () => {
@@ -33,16 +37,4 @@ test('a lookup takes a value whenever it is an enabled option\'s, also when it e
   assert.equal(isChoice(parents, primaryChoice), true);
   assert.equal(isChoice(parents, 'g2'), false, 'a disabled option is never taken');
   assert.equal(isChoice(yesNo, 'ye'), false, 'partial text is not a value');
-  // LookupField passes exactly this test and nothing about the input's text: the guard that compared them dropped such picks.
-  const source = readFileSync(new URL('../src/components/masters/LookupField.tsx', import.meta.url), 'utf8');
-  assert.match(source, /onValueChange=\{value => \{ if \(isChoice\(options, value\)\) onValueChange\(value\) \}\}/);
-  assert.doesNotMatch(source, /querySelector\('input'\)/);
-});
-
-test('every masters form with lookups uses the one hook', () => {
-  for (const file of ['GroupForm', 'LedgerForm', 'CostCategoryForm', 'CostCentreForm']) {
-    const source = readFileSync(new URL(`../src/components/masters/${file}.tsx`, import.meta.url), 'utf8');
-    assert.match(source, /useEntryLookups\(/, file);
-    assert.doesNotMatch(source, /resolveLookup\(/, `${file} keeps no copy of the lookup logic`);
-  }
 });

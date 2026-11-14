@@ -60,7 +60,7 @@ async function readCostCategory(context: LedgerContext, categoryId: string, lock
   return rows[0];
 }
 
-/** A new category allocates revenue items and not others unless told (stored only: postings do not check them, P2). */
+/** A new category is used on income and expense ledgers and not on balance-sheet ledgers unless told (stored only: postings do not check them, P2). */
 export async function createCostCategory(context: LedgerContext, value: unknown): Promise<CostCategory> {
   const input = parseInput(costCategoryCreateInput, value, categoryFields);
   const { rows } = await context.client.query<{ id: string }>(
