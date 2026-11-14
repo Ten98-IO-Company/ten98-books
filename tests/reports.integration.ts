@@ -120,8 +120,12 @@ test('every drill-down level sums to its parent: statement, group summary, ledge
       const vouchers = await report(`ledger-vouchers/${ledgerId}?from=${month.from}&to=${month.to}`);
       const rowSums = vouchers.rows.reduce((total: bigint[], row: any) => [addMoney(total[0], aed(row.debit)), addMoney(total[1], aed(row.credit))], [0n, 0n]);
       assert.deepEqual(rowSums, [aed(month.debit), aed(month.credit)], `${monthly.ledger.name} ${month.month} vouchers`);
-      assert.equal(aed(vouchers.totals.closing), aed(month.closing));
-      if (vouchers.rows.length) assert.equal(aed(vouchers.rows.at(-1).balance), aed(month.closing), 'the running balance ends on the month closing');
+      // A later month's vouchers are a period of their own: an income or expense ledger opens at zero there, so they end
+      // on the month's movement, while a balance-sheet ledger ends on the month's closing.
+      const ownPeriod = (monthly.ledger.nature === 'income' || monthly.ledger.nature === 'expense') && month.from > monthly.from;
+      const closingThere = ownPeriod ? subtractMoney(aed(month.debit), aed(month.credit)) : aed(month.closing);
+      assert.equal(aed(vouchers.totals.closing), closingThere);
+      if (vouchers.rows.length) assert.equal(aed(vouchers.rows.at(-1).balance), closingThere, 'the running balance ends on the month closing');
       monthsChecked++;
     }
   }
@@ -281,7 +285,7 @@ test('a financial year starting in April carries the earlier year into the profi
   const monthly = await report(`ledger-monthly/${sales}?from=2026-01-01&to=2026-06-30`, owner.browser, april);
   assert.equal(monthly.to, '2026-03-31', 'one financial year at a time');
   assert.deepEqual(monthly.months.map((month: any) => month.month), ['2026-01', '2026-02', '2026-03']);
-  assert.equal(monthly.opening, '-1000.00');
+  assert.equal(monthly.opening, '0.00', 'income opens at zero for a period after the books begin: April 2025 is in the profit and loss ledger');
 });
 
 test('a balance sheet dated before the books begin agrees with the profit and loss it opens', async () => {
