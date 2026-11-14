@@ -1,0 +1,28 @@
+{
+  "period": { "from": "2026-01-01", "to": "2026-02-03" },
+  "numbersVerified": true,
+  "voucherCount": 18,
+  "vouchersByType": { "payment": 5, "receipt": 3, "contra": 2, "journal": 2, "purchase": 2, "sales": 2, "credit_note": 1, "debit_note": 1 },
+  "trialBalance": {
+    "totalDebit": "53625.00",
+    "totalCredit": "53625.00",
+    "ledgers": {
+      "cash": { "closing": "9600.00", "side": "Dr" },
+      "profit-and-loss": { "closing": "0.00", "side": "Dr" },
+      "harbour-bank": { "closing": "15150.00", "side": "Dr" },
+      "customer-north": { "closing": "2100.00", "side": "Dr" },
+      "supplier-south": { "closing": "10075.00", "side": "Cr" },
+      "owners-capital": { "closing": "32000.00", "side": "Cr" },
+      "equipment": { "closing": "8000.00", "side": "Dr" },
+      "output-tax": { "closing": "550.00", "side": "Cr" },
+      "input-tax": { "closing": "375.00", "side": "Dr" },
+      "trade-sales": { "closing": "11000.00", "side": "Cr" },
+      "trade-purchases": { "closing": "7500.00", "side": "Dr" },
+      "premises-rent": { "closing": "4000.00", "side": "Dr" },
+      "wages": { "closing": "6000.00", "side": "Dr" },
+      "promotion": { "closing": "900.00", "side": "Dr" }
+    }
+  },
+  "profitAndLoss": { "grossProfit": "3500.00", "netProfit": "-7400.00" },
+  "balanceSheet": { "total": "42250.00" }
+}

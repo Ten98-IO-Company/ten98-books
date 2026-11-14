@@ -30,4 +30,15 @@ The company home is a menu: Up and Down move the highlight, Enter opens, an item
 
 A workspace is one company: one set of books with its own team. Owners, admins and editors post; viewers read; owners and admins manage the team and the company name. Any signed-in user can create another company and becomes its owner, and changing company (the sidebar switcher, `F3` in classic or `Alt+K` in web-safe) is changing workspace. Accounting projects inside a company come later (M2). Details in [docs/TENANCY.md](docs/TENANCY.md).
 
+## Demo data
+
+`demo/` holds invented companies for demonstration and for checking figures against another system; the format and how to add one are in [demo/README.md](demo/README.md). Two commands run on the host against the database in `.env` (create the user in the app first; the seeder never runs at startup or in migrations):
+
+```bash
+pnpm seed:demo -- --owner you@example.com --all --yes
+pnpm demo:compare -- --owner you@example.com --all
+```
+
+`seed:demo` creates each company for that user (who becomes its owner) through the same functions the app uses, then its groups, ledgers with opening balances and vouchers; a second run changes nothing and reports "already present". `demo:compare` reads the seeded company's figures through the report modules and prints expected, actual and difference per line (exact to the minor unit) in three groups (matches, differs, not yet comparable with the reason); it exits with 1 when a comparable line differs. Use `--company <slug>` instead of `--all` for one dataset.
+
 MIT licensed; see [LICENSE](LICENSE).

@@ -1,0 +1,11 @@
+{
+  "slug": "starter-trading",
+  "name": "Starter Trading",
+  "country": "AE",
+  "baseCurrency": "AED",
+  "minorUnits": 2,
+  "financialYearStart": { "month": 1, "day": 1 },
+  "booksBeginning": "2026-01-01",
+  "timeZone": "Asia/Dubai",
+  "features": ["accounting"]
+}

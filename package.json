@@ -17,7 +17,9 @@
     "test:integration": "node --env-file-if-exists=.env --test --test-concurrency=1 tests/*.integration.ts",
     "setup:local": "node src/server/cli.ts setup",
     "migrate": "node --env-file-if-exists=.env src/server/cli.ts migrate",
-    "worker": "node --env-file-if-exists=.env src/server/cli.ts worker"
+    "worker": "node --env-file-if-exists=.env src/server/cli.ts worker",
+    "seed:demo": "node --env-file-if-exists=.env src/server/cli.ts seed-demo",
+    "demo:compare": "node --env-file-if-exists=.env src/server/cli.ts demo-compare"
   },
   "dependencies": {
     "@tanstack/react-router": "1.170.42",

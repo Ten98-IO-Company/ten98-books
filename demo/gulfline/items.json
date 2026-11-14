@@ -1,0 +1,348 @@
+{
+  "units": [
+    {
+      "key": "nos",
+      "name": "Nos"
+    },
+    {
+      "key": "mtr",
+      "name": "Mtr"
+    },
+    {
+      "key": "box",
+      "name": "Box"
+    }
+  ],
+  "locations": [
+    {
+      "key": "dubai-warehouse",
+      "name": "Dubai Warehouse"
+    },
+    {
+      "key": "jebel-ali-store",
+      "name": "Jebel Ali Store"
+    },
+    {
+      "key": "showroom-al-quoz",
+      "name": "Showroom - Al Quoz"
+    }
+  ],
+  "stockGroups": [
+    {
+      "key": "led-lighting",
+      "name": "LED Lighting"
+    },
+    {
+      "key": "cables-wires",
+      "name": "Cables & Wires"
+    },
+    {
+      "key": "switchgear-panels",
+      "name": "Switchgear & Panels"
+    },
+    {
+      "key": "accessories",
+      "name": "Accessories"
+    }
+  ],
+  "items": [
+    {
+      "key": "led-panel-600x600-40w",
+      "name": "LED Panel 600x600 40W",
+      "group": "led-lighting",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "480",
+          "rate": "38.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "160",
+          "rate": "38.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "80",
+          "rate": "38.00"
+        }
+      ]
+    },
+    {
+      "key": "led-bulb-9w",
+      "name": "LED Bulb 9W",
+      "group": "led-lighting",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "3200",
+          "rate": "3.20"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "800",
+          "rate": "3.20"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "600",
+          "rate": "3.20"
+        }
+      ]
+    },
+    {
+      "key": "led-downlight-12w",
+      "name": "LED Downlight 12W",
+      "group": "led-lighting",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "1200",
+          "rate": "7.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "400",
+          "rate": "7.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "240",
+          "rate": "7.00"
+        }
+      ]
+    },
+    {
+      "key": "flood-light-100w",
+      "name": "Flood Light 100W",
+      "group": "led-lighting",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "160",
+          "rate": "55.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "80",
+          "rate": "55.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "24",
+          "rate": "55.00"
+        }
+      ]
+    },
+    {
+      "key": "street-light-150w",
+      "name": "Street Light 150W",
+      "group": "led-lighting",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "100",
+          "rate": "120.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "60",
+          "rate": "120.00"
+        }
+      ]
+    },
+    {
+      "key": "pvc-cable-2-5mm-100m-coil",
+      "name": "PVC Cable 2.5mm 100m Coil",
+      "group": "cables-wires",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "240",
+          "rate": "145.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "120",
+          "rate": "145.00"
+        }
+      ]
+    },
+    {
+      "key": "pvc-cable-4mm-100m-coil",
+      "name": "PVC Cable 4mm 100m Coil",
+      "group": "cables-wires",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "140",
+          "rate": "230.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "80",
+          "rate": "230.00"
+        }
+      ]
+    },
+    {
+      "key": "armoured-cable-3c-10mm",
+      "name": "Armoured Cable 3C 10mm",
+      "group": "cables-wires",
+      "unit": "Mtr",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "3600",
+          "rate": "18.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "1600",
+          "rate": "18.00"
+        }
+      ]
+    },
+    {
+      "key": "mcb-32a-1p",
+      "name": "MCB 32A 1P",
+      "group": "switchgear-panels",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "800",
+          "rate": "11.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "320",
+          "rate": "11.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "160",
+          "rate": "11.00"
+        }
+      ]
+    },
+    {
+      "key": "mccb-100a-3p",
+      "name": "MCCB 100A 3P",
+      "group": "switchgear-panels",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "72",
+          "rate": "165.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "32",
+          "rate": "165.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "8",
+          "rate": "165.00"
+        }
+      ]
+    },
+    {
+      "key": "distribution-board-12-way",
+      "name": "Distribution Board 12-way",
+      "group": "switchgear-panels",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "100",
+          "rate": "85.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "40",
+          "rate": "85.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "20",
+          "rate": "85.00"
+        }
+      ]
+    },
+    {
+      "key": "wall-switch-1g",
+      "name": "Wall Switch 1G",
+      "group": "accessories",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "2000",
+          "rate": "3.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "600",
+          "rate": "3.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "800",
+          "rate": "3.00"
+        }
+      ]
+    },
+    {
+      "key": "socket-13a",
+      "name": "Socket 13A",
+      "group": "accessories",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "1600",
+          "rate": "4.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "480",
+          "rate": "4.00"
+        },
+        {
+          "location": "showroom-al-quoz",
+          "quantity": "720",
+          "rate": "4.00"
+        }
+      ]
+    },
+    {
+      "key": "cable-tray-3m",
+      "name": "Cable Tray 3m",
+      "group": "accessories",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "dubai-warehouse",
+          "quantity": "360",
+          "rate": "28.00"
+        },
+        {
+          "location": "jebel-ali-store",
+          "quantity": "240",
+          "rate": "28.00"
+        }
+      ]
+    }
+  ],
+  "note": "opening stock per location: quantity x rate; opening stock value is not a ledger balance"
+}
