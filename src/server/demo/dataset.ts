@@ -5,6 +5,7 @@ import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
 import { daysInMonth, financialYearOf, isCalendarDate } from '../../lib/company.ts';
 import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
+import { isForeignLine, parseDueDate, readLedgerBills, readLineBills } from './bill-rows.ts';
 
 /**
  * Demo dataset format v1 (documented in demo/README.md). A dataset is one folder per company under demo/: five known
@@ -45,6 +46,7 @@ const date = z.string().refine(isCalendarDate, 'must be a real date written YYYY
 const side = z.enum(sides);
 const extras = z.record(z.string(), z.unknown());
 const count = z.number().int().min(0);
+const isPlain = (value: string) => amount.safeParse(value).success;
 
 const companyFile = z.strictObject({
   slug, name: text, secondLanguageName: text.optional(), country: z.string().trim().min(2).max(60),
@@ -66,6 +68,14 @@ const vouchersFile = z.array(z.strictObject({
   inventory: z.array(z.unknown()).optional(), extras: extras.optional(),
   expectedNumber: z.union([z.number().int().min(1), z.string().min(1)]).optional(),
 }));
+/** Pending bills by name: the pending amount, its side and the due date as written there ("21-Oct-26"). */
+const billFigures = z.record(z.string(), z.looseObject({
+  pending: amount, side, dueDate: z.string().refine(value => parseDueDate(value) !== undefined, 'must be a day written like 21-Oct-26'),
+}));
+/** Pending bills per party ledger, as at one date. */
+const pendingByLedger = (nested: boolean) => z.record(z.string(), z.looseObject({ bills: nested ? z.looseObject({ bills: billFigures }) : billFigures }));
+/** The count and total of the pending bills of one side (receivable or payable) at the end of the period. */
+const pendingSummary = z.looseObject({ pendingBills: count, pendingTotal: amount });
 const expectedFile = z.looseObject({
   period: z.strictObject({ from: date, to: date }),
   /** True when the voucher numbers in vouchers.json (expectedNumber) were confirmed against the reference system; default false. */
@@ -82,6 +92,9 @@ const expectedFile = z.looseObject({
   }).optional(),
   balanceSheet: z.looseObject({ total: signedAmount, closingStockInAssets: amount.optional() }).optional(),
   /** Exchange differences of foreign-currency bills: `realised` (a ledger's closing) and `unrealised` (a separate trial-balance row). */
+  /** Pending bills at `asOf` per party ledger (`ledgers[key].bills.bills[name]`), and the count and total per side. */
+  outstanding: z.looseObject({ asOf: date, ledgers: pendingByLedger(true) }).optional(),
+  receivables: pendingSummary.optional(), payables: pendingSummary.optional(),
   exchangeDifferences: z.looseObject({
     realised: z.looseObject({ amount, side }).optional(), unrealised: z.looseObject({ amount, side }).optional(),
   }).optional(),
@@ -111,7 +124,7 @@ const currenciesFile = z.array(z.looseObject({
   code: z.string().regex(/^[A-Z]{3}$/, 'must be a three-letter currency code'), name: text,
   rates: z.array(z.looseObject({ kind: z.string().min(1), date, rate: amount })).optional(),
 }));
-const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({})).optional() });
+const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({ outstanding: pendingByLedger(false).optional() })).optional() });
 const extraFileSchemas: Record<string, z.ZodType> = {
   'items.json': itemsFile, 'costCategories.json': costCategoriesFile, 'costCentres.json': costCentresFile, 'currencies.json': currenciesFile, 'checkpoints.json': checkpointsFile,
 };
@@ -348,6 +361,24 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   for (const day of Object.keys((extras['checkpoints.json'] as { dates?: object } | undefined)?.dates ?? {})) if (!isCalendarDate(day)) problem('checkpoints', `dates "${day}": `, 'is not a real date written YYYY-MM-DD');
   const centreKeys = new Map((centres ?? []).map(centre => [centre.key, centre.category]));
   const currencyCodes = new Set((currencies ?? []).map(currency => currency.code));
+  // Bill settings of the ledgers and bill rows of the lines (read by the seeder; see bill-rows.ts for the accepted spellings).
+  for (const entry of ledgers) {
+    const at = `ledger "${entry.key}": `;
+    const { found, problems } = readLedgerBills(entry.extras);
+    for (const message of problems) problem('ledgers', at, message);
+    if (!found.openingBills.length) continue;
+    if (!entry.opening) { problem('ledgers', at, 'has opening bills but no opening balance'); continue; }
+    let total = 0n;
+    for (const bill of found.openingBills) {
+      if (!isPlain(bill.amount) || (bill.amount.split('.')[1] ?? '').length > exponent) { problem('ledgers', at, `opening bill "${bill.name}": amount "${bill.amount}" must be a plain decimal with at most ${exponent} decimal places`); continue; }
+      total += toMinor(bill.amount, exponent);
+      if (bill.side !== undefined && bill.side !== entry.opening.side) problem('ledgers', at, `opening bill "${bill.name}" is on ${bill.side} but the opening balance is ${entry.opening.side} (an opening bill is on the opening balance's side)`);
+      if (bill.billDate !== undefined && company && bill.billDate > company.booksBeginning) problem('ledgers', at, `opening bill "${bill.name}" is dated ${bill.billDate}, after the books begin on ${company.booksBeginning}`);
+    }
+    if (isPlain(entry.opening.amount) && (entry.opening.amount.split('.')[1] ?? '').length <= exponent && total > toMinor(entry.opening.amount, exponent)) {
+      problem('ledgers', at, `the opening bills add up to ${total} but the opening balance is ${toMinor(entry.opening.amount, exponent)} (minor units)`);
+    }
+  }
   for (const voucher of vouchers) {
     const party = voucher.extras?.party;
     if (typeof party === 'string' && !ledgerKeys.has(party)) problem('vouchers', `voucher "${voucher.key}": `, `extras.party "${party}" is not a ledger key in ledgers.json`);
@@ -364,6 +395,14 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
         }
         const lineAmount = /^\d+(?:\.\d+)?$/.test(line.amount) && (line.amount.split('.')[1] ?? '').length <= exponent ? toMinor(line.amount, exponent) : undefined;
         for (const [category, total] of perCategory) if (lineAmount !== undefined && total !== lineAmount) problem('vouchers', at, `the cost centre amounts of category "${category}" add up to ${total} but the line is ${lineAmount} (minor units)`);
+      }
+      const bills = readLineBills(line.extras);
+      for (const message of bills.problems) problem('vouchers', at, message);
+      if (bills.found.length && !isForeignLine(line.extras) && isPlain(line.amount) && (line.amount.split('.')[1] ?? '').length <= exponent) {
+        // The rows of a base-currency line are in the base currency and together at most the line (the ledger module's own check).
+        const rows = bills.found.reduce((sum, row) => sum + ((row.amount.split('.')[1] ?? '').length <= exponent ? toMinor(row.amount, exponent) : 0n), 0n);
+        if (rows > toMinor(line.amount, exponent)) problem('vouchers', at, `the bill rows add up to ${rows} but the line is ${toMinor(line.amount, exponent)} (minor units)`);
+        for (const row of bills.found) if ((row.amount.split('.')[1] ?? '').length > exponent) problem('vouchers', at, `bill row amount "${row.amount}" has more than ${exponent} decimal places (the company's minor units)`);
       }
       if (typeof detail?.currency === 'string') {
         if (currencies && !currencyCodes.has(detail.currency)) problem('vouchers', at, `currency "${detail.currency}" is not a currency code in currencies.json`);
@@ -408,6 +447,18 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     const figure = expected.exchangeDifferences?.[name];
     if (figure) fits('expected', `exchangeDifferences.${name}: `, figure.amount);
   }
+  const billAmounts = (file: string, where: string, ledgersByKey: Record<string, { bills: Record<string, { pending: string }> | { bills: Record<string, { pending: string }> } }>) => {
+    for (const [key, entry] of Object.entries(ledgersByKey)) {
+      if (!ledgerKeys.has(key)) problem(file, `${where} "${key}": `, 'not a ledger key in ledgers.json');
+      const names = 'bills' in entry.bills && typeof entry.bills.bills === 'object' ? (entry.bills as { bills: Record<string, { pending: string }> }).bills : entry.bills as Record<string, { pending: string }>;
+      for (const [name, figure] of Object.entries(names)) fits(file, `${where} "${key}", bill "${name}": `, figure.pending);
+    }
+  };
+  if (expected.outstanding) billAmounts('expected', 'outstanding.ledgers', expected.outstanding.ledgers);
+  for (const [day, figures] of Object.entries((extras['checkpoints.json'] as { dates?: Record<string, { outstanding?: Record<string, never> }> } | undefined)?.dates ?? {})) {
+    if (figures.outstanding) billAmounts('checkpoints', `dates "${day}" outstanding`, figures.outstanding);
+  }
+  for (const name of ['receivables', 'payables'] as const) if (expected[name]) fits('expected', `${name}.pendingTotal: `, expected[name]!.pendingTotal);
   if (expected.balanceSheet) {
     fits('expected', 'balanceSheet.total: ', expected.balanceSheet.total);
     if (expected.balanceSheet.closingStockInAssets !== undefined) fits('expected', 'balanceSheet.closingStockInAssets: ', expected.balanceSheet.closingStockInAssets);

@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { parseDueDate, readLedgerBills, readLineBills } from '../src/server/demo/bill-rows.ts';
+import { planBills } from '../src/server/demo/bills.ts';
 import { notComparable } from '../src/server/demo/compare.ts';
 import { checkNumbers, DatasetError, describeNumberDifference, dispositionOf, numbersKind, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
@@ -195,7 +197,7 @@ test('loading a folder reports invalid JSON and a missing file by name, and the 
 test('the skipped-feature summary names every kind of content ten98-books does not model', () => {
   const raw = good();
   raw.company.features = ['accounting', 'inventory', 'payroll'];
-  raw.ledgers[2].extras = { creditDays: 30 };
+  raw.ledgers[2].extras = { address: ['Dubai'], creditDays: 30 };
   raw.vouchers[0].extras = { reference: 'FL-9' };
   raw.vouchers[0].lines[0].extras = { costCentre: 'north' };
   raw.vouchers[0].inventory = [{ item: 'flyer' }, { item: 'poster' }];
@@ -203,7 +205,7 @@ test('the skipped-feature summary names every kind of content ten98-books does n
   const lines = unmodelled(parseDataset(raw, 'demo/sample-shop'));
   assert.deepEqual(lines, [
     'company.json: feature "inventory" is not modelled', 'company.json: feature "payroll" is not modelled',
-    'ledgers.json: extras on 1 ledger(s) (creditDays)', 'vouchers.json: extras on 1 voucher(s) (reference)', 'vouchers.json: extras on 1 voucher line(s) (costCentre)',
+    'ledgers.json: extras on 1 ledger(s) (address)', 'vouchers.json: extras on 1 voucher(s) (reference)', 'vouchers.json: extras on 1 voucher line(s) (costCentre)',
     'vouchers.json: inventory on 1 voucher(s), 2 item line(s) (stock is not modelled)', 'employees.json: feature file not modelled (kept as is)',
   ]);
   assert.deepEqual(unmodelled(parseDataset(good(), 'demo/sample-shop')), []);
@@ -382,8 +384,6 @@ test('blocks and fields the comparison cannot read are named with their reason; 
     trialBalance: { ...good().expected.trialBalance, report: 'r', note: 'n' }, balanceSheet: { total: '1.00', closingStockInAssets: '1.00' } };
   assert.deepEqual(notComparable(expected), [
     'stockSummary (needs inventory)',
-    'receivables (needs bill-wise receivables, which ten98-books does not track yet)',
-    'payables (needs bill-wise payables, which ten98-books does not track yet)',
     'vat (needs the VAT return, which ten98-books does not compute yet)',
   ]);
 });
@@ -518,7 +518,6 @@ test('expected exchange differences are amounts that fit the currency, and the n
   raw.expected.exchangeDifferences = { realised: { amount: '1.50', side: 'Dr' }, unrealised: { amount: '3.005', side: 'Dr' } };
   mentions(problems(raw), 'expected.json', 'exchangeDifferences.unrealised', '"3.005"');
   assert.deepEqual(notComparable({ ...good().expected, outstanding: {}, costCentres: {}, exchangeDifferences: {}, balanceSheet: { total: '1.00', unrealisedExchangeDifference: '1.00' } }), [
-    'outstanding (needs pending bills (bill-wise tracking), which ten98-books does not have yet)',
     'costCentres (needs cost centres, which ten98-books does not model yet)',
     'exchangeDifferences (needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately)',
   ]);
@@ -531,11 +530,127 @@ test('the skipped-feature summary counts bills, cost centres, foreign currencies
   raw.vouchers[0].lines[1].extras = { bills: [{ kind: 'new', name: 'A-1', amount: '40.00' }], currency: 'USD', currencyAmount: '10.89', rate: '3.6725' };
   const lines = unmodelled(parseDataset(raw, 'demo/sample-shop'));
   for (const expectedLine of [
-    'vouchers.json: bill-wise allocations on 1 voucher line(s) (bills are not tracked)',
     'vouchers.json: cost centre allocations on 1 voucher line(s) (cost centres are not modelled)',
     'vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled',
     'vouchers.json: bank details (instrument and bank date) on 1 voucher line(s) (not modelled)',
     'costCategories.json: cost categories not yet supported (2)', 'costCentres.json: cost centres not yet supported (3 centre(s))',
-    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures kept as they are (not compared)',
+    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports, the cost centre figures are kept as they are (not compared)',
   ]) assert.ok(lines.includes(expectedLine), expectedLine + '\n' + lines.join('\n'));
+});
+
+/** Bill keys the seeder reads: both spellings of the two generators, with plain-language problems for anything else. */
+test('bill rows are read in both spellings and mapped to the ledger module\'s kinds', () => {
+  assert.deepEqual(readLineBills({ bills: [
+    { kind: 'new', name: 'INV-1', creditDays: 45, amount: '10.00' }, { type: 'against', ref: 'INV-1', amount: '4.00' },
+    { type: 'advance', ref: 'ADV-1', amount: '3.00', creditDays: null }, { kind: 'on_account', amount: '1.00' }] }),
+  { found: [
+    { method: 'new_ref', name: 'INV-1', creditDays: 45, amount: '10.00' }, { method: 'against_ref', name: 'INV-1', amount: '4.00' },
+    { method: 'advance', name: 'ADV-1', amount: '3.00' }, { method: 'on_account', amount: '1.00' }], problems: [] });
+  assert.deepEqual(readLineBills(undefined), { found: [], problems: [] });
+  const bad = readLineBills({ bills: [
+    { kind: 'paid', name: 'X', amount: '1.00' }, { kind: 'against', amount: '1.00' }, { kind: 'on_account', name: 'X', amount: '1.00' },
+    { kind: 'new', name: 'N', amount: '1,00' }, { kind: 'against', name: 'N', amount: '1.00', creditDays: 30 }, { kind: 'new', name: 'N', amount: '1.00', creditDays: 1.5 }, 'row'] });
+  assert.deepEqual(bad.found, []);
+  assert.deepEqual(bad.problems.map(text => text.replace(/^extras\.bills\[(\d)\]: /, '$1: ')), [
+    '0: kind (or type) must be one of new, against, advance, on_account', '1: an against row must name the bill it settles', '2: an on_account row names no bill',
+    '3: amount must be a plain decimal string', '4: creditDays applies to a new reference or an advance only', '5: creditDays must be a whole number of days from 0 to 3650', '6: must be an object']);
+});
+
+test('ledger bill settings and opening bills are read in both spellings', () => {
+  assert.deepEqual(readLedgerBills({ billWise: true, creditDays: 30, opening: { bills: [{ kind: 'new', name: 'OB-1', billDate: '2025-12-16', creditDays: 30, amount: '3.00', side: 'Dr' }] } }).found,
+    { billWise: true, creditDays: 30, openingBills: [{ name: 'OB-1', billDate: '2025-12-16', creditDays: 30, amount: '3.00', side: 'Dr' }] });
+  assert.deepEqual(readLedgerBills({ billWise: false, creditPeriodDays: 15, openingBills: [{ ref: 'OB-9', date: '2025-12-01', amount: '2.00', side: 'Cr' }] }).found,
+    { billWise: false, creditDays: 15, openingBills: [{ name: 'OB-9', billDate: '2025-12-01', amount: '2.00', side: 'Cr' }] });
+  assert.deepEqual(readLedgerBills({ address: ['x'] }), { found: { openingBills: [] }, problems: [] });
+  const bad = readLedgerBills({ billWise: 'yes', creditDays: -1, openingBills: [{ kind: 'against', name: 'x', amount: '1.00' }, { amount: '1.00' }, { name: 'a', date: '2025-02-30', amount: '1.00' }, { name: 'b', amount: '1.00', side: 'Debit' }] });
+  assert.deepEqual(bad.problems, [
+    'extras.billWise must be true or false', 'extras.creditDays must be a whole number of days from 0 to 3650',
+    'opening bill 1: an opening bill is a new reference (kind "new")', 'opening bill 2: name (or ref) is required',
+    'opening bill 3: billDate (or date) must be a real date written YYYY-MM-DD', 'opening bill 4: side must be Dr or Cr']);
+});
+
+test('a due date written like 21-Oct-26 becomes a real date; anything else is refused', () => {
+  assert.equal(parseDueDate('21-Oct-26'), '2026-10-21');
+  assert.equal(parseDueDate('8-feb-26'), '2026-02-08');
+  for (const text of ['30-Feb-26', '21-Foo-26', '2026-10-21', '21-Oct-2026', '']) assert.equal(parseDueDate(text), undefined, text);
+});
+
+/** A ledger with opening bills for validation. */
+const withBills = () => {
+  const raw = good();
+  raw.ledgers[2].extras = { billWise: true, creditDays: 30, opening: { bills: [{ kind: 'new', name: 'OB-1', billDate: '2025-12-16', amount: '10.00', side: 'Dr' }] } };
+  raw.ledgers[2].opening = { amount: '10.00', side: 'Dr' };
+  return raw;
+};
+
+test('bill settings are validated against the ledger and the line: sides, totals, dates and amounts', () => {
+  assert.deepEqual(problems(withBills()), []);
+  const bad = withBills();
+  bad.ledgers[2].extras = { opening: { bills: [
+    { kind: 'new', name: 'A', billDate: '2025-12-16', amount: '6.00', side: 'Cr' }, { kind: 'new', name: 'B', billDate: '2026-02-01', amount: '6.005' }, { kind: 'new', name: 'C', amount: '6.00' }] } };
+  const found = problems(bad);
+  mentions(found, 'ledgers.json', 'opening bill "A" is on Cr but the opening balance is Dr');
+  mentions(found, 'ledgers.json', 'opening bill "B": amount "6.005" must be a plain decimal with at most 2 decimal places');
+  mentions(found, 'ledgers.json', 'the opening bills add up to 1200 but the opening balance is 1000');
+  const noOpening = good();
+  noOpening.ledgers[2].extras = { openingBills: [{ ref: 'OB', date: '2025-12-01', amount: '1.00' }] };
+  mentions(problems(noOpening), 'ledgers.json', 'has opening bills but no opening balance');
+  const late = withBills();
+  late.ledgers[2].extras = { openingBills: [{ ref: 'OB', date: '2026-01-02', amount: '1.00' }] };
+  mentions(problems(late), 'ledgers.json', 'opening bill "OB" is dated 2026-01-02, after the books begin');
+  const rows = good();
+  rows.vouchers[0].lines[0].extras = { bills: [{ kind: 'new', name: 'A', amount: '30.00' }, { kind: 'new', name: 'B', amount: '20.00' }] };
+  mentions(problems(rows), 'vouchers.json', '"pay-1"', 'lines[0]', 'the bill rows add up to 5000 but the line is 4000');
+  rows.vouchers[0].lines[0].extras = { bills: [{ kind: 'sideways', amount: '1.00' }] };
+  mentions(problems(rows), 'vouchers.json', '"pay-1"', 'lines[0]', 'extras.bills[0]: kind (or type) must be one of');
+});
+
+test('expected pending bills are checked: ledger keys, amounts, sides and due dates', () => {
+  const raw = good();
+  raw.expected.outstanding = { asOf: '2026-12-31', ledgers: { ghost: { bills: { bills: { 'INV-1': { pending: '1.005', side: 'Dr', dueDate: '21-Oct-26' } } } } } };
+  raw.expected.receivables = { pendingBills: 1, pendingTotal: '2.005' };
+  const found = problems(raw);
+  mentions(found, 'expected.json', 'outstanding.ledgers "ghost"', 'not a ledger key');
+  mentions(found, 'expected.json', 'outstanding.ledgers "ghost", bill "INV-1"', '"1.005"');
+  mentions(found, 'expected.json', 'receivables.pendingTotal', '"2.005"');
+  const badDate = good();
+  badDate.expected.outstanding = { asOf: '2026-12-31', ledgers: { bank: { bills: { bills: { 'INV-1': { pending: '1.00', side: 'Dr', dueDate: '31-Nov-26' } } } } } };
+  mentions(problems(badDate), 'expected.json', 'must be a day written like 21-Oct-26');
+  const dated = good();
+  dated.extraFiles = { 'checkpoints.json': { dates: { '2026-02-28': { outstanding: { ghost: { bills: { 'C-1': { pending: '1.001', side: 'Cr', dueDate: '1-Mar-26' } } } } } } } };
+  mentions(problems(dated), 'checkpoints.json', 'dates "2026-02-28" outstanding "ghost"', 'not a ledger key');
+});
+
+/** The plan the seeder and the comparison share: which rows are sent and which are left out, in entry order. */
+test('the bill plan sends rows in the ledger module\'s kinds and leaves out foreign-currency rows and settlements of bills nothing live creates', () => {
+  const raw = good();
+  const usd = { currency: 'USD', currencyAmount: '1.00', rate: '3.67' };
+  const [debtor, other] = [raw.ledgers[2].key, raw.ledgers[0].key];
+  raw.ledgers[2].extras = { billWise: true, opening: { bills: [{ kind: 'new', name: 'OB-1', billDate: '2025-12-16', amount: '10.00', side: 'Dr' }] } };
+  raw.ledgers[2].opening = { amount: '10.00', side: 'Dr' };
+  const voucher = (key: string, status: string, date: string, rows: unknown[], extras?: object) => ({ key, type: 'payment', date, status, postDated: false, lines: [
+    { ledger: debtor, side: 'Cr', amount: '1.00', extras: { bills: rows, ...extras } }, { ledger: other, side: 'Dr', amount: '1.00' }] });
+  raw.vouchers = [
+    voucher('v-new', 'regular', '2026-02-01', [{ kind: 'new', name: 'INV-1', creditDays: 15, amount: '1.00' }]),
+    voucher('v-settle-opening', 'regular', '2026-02-02', [{ kind: 'against', name: 'ob-1', amount: '1.00' }]),
+    voucher('v-foreign', 'regular', '2026-02-03', [{ kind: 'new', name: 'USD-1', amount: '1.00' }], usd),
+    voucher('v-settle-foreign', 'regular', '2026-02-04', [{ kind: 'against', name: 'USD-1', amount: '1.00' }]),
+    voucher('v-draft', 'optional', '2026-02-05', [{ kind: 'new', name: 'DRAFT-1', amount: '1.00' }]),
+    voucher('v-settle-draft', 'regular', '2026-02-06', [{ kind: 'against', name: 'DRAFT-1', amount: '1.00' }]),
+    voucher('v-ghost', 'regular', '2026-02-07', [{ kind: 'against', name: 'GHOST', amount: '0.50' }, { kind: 'on_account', amount: '0.50' }]),
+  ];
+  const plan = planBills(parseDataset(raw, 'demo/sample-shop'));
+  assert.equal(plan.sent, 4);
+  assert.deepEqual([...plan.lines].map(([key, perLine]) => [key, perLine[0]]), [
+    ['v-new', [{ kind: 'new_ref', name: 'INV-1', creditPeriod: { count: 15, unit: 'day' }, amount: '1.00' }]],
+    ['v-settle-opening', [{ kind: 'against_ref', name: 'ob-1', amount: '1.00' }]],
+    ['v-foreign', undefined], ['v-settle-foreign', undefined],
+    ['v-draft', [{ kind: 'new_ref', name: 'DRAFT-1', amount: '1.00' }]], ['v-settle-draft', undefined],
+    ['v-ghost', [{ kind: 'on_account', amount: '0.50' }]],
+  ]);
+  assert.deepEqual(plan.skipped.map(row => [row.voucher, row.name, row.reason]), [
+    ['v-foreign', 'USD-1', 'foreign'], ['v-settle-foreign', 'USD-1', 'unknown'], ['v-settle-draft', 'DRAFT-1', 'unknown'], ['v-ghost', 'GHOST', 'unknown']]);
+  assert.deepEqual([...plan.affected.get(debtor)!], [['usd-1', 'foreign'], ['draft-1', 'unknown'], ['ghost', 'unknown']]);
+  assert.deepEqual([...plan.created.get(debtor)!].sort(), ['draft-1', 'inv-1', 'ob-1']);
+  assert.deepEqual([...plan.foreignLedgers], [debtor]);
 });
