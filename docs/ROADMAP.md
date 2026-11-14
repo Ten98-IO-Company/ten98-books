@@ -27,13 +27,13 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Keyboard shell: command registry, `classic` and `web-safe` keymaps, company menu | merged | [KEYBOARD.md](KEYBOARD.md) |
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
-| Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides) |
+| Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides). A trial balance for a period starting after the books begin carries all earlier income and expense in one profit and loss row, as observed |
 | Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2) |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
-| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies, a masters-only seed, and bill rows posted from the datasets. Pending bills are compared with the reference installation: they match in the two companies that list them bill by bill; in the two large trading companies the payable count and total differ, because the reference lists a customer's advance under payables (fix in progress). Lines that need features not built yet (foreign currency, vouchers cancelled without lines, cost and stock figures) are reported as not yet comparable |
+| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies, a masters-only seed, and bill rows posted from the datasets. Pending bills are compared with the reference installation: they match in the two companies that list them bill by bill; the two large trading companies now match on every bill line. Lines that need features not built yet (foreign currency, vouchers cancelled without lines, cost and stock figures) are reported as not yet comparable |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned. The reads the screen needs are merged (expected next number, resulting balances of a draft, proposed counter ledger: [LEDGER.md](LEDGER.md)) |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | merged | Parity table and reserved keys in [KEYBOARD.md](KEYBOARD.md) |
-| Voucher numbers per voucher type and financial year of the voucher's date; posting rules per voucher type as observed | merged | [LEDGER.md](LEDGER.md), migration 0007, [D-04](DECISIONS.md) as amended. Prefix, suffix, manual numbering and other restart periods are not built |
+| Voucher numbers per voucher type and financial year of the voucher's date; posting rules per voucher type as observed | merged | [LEDGER.md](LEDGER.md), migrations 0007 and 0009, [D-04](DECISIONS.md) as amended. A voucher can be saved as cancelled without lines and altered into another voucher type (it takes that type's next number). Prefix, suffix, manual numbering and other restart periods are not built |
 
 Open items inside merged pieces:
 
@@ -51,7 +51,7 @@ Delivered in slices, each from a design reviewed against observed behaviour.
 
 | Piece | Status | Notes |
 |---|---|---|
-| Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0006. No screen yet: the bill panel comes with the voucher entry screen |
+| Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migrations 0006 and 0009. Bills are identified by the name match key ([D-10](DECISIONS.md)); the outstanding lists go by the side a bill lies on, so a customer's advance is a payable, as observed. No screen yet: the bill panel comes with the voucher entry screen |
 | Cost categories and cost centres: masters, allocation rows on voucher lines, category summary and centre break-up reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0008. The masters screens are merged (categories, centres with their tree, the company switch, the ledger setting; [KEYBOARD.md](KEYBOARD.md)); allocation on the voucher entry screen and the cost report screens are not built. Accounting projects ride on cost centres; how they are marked awaits an owner decision |
 | Currencies, rates and foreign-currency lines | not started | |
 | Exchange differences | not started | |
@@ -62,7 +62,7 @@ Open items inside merged pieces:
 - The voucher check and the opening-bill check re-read their voucher or ledger for every row (measured in [LEDGER.md](LEDGER.md)); not optimised.
 - Cost centres: the other observed cost reports, allocation on the voucher entry screen and the demo seeder's cost rows are not built.
 
-Stock masters, units and locations; inventory vouchers and valuation (weighted average and FIFO first); orders and their tracking; bill-wise receivables and payables with credit periods and ageing; cost centres and accounting projects (the project dimension of D-03); multi-currency with exchange differences; banking with cheque details and reconciliation; interest; budgets.
+Stock masters, units and locations; inventory vouchers and valuation (weighted average and FIFO first); orders and their tracking; bill-wise receivables and payables with credit periods and ageing; cost centres and accounting projects (the project dimension of D-03); multi-currency with exchange differences; banking with cheque details and reconciliation; interest. Budgets are not planned: the reference installation has no budget masters, switch or reports, so there is nothing to match.
 
 ## M3 GCC tax and e-invoicing: planned
 
