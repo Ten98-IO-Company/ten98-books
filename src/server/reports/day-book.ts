@@ -5,8 +5,9 @@ import { decodeCursor, encodeCursor, exportLimit, exportTooLarge } from './curso
 
 /**
  * The day book: every undeleted voucher dated in the period, in date and entry order, keyset-paged. Particulars are the
- * first line's ledger and the voucher amount stands in that line's column. Cancelled and optional vouchers are listed
- * with their status and left out of the totals; a post-dated voucher is listed and counted on its own date. 15 seconds.
+ * first line's ledger and the voucher amount stands in that line's column; a voucher created cancelled without lines (a
+ * void) has neither, and an amount of zero. Cancelled and optional vouchers are listed with their status and left out
+ * of the totals and the count; a post-dated voucher is listed and counted on its own date. 15 seconds.
  */
 
 const budgetSeconds = 15;
@@ -28,9 +29,9 @@ export async function dayBookReport(context: LedgerContext, query: unknown, all 
      SELECT p.id AS "voucherId", p.date, t.name AS "voucherTypeName", t.kind, p.number, p.status, p.post_dated AS "postDated",
        p.narration, f.name AS particulars, f.side, s.total AS amount
      FROM page p JOIN voucher_type t ON t.company_id = $1 AND t.id = p.voucher_type_id
-       CROSS JOIN LATERAL (
+       LEFT JOIN LATERAL (
          SELECT led.name, l.side FROM voucher_line l JOIN ledger led ON led.company_id = l.company_id AND led.id = l.ledger_id
-         WHERE l.company_id = $1 AND l.voucher_id = p.id ORDER BY l.line_no LIMIT 1) f
+         WHERE l.company_id = $1 AND l.voucher_id = p.id ORDER BY l.line_no LIMIT 1) f ON true
        CROSS JOIN LATERAL (
          SELECT coalesce(sum(x.amount), 0)::bigint AS total FROM voucher_line x
          WHERE x.company_id = $1 AND x.voucher_id = p.id AND x.side = 'Dr') s

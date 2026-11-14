@@ -76,6 +76,13 @@ test('a voucher created cancelled without lines takes the next number, has no ef
   assert.equal(trial.rows.find((row: any) => row.ledgerId === rent).debit, '150.00', 'no accounting effect');
   assert.deepEqual(((await b.call(`/vouchers/${voided.id}/revisions`)).body.revisions as any[]).map(row => [row.action, row.after.status, row.after.number]), [['create', 'cancelled', voided.number]]);
   assert.ok(((await b.call('/vouchers?from=2026-03-01&to=2026-03-31')).body.vouchers as any[]).some(row => row.id === voided.id && row.status === 'cancelled'), 'listed as cancelled');
+  // The day book lists it once, on its date, with its number and no particulars or amount; totals and the count leave it out.
+  const dayBook = (await b.call('/reports/day-book?from=2026-03-01&to=2026-03-31')).body.report;
+  assert.deepEqual(dayBook.rows.filter((row: any) => row.voucherId === voided.id).map((row: any) => [row.date, row.number, row.status, row.particulars, row.side, row.amount]),
+    [['2026-03-02', voided.number, 'cancelled', null, null, '0.00']]);
+  assert.deepEqual([dayBook.rows.length, dayBook.totals.vouchers, dayBook.totals.debit], [3, 2, '150.00']);
+  const preview = (await b.call(`/voucher-types/${b.accounts.type('payment')}/next-number?date=2026-03-31`)).body;
+  assert.equal(preview.number, next.number + 1, 'the number preview counts the void as taken');
 
   // Like any cancelled voucher: never altered or made regular; it may be deleted, leaving its number as a gap.
   const altered = await b.call(`/vouchers/${voided.id}`, { date: '2026-03-02', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null,
