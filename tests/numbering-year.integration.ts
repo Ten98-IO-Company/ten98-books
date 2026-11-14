@@ -49,12 +49,35 @@ const stored = (companyId: string) => asAdmin(database.adminUrl, admin => admin.
 const counters = (companyId: string) => asAdmin(database.adminUrl, admin => admin.query<{ period: string; last: number }>(
   `SELECT to_char(period_start, 'YYYY-MM-DD') AS period, last_number AS last FROM voucher_counter WHERE company_id = $1 ORDER BY period_start`, [companyId])).then(result => result.rows);
 
-test('numbers restart at 1 in the next financial year and a back-dated entry continues its own year', async () => {
-  const books = await company('Restart Trading');
-  const numbers = [];
-  for (const date of ['2026-12-30', '2026-12-31', '2027-01-02', '2027-01-03', '2026-12-15', '2027-01-01']) numbers.push((await books.pay(date)).number);
-  assert.deepEqual(numbers, [1, 2, 1, 2, 3, 3]);
-  assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 3 }, { period: '2027-01-01', last: 3 }]);
+test('observed: entry order, back-dating, a date moved across the year, and deleting a year\'s highest number', async () => {
+  const books = await company('Observed Sequence');
+  const alter = async (voucher: any, date: string) => {
+    const read = (await owner.browser.call(`/api/companies/${books.id}/vouchers/${voucher.id}`)).body.voucher;
+    const altered = await owner.browser.call(`/api/companies/${books.id}/vouchers/${voucher.id}`, alterBody(read, { date }));
+    assert.equal(altered.status, 200, JSON.stringify(altered.body));
+    return altered.body.voucher;
+  };
+  // Entry order E1..E7; E5 and E7 are back-dated after the second year began.
+  const entered: any[] = [];
+  for (const date of ['2026-03-01', '2026-06-01', '2027-01-05', '2027-02-01', '2026-12-20', '2027-03-01', '2026-12-28']) entered.push(await books.pay(date));
+  assert.deepEqual(entered.map(voucher => voucher.number), [1, 2, 1, 2, 3, 3, 4]);
+  // Across the boundary a voucher takes the next free number of the new year and leaves a gap; inside its year it stays.
+  const e3 = await alter(entered[2], '2026-12-30');
+  assert.deepEqual([e3.number, e3.date], [5, '2026-12-30'], 'year 2 number 1 becomes year 1 number 5');
+  const e2 = await alter(entered[1], '2027-01-15');
+  assert.deepEqual([e2.number, e2.date], [4, '2027-01-15'], 'year 1 number 2 becomes year 2 number 4');
+  const e5 = await alter(entered[4], '2026-01-02');
+  assert.deepEqual([e5.number, e5.date], [3, '2026-01-02'], 'inside its year the number stays');
+  const live = async (period: string) => (await stored(books.id)).filter(row => row.period === period && !row.deleted).map(row => row.number).sort((a, b) => a! - b!);
+  assert.deepEqual([await live('2026-01-01'), await live('2027-01-01')], [[1, 3, 4, 5], [2, 3, 4]], 'gaps at 2026 #2 and 2027 #1, no duplicate');
+  // The highest number of year 1 is deleted: the counter never goes back.
+  assert.equal((await owner.browser.call(`/api/companies/${books.id}/vouchers/${e3.id}/delete`, { revision: e3.revision })).status, 200);
+  assert.equal((await books.pay('2026-12-31')).number, 6);
+  assert.equal((await books.pay('2026-02-01')).number, 7, 'an earlier date still takes the next number');
+  assert.equal((await books.pay('2027-04-01')).number, 5);
+  // The database refuses a date moved across the boundary without the new year's number.
+  await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET date = '2027-06-01' WHERE company_id = $1 AND id = $2`, [books.id, entered[0].id])),
+    code('23514', 'voucher_number_period'));
   // Each voucher type keeps its own counters.
   const receipt = await post(owner.browser, books.id, books.books.type('receipt'), '2027-01-04', [[books.books.ledger('Cash'), 'Dr', '5'], [books.rent, 'Cr', '5']]);
   assert.equal(receipt.number, 1);
@@ -71,33 +94,6 @@ test('50 concurrent posts across two years number each year from 1 without gaps 
     assert.deepEqual(numbers, Array.from({ length: 25 }, (_, index) => index + 1), `${year}: one to twenty-five`);
   }
   assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 25 }, { period: '2027-01-01', last: 25 }]);
-});
-
-test('an altered voucher keeps its number within its year; a date in another year is refused, by the API and the database', async () => {
-  const books = await company('Alter Trading');
-  await books.pay('2026-12-01');
-  const voucher = await books.pay('2026-12-02');
-  const moved = await owner.browser.call(`/api/companies/${books.id}/vouchers/${voucher.id}`, alterBody(voucher, { date: '2026-06-30' }));
-  assert.equal(moved.status, 200, JSON.stringify(moved.body));
-  assert.deepEqual([moved.body.voucher.number, moved.body.voucher.date], [2, '2026-06-30']);
-  const across = await owner.browser.call(`/api/companies/${books.id}/vouchers/${voucher.id}`, alterBody(moved.body.voucher, { date: '2027-01-05' }));
-  assert.deepEqual([across.status, across.body.code], [409, 'voucher_state'], JSON.stringify(across.body));
-  await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET date = '2027-01-05' WHERE company_id = $1 AND id = $2`, [books.id, voucher.id])),
-    code('23514', 'voucher_number_period'));
-  const read = (await owner.browser.call(`/api/companies/${books.id}/vouchers/${voucher.id}`)).body.voucher;
-  assert.deepEqual([read.number, read.date, read.revision], [2, '2026-06-30', moved.body.voucher.revision], 'nothing changed');
-  assert.equal((await books.pay('2027-01-05')).number, 1, 'the next year is untouched');
-});
-
-test('a deleted number is never reissued: the next voucher of that year takes the number after it', async () => {
-  const books = await company('Delete Trading');
-  await books.pay('2026-11-01');
-  const last = await books.pay('2026-11-02');
-  await books.pay('2027-01-10');
-  assert.equal((await owner.browser.call(`/api/companies/${books.id}/vouchers/${last.id}/delete`, { revision: last.revision })).status, 200);
-  assert.equal((await books.pay('2026-11-03')).number, 3, 'number 2 stays a gap in 2026');
-  assert.equal((await books.pay('2027-01-11')).number, 2, '2027 is not affected');
-  assert.deepEqual((await stored(books.id)).filter(row => row.period === '2026-01-01').map(row => [row.number, row.deleted]), [[1, false], [2, true], [3, false]]);
 });
 
 test('optional takes no number, made regular takes the next of its date\'s year; post-dated and cancelled behave per year', async () => {
@@ -117,13 +113,31 @@ test('optional takes no number, made regular takes the next of its date\'s year;
   assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 1 }, { period: '2027-01-01', last: 4 }]);
 });
 
-test('a company whose financial year starts in April restarts on 1 April', async () => {
+test('observed: a financial year from 1 April restarts on 1 April, not 1 January', async () => {
   const books = await company('April Trading', { financialYearStart: { month: 4, day: 1 }, booksBeginning: '2026-04-01' });
   const numbers = [];
-  for (const date of ['2027-03-30', '2027-03-31', '2027-04-01', '2026-04-01', '2028-03-31']) numbers.push((await books.pay(date)).number);
-  assert.deepEqual(numbers, [1, 2, 1, 3, 2]);
-  assert.deepEqual((await stored(books.id)).map(row => [row.date, row.period]), [
-    ['2027-03-30', '2026-04-01'], ['2027-03-31', '2026-04-01'], ['2027-04-01', '2027-04-01'], ['2026-04-01', '2026-04-01'], ['2028-03-31', '2027-04-01']]);
+  for (const date of ['2026-05-01', '2026-12-31', '2027-01-02', '2027-03-31', '2027-02-01', '2027-04-01', '2027-04-20', '2028-03-31', '2028-04-01']) numbers.push((await books.pay(date)).number);
+  assert.deepEqual(numbers, [1, 2, 3, 4, 5, 1, 2, 3, 1]);
+  assert.deepEqual(await counters(books.id), [{ period: '2026-04-01', last: 5 }, { period: '2027-04-01', last: 3 }, { period: '2028-04-01', last: 1 }]);
+});
+
+test('every voucher type starts with one stored restart rule: the books beginning, 1, yearly; other rules are refused for now', async () => {
+  const books = await company('Rule Trading', { booksBeginning: '2026-03-01' });
+  const rules = await asAdmin(database.adminUrl, admin => admin.query(`SELECT to_char(applicable_from, 'YYYY-MM-DD') AS "from", starting_number AS start, periodicity, count(*) OVER () AS rows
+    FROM voucher_numbering_restart WHERE company_id = $1 AND voucher_type_id = $2`, [books.id, books.books.type('payment')]));
+  assert.deepEqual(rules.rows, [{ from: '2026-03-01', start: 1, periodicity: 'yearly', rows: '1' }]);
+  assert.equal(Number((await asAdmin(database.adminUrl, admin => admin.query('SELECT count(*) FROM voucher_numbering_restart WHERE company_id = $1', [books.id]))).rows[0].count), 8, 'one per voucher type');
+  const add = (periodicity: string, from: string) => asApp(books.id, client => client.query(
+    `INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity) VALUES ($1, $2, 'main', $3, 1, $4)`,
+    [books.id, books.books.type('payment'), from, periodicity]));
+  for (const periodicity of ['daily', 'weekly', 'monthly', 'never']) {
+    await assert.rejects(add(periodicity, '2026-06-01'), (error: unknown) => code('23514', 'voucher_numbering_restart_periodicity')(error) && /only yearly/.test(String((error as Error).message)), periodicity);
+  }
+  await assert.rejects(add('yearly', '2026-06-01'), code('23514', 'voucher_numbering_restart_fixed'));
+  await assert.rejects(asApp(books.id, client => client.query('DELETE FROM voucher_numbering_restart WHERE company_id = $1', [books.id])), code('42501'));
+  // Books beginning in March of a January year: the first period runs from the rule's date, the next from 1 January.
+  assert.deepEqual([(await books.pay('2026-03-05')).number, (await books.pay('2027-01-05')).number], [1, 1]);
+  assert.deepEqual((await counters(books.id)).map(row => row.period), ['2026-03-01', '2027-01-01']);
 });
 
 test('numbers, periods and counters cannot be forged across years by direct SQL', async () => {
@@ -142,7 +156,15 @@ test('numbers, periods and counters cannot be forged across years by direct SQL'
     await client.query(`UPDATE voucher SET status = 'regular', number = 2, number_period = '2026-01-01' WHERE company_id = $1 AND id = $2`, [books.id, optional2027.id]);
   }), numberRefusal, 'a 2027 voucher numbered from the 2026 counter');
   await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET number_period = '2027-01-01' WHERE company_id = $1 AND id = $2`, [books.id, numbered.id])),
-    code('23514', 'voucher_lifecycle'), 'a number keeps its period');
+    numberRefusal, 'a number keeps its period while its date stays');
+  await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET date = '2027-03-01', number = 9, number_period = '2027-01-01' WHERE company_id = $1 AND id = $2`, [books.id, numbered.id])),
+    numberRefusal, 'a date moved across the year with a number its new counter did not issue');
+  await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET number = NULL, number_period = NULL WHERE company_id = $1 AND id = $2`, [books.id, numbered.id])),
+    code('23514', 'voucher_lifecycle'), 'a number is never removed');
+  for (const [period, first] of [['2029-01-01', 2], ['2029-02-01', 1]] as const) {
+    await assert.rejects(asApp(books.id, client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number) VALUES ($1, $2, 'main', $3, $4)`, [books.id, type, period, first])),
+      code('23514', 'voucher_counter_sequence'), `a counter must start at its period's first day and starting number (${period}, ${first})`);
+  }
   await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher_counter SET period_start = '2027-01-01' WHERE company_id = $1 AND voucher_type_id = $2`, [books.id, type])),
     code('23514', 'voucher_counter_sequence'), 'a counter keeps its period');
   await assert.rejects(asApp(books.id, client => client.query(`UPDATE voucher SET number_period = '2026-01-01' WHERE company_id = $1 AND id = $2`, [books.id, optional2026.id])),

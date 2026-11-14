@@ -1,50 +1,107 @@
--- Voucher numbers restart each numbering period (D-04 as amended): a counter is kept per company, voucher type, series
--- and period, and a number is unique only within its period. A series names its period kind; the financial year of
--- the voucher's date is the one kind implemented. Every existing voucher keeps its number and is filed under the period
--- of its date; each period's counter continues from the highest number present in that period (deleted vouchers
--- included, so a deleted number is still never reissued). Row-level security, FORCE, ownership and the existing grants
--- are untouched; the application role may also set the new voucher column, through the same guard as the number.
+-- Voucher numbers restart each numbering period (D-04 as amended, observed numbering rules): every voucher type holds
+-- stored restart rules (applicable from, starting number, periodicity), seeded with one row: the company's books
+-- beginning, 1, yearly. The rule in force on a voucher's date gives its period; a counter is kept per company, voucher
+-- type, series and period, and a number is unique only within its period. Only yearly restart is built; its periods
+-- are the company's financial years, starting no earlier than the rule's date. Every existing voucher keeps its number
+-- and is filed under the period of its date; each period's counter continues from the highest number present in that
+-- period (deleted vouchers included, so a deleted number is still never reissued). Row-level security, FORCE, ownership
+-- and the existing grants are untouched; the application role may also set the new voucher column, through the same
+-- guard as the number, and read and seed restart rules.
 
 -- ---- Schema ----
 
--- The period a series' numbers restart in. Only 'financial_year' is implemented; other kinds (month, day, never) need
--- a branch in ledger_numbering_period and a wider check here.
-ALTER TABLE voucher_type ADD COLUMN numbering_period text NOT NULL DEFAULT 'financial_year'
-  CONSTRAINT voucher_type_numbering_period_check CHECK (numbering_period IN ('financial_year'));
+-- Restart rules per voucher type and series. Daily, weekly, monthly and never are the other periodicities the reference
+-- offers; rows with them are refused until they are built, and so is any row beyond the seeded one (changing the rules
+-- needs its own change, which must also decide what happens to vouchers already numbered under the old rule).
+CREATE TABLE voucher_numbering_restart (
+  company_id text NOT NULL,
+  voucher_type_id uuid NOT NULL,
+  series text NOT NULL,
+  applicable_from date NOT NULL,
+  starting_number integer NOT NULL CHECK (starting_number > 0),
+  periodicity text NOT NULL CHECK (periodicity IN ('daily', 'weekly', 'monthly', 'yearly', 'never')),
+  PRIMARY KEY (company_id, voucher_type_id, series, applicable_from),
+  FOREIGN KEY (company_id, voucher_type_id, series) REFERENCES voucher_type (company_id, id, numbering_series) ON DELETE CASCADE
+);
+ALTER TABLE voucher_numbering_restart ENABLE ROW LEVEL SECURITY;
+ALTER TABLE voucher_numbering_restart FORCE ROW LEVEL SECURITY;
+CREATE POLICY voucher_numbering_restart_company_scope ON voucher_numbering_restart
+  USING (company_id = ANY (string_to_array(current_setting('app.company_ids', true), ',')))
+  WITH CHECK (company_id = ANY (string_to_array(current_setting('app.company_ids', true), ',')));
 
--- The first day of the period whose counter issued the number; set with the number and never changed afterwards.
+CREATE FUNCTION voucher_numbering_restart_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF NEW.periodicity <> 'yearly' THEN
+    RAISE EXCEPTION 'only yearly restart of voucher numbering is available for now; % is not built yet', NEW.periodicity
+      USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbering_restart_periodicity';
+  END IF;
+  IF EXISTS (SELECT 1 FROM voucher_numbering_restart r WHERE r.company_id = NEW.company_id AND r.voucher_type_id = NEW.voucher_type_id AND r.series = NEW.series) THEN
+    RAISE EXCEPTION 'the restart rules of a voucher type cannot be changed yet' USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbering_restart_fixed';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER voucher_numbering_restart_guard BEFORE INSERT ON voucher_numbering_restart FOR EACH ROW EXECUTE FUNCTION voucher_numbering_restart_guard();
+
+-- Every voucher type starts with the reference's default row: from the books beginning, starting at 1, yearly.
+CREATE FUNCTION voucher_type_seed_restart() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity)
+  SELECT NEW.company_id, NEW.id, NEW.numbering_series, c.books_beginning, 1, 'yearly' FROM company c WHERE c.company_id = NEW.company_id;
+  RETURN NULL;
+END $$;
+CREATE TRIGGER voucher_type_seed_restart AFTER INSERT ON voucher_type FOR EACH ROW EXECUTE FUNCTION voucher_type_seed_restart();
+
+-- The first day of the period whose counter issued the number; set with the number and changed only with it.
 ALTER TABLE voucher ADD COLUMN number_period date;
 
 -- The counter key gains the period; the old key goes before the per-period counters are written below.
 ALTER TABLE voucher_counter ADD COLUMN period_start date;
 ALTER TABLE voucher_counter DROP CONSTRAINT voucher_counter_pkey;
 
--- The one place that says which numbering period a date falls in, for a voucher type of a company. The financial year
--- runs from the company's financial year start (a January year restarts on 1 January, an April year on 1 April).
-CREATE FUNCTION ledger_numbering_period(p_company text, p_voucher_type uuid, p_date date) RETURNS date
+-- The one place that says which numbering period a date falls in, and the period's first number: the rule in force on
+-- the date (the latest row applicable on or before it; the earliest row for a date before every row). A yearly period
+-- is the company's financial year containing the date, starting no earlier than the rule's applicable-from date
+-- (assumed: every observed company had its default row on both its books beginning and its financial year start).
+CREATE FUNCTION ledger_numbering_rule(p_company text, p_voucher_type uuid, p_date date, OUT period_start date, OUT starting_number integer)
   LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $$
 DECLARE
-  v_kind text;
+  v_from date;
+  v_periodicity text;
   v_month integer;
   v_day integer;
-  v_start date;
+  v_year_start date;
 BEGIN
-  SELECT t.numbering_period, c.fy_start_month, c.fy_start_day INTO v_kind, v_month, v_day
-  FROM voucher_type t JOIN company c ON c.company_id = t.company_id
-  WHERE t.company_id = p_company AND t.id = p_voucher_type;
-  IF NOT FOUND OR p_date IS NULL THEN RETURN NULL; END IF;
-  IF v_kind = 'financial_year' THEN
-    v_start := make_date(extract(year FROM p_date)::integer, v_month, v_day);
-    RETURN CASE WHEN p_date >= v_start THEN v_start ELSE make_date(extract(year FROM p_date)::integer - 1, v_month, v_day) END;
+  IF p_date IS NULL THEN RETURN; END IF;
+  SELECT r.applicable_from, r.starting_number, r.periodicity, c.fy_start_month, c.fy_start_day
+    INTO v_from, starting_number, v_periodicity, v_month, v_day
+  FROM voucher_type t
+    JOIN company c ON c.company_id = t.company_id
+    JOIN voucher_numbering_restart r ON r.company_id = t.company_id AND r.voucher_type_id = t.id AND r.series = t.numbering_series
+  WHERE t.company_id = p_company AND t.id = p_voucher_type
+  ORDER BY r.applicable_from <= p_date DESC, CASE WHEN r.applicable_from <= p_date THEN r.applicable_from END DESC, r.applicable_from
+  LIMIT 1;
+  IF NOT FOUND THEN starting_number := NULL; RETURN; END IF;
+  IF v_periodicity = 'yearly' THEN
+    v_year_start := make_date(extract(year FROM p_date)::integer, v_month, v_day);
+    IF v_year_start > p_date THEN v_year_start := make_date(extract(year FROM p_date)::integer - 1, v_month, v_day); END IF;
+    period_start := CASE WHEN v_from <= p_date THEN greatest(v_year_start, v_from) ELSE v_year_start END;
+    RETURN;
   END IF;
-  RAISE EXCEPTION 'numbering period % is not supported', v_kind USING ERRCODE = '23514', CONSTRAINT = 'voucher_type_numbering_period_check';
+  RAISE EXCEPTION 'only yearly restart of voucher numbering is available for now; % is not built yet', v_periodicity
+    USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbering_restart_periodicity';
 END $$;
 
--- Counters only move forward, one number at a time, from 1, and keep their key (now including the period).
+CREATE FUNCTION ledger_numbering_period(p_company text, p_voucher_type uuid, p_date date) RETURNS date
+  LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$ SELECT period_start FROM ledger_numbering_rule(p_company, p_voucher_type, p_date) $$;
+
+-- Counters start at their period's starting number, only move forward by one, and keep their key (now with the period).
 CREATE OR REPLACE FUNCTION voucher_counter_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   PERFORM ledger_assert_scope(NEW.company_id);
-  IF (TG_OP = 'INSERT' AND NEW.last_number <> 1) OR (TG_OP = 'UPDATE' AND (
+  IF (TG_OP = 'INSERT' AND NOT EXISTS (SELECT 1 FROM ledger_numbering_rule(NEW.company_id, NEW.voucher_type_id, NEW.period_start) r
+        WHERE r.period_start = NEW.period_start AND r.starting_number = NEW.last_number))
+     OR (TG_OP = 'UPDATE' AND (
       NEW.last_number <> OLD.last_number + 1 OR (NEW.company_id, NEW.voucher_type_id, NEW.series, NEW.period_start)
         IS DISTINCT FROM (OLD.company_id, OLD.voucher_type_id, OLD.series, OLD.period_start))) THEN
     RAISE EXCEPTION 'a voucher counter only moves forward by one' USING ERRCODE = '23514', CONSTRAINT = 'voucher_counter_sequence';
@@ -63,9 +120,10 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- Voucher lifecycle (0006's rules, plus the period): a number is set only together with the period of the voucher's
--- date, to the value that period's counter issued in this same transaction, and neither changes afterwards. A
--- numbered voucher's date stays inside the period of its number (`numberedDateChange` in the server answers first).
+-- Voucher lifecycle (0006's rules, plus the period): a number is set together with the period of the voucher's date, to
+-- the value that period's counter issued in this same transaction. Inside its period a numbered voucher keeps its
+-- number; a date moved into another period takes that period's next number in the same statement, and the old number
+-- stays a gap. A number is never removed.
 CREATE OR REPLACE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   PERFORM ledger_assert_scope(NEW.company_id);
@@ -73,19 +131,19 @@ BEGIN
     IF OLD.deleted_at IS NOT NULL THEN
       RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
-    IF OLD.number IS NOT NULL AND (NEW.number IS DISTINCT FROM OLD.number OR NEW.number_period IS DISTINCT FROM OLD.number_period) THEN
+    IF OLD.number IS NOT NULL AND (NEW.number IS NULL OR (NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.number <> OLD.number)) THEN
       RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
-    IF OLD.number IS NOT NULL AND NEW.date IS DISTINCT FROM OLD.date
+    IF OLD.number IS NOT NULL AND NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.date IS DISTINCT FROM OLD.date
         AND ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) IS DISTINCT FROM OLD.number_period THEN
-      RAISE EXCEPTION 'a numbered voucher stays in the numbering period of its number' USING ERRCODE = '23514', CONSTRAINT = 'voucher_number_period';
+      RAISE EXCEPTION 'a voucher moved to another numbering period takes that period''s next number' USING ERRCODE = '23514', CONSTRAINT = 'voucher_number_period';
     END IF;
     IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
       RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
     PERFORM ledger_voucher_mark(NEW.id, false);
   END IF;
-  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL) AND (
+  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period) AND (
     NEW.number_period IS DISTINCT FROM ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) OR NOT EXISTS (
       SELECT 1 FROM voucher_counter c WHERE c.company_id = NEW.company_id AND c.voucher_type_id = NEW.voucher_type_id AND c.series = NEW.series
         AND c.period_start = NEW.number_period AND c.last_number = NEW.number AND c.xmin = pg_current_xact_id()::xid)) THEN
@@ -97,11 +155,14 @@ END $$;
 -- ---- Existing data ----
 
 -- The migrator owns the tables but FORCE applies the policy to it too, so the scope lists every workspace (a company's
--- id is its workspace's) for this transaction only. The guards are off while rows are filed under their period: the
--- rows are not being altered (no revision, no log), and rebuilt counters start past one by design.
+-- id is its workspace's) for this transaction only. Each existing voucher type gets the default restart row. The voucher
+-- and counter guards are off while rows are filed under their period: the rows are not being altered (no revision, no
+-- log), and rebuilt counters start past their first number by design.
 DO $$
 BEGIN
   PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
+  INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity)
+  SELECT t.company_id, t.id, t.numbering_series, c.books_beginning, 1, 'yearly' FROM voucher_type t JOIN company c ON c.company_id = t.company_id;
   ALTER TABLE voucher DISABLE TRIGGER USER;
   ALTER TABLE voucher_counter DISABLE TRIGGER USER;
 
@@ -131,5 +192,6 @@ ALTER TABLE voucher ADD CONSTRAINT voucher_number_key UNIQUE (company_id, vouche
 -- ---- Grants ----
 
 GRANT UPDATE (number_period) ON voucher TO books_app;
-REVOKE ALL ON FUNCTION ledger_numbering_period(text, uuid, date) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION ledger_numbering_period(text, uuid, date) TO books_app;
+GRANT SELECT, INSERT ON voucher_numbering_restart TO books_app;
+REVOKE ALL ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date) TO books_app;
