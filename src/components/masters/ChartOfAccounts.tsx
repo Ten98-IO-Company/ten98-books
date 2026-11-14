@@ -2,13 +2,14 @@ import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
-import { useApp, useCompany } from '../../lib/app-context'
+import { useCompany } from '../../lib/app-context'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { buildChartRows, displayAmount, groupDeleteReason, isCursorRow, isolate, ledgerDeleteReason, type ChartRow, type GroupRow } from '../../lib/masters'
 import { takeFlash } from './flash'
 import { ListScope, MasterList, type ListEntry } from './MasterList'
 import { useAppCommand } from '../KeyboardShell'
 import { useMasterRequest, FailureAlert } from './entry'
+import { useCanWrite } from './useCanWrite'
 import { useMasterData } from './useMasterData'
 
 /** Where the cursor was per company in this tab, so coming back from an alter screen lands on the same row. */
@@ -56,10 +57,9 @@ export function ChartOfAccounts() {
 
 function ChartBody() {
   const company = useCompany()
-  const { workspace } = useApp()
   const navigate = useNavigate()
   const exponent = company.currencyMinorUnits as MoneyExponent
-  const canWrite = workspace.role !== 'viewer'
+  const canWrite = useCanWrite() === true
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)

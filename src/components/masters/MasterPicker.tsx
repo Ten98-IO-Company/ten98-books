@@ -1,11 +1,12 @@
 import { Alert, Badge, Button, Inline, Input, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
-import { useApp, useCompany } from '../../lib/app-context'
+import { useCompany } from '../../lib/app-context'
 import { groupPath, type GroupRow, type LedgerRow, isolate } from '../../lib/masters'
 import { rememberedChoice, takeFlash } from './flash'
 import { useAppCommand } from '../KeyboardShell'
 import { ListScope, MasterList, type ListEntry } from './MasterList'
+import { useCanWrite } from './useCanWrite'
 import { useMasterData } from './useMasterData'
 
 /** `/masters/new`: choose what to create. */
@@ -20,7 +21,7 @@ const choices = [
 
 function NewMasterBody({ under }: { under?: string }) {
   const company = useCompany()
-  const { workspace } = useApp()
+  const canWrite = useCanWrite()
   const navigate = useNavigate()
   const [active, setActive] = useState<string>(() => rememberedChoice(company.id))
   const entries = useMemo<ListEntry[]>(() => choices.map(choice => ({
@@ -30,7 +31,8 @@ function NewMasterBody({ under }: { under?: string }) {
   const open = (key: string) => void navigate(key === 'group'
     ? { to: '/app/c/$companyId/masters/new/group', params: { companyId: company.id }, search: under ? { under } : {} }
     : { to: '/app/c/$companyId/masters/new/ledger', params: { companyId: company.id }, search: under ? { under } : {} })
-  if (workspace.role === 'viewer') return <Alert tone='info'>Viewers cannot create masters. Ask a workspace owner, admin or editor.</Alert>
+  if (canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
+  if (!canWrite) return <Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert>
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title='Create a master' description='Choose what to create with the arrow keys, then press Enter.' />
     <MasterList label='What to create' entries={entries} active={active} onActiveChange={setActive} onOpen={open} openHint='Enter to create' focusList />

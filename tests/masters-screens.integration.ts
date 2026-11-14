@@ -17,9 +17,9 @@ let books: Chart;
 before(async () => {
   database = await freshDatabase('masters_screens');
   owner = await setupOwner();
-  viewer = await invite(owner.browser, owner.workspaceId, 'viewer');
-  company = await createCompany(owner.browser, owner.workspaceId, { name: 'Muscat Screens', baseCurrency: 'OMR', booksBeginning: '2026-01-01' });
-  other = await createCompany(owner.browser, owner.workspaceId, { name: 'Neighbour Screens' });
+  company = await createCompany(owner.browser, { name: 'Muscat Screens', baseCurrency: 'OMR', booksBeginning: '2026-01-01' });
+  viewer = await invite(owner.browser, company, 'viewer');
+  other = await createCompany(owner.browser, { name: 'Neighbour Screens' });
   books = await chart(owner.browser, company);
 });
 after(async () => { await database?.drop(); });

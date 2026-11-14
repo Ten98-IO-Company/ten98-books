@@ -9,6 +9,7 @@ import { useLeave } from './entry'
 import { rememberChoice, rememberedGroup } from './flash'
 import { GroupForm } from './GroupForm'
 import { LedgerForm } from './LedgerForm'
+import { useCanWrite } from './useCanWrite'
 import { useMasterData } from './useMasterData'
 import { useBackOverride } from '../KeyboardShell'
 
@@ -26,11 +27,12 @@ function startGroup(companyId: string, groups: { id: string; systemKey: string |
 /** `/masters/new/group` and `/masters/new/ledger`. */
 export function CreateMaster({ kind, under }: { kind: MasterKind; under?: string }) {
   const company = useCompany()
-  const { workspace } = useApp()
+  const canWrite = useCanWrite()
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   // Remembered so the choice list comes back on what was being created.
   useEffect(() => rememberChoice(company.id, kind), [company.id, kind])
-  if (workspace.role === 'viewer') return <Alert tone='info'>Viewers cannot create masters. Ask a workspace owner, admin or editor.</Alert>
+  if (canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
+  if (!canWrite) return <Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert>
   if (error) return <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>
   if (!groups || !ledgers) return <StatusLine busy>Loading the chart…</StatusLine>
   const initialGroupId = startGroup(company.id, groups, under)
@@ -42,9 +44,10 @@ export function CreateMaster({ kind, under }: { kind: MasterKind; under?: string
 /** `/masters/edit/group/$id` and `/masters/edit/ledger/$id`. The form is keyed by the revision, so a reload replaces what was typed. */
 export function AlterMaster({ kind, id }: { kind: MasterKind; id: string }) {
   const company = useCompany()
+  const canWrite = useCanWrite()
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   if (error) return <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>
-  if (!groups || !ledgers) return <StatusLine busy>Loading…</StatusLine>
+  if (!groups || !ledgers || canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
   const wanted = id.toLowerCase()
   if (kind === 'group') {
     const existing = groups.find(group => group.id === wanted)

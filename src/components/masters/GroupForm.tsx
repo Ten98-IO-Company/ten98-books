@@ -2,7 +2,7 @@ import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, St
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { api } from '../../lib/api'
-import { useApp, useCompany } from '../../lib/app-context'
+import { useCompany } from '../../lib/app-context'
 import type { Nature } from '../../lib/ledger'
 import {
   emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, isolate, natureLockReason, natureSingular,
@@ -11,6 +11,7 @@ import {
 import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import { LookupField } from './LookupField'
+import { useCanWrite } from './useCanWrite'
 
 const natureChoices: Choice[] = (['asset', 'liability', 'income', 'expense'] as const).map(value => ({ value, label: natureSingular[value] }))
 const yesNo: Choice[] = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
@@ -36,9 +37,9 @@ export function GroupForm(props: MasterFormProps<GroupRow>) {
 
 function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }: MasterFormProps<GroupRow>) {
   const company = useCompany()
-  const { workspace } = useApp()
   const navigate = useNavigate()
-  const readOnly = workspace.role === 'viewer'
+  // The screens that render this form wait for the role, so it is known here; anything but a writer reads only.
+  const readOnly = !useCanWrite()
   const form = useRef<HTMLFormElement>(null)
   const [values, dispatch] = useReducer(groupFormReducer, undefined, () => existing ? groupFormOf(existing) : emptyGroupForm(initialGroupId ?? ''))
   const initial = useRef(values)

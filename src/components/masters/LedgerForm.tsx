@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { api } from '../../lib/api'
-import { useApp, useCompany } from '../../lib/app-context'
+import { useCompany } from '../../lib/app-context'
 import type { Side, TrialBalance } from '../../lib/ledger'
 import {
   amountExample, displayAmount, effectiveSide, emptyLedgerForm, groupChoices, groupPath, isolate, ledgerDeleteReason, ledgerFormOf, ledgerFormReducer, ledgerGroupReason,
@@ -14,6 +14,7 @@ import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid
 import { rememberGroup, setFlash } from './flash'
 import type { MasterFormProps } from './GroupForm'
 import { LookupField } from './LookupField'
+import { useCanWrite } from './useCanWrite'
 
 const sideChoices: Choice[] = [{ value: 'Dr', label: `Dr · ${sideTitles.Dr}` }, { value: 'Cr', label: `Cr · ${sideTitles.Cr}` }]
 
@@ -47,10 +48,10 @@ function useOpeningTotals(companyId: string, booksBeginning: string) {
 
 function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: MasterFormProps<LedgerRow>) {
   const company = useCompany()
-  const { workspace } = useApp()
   const navigate = useNavigate()
   const exponent = company.currencyMinorUnits as MoneyExponent
-  const readOnly = workspace.role === 'viewer'
+  // The screens that render this form wait for the role, so it is known here; anything but a writer reads only.
+  const readOnly = !useCanWrite()
   const form = useRef<HTMLFormElement>(null)
   const [values, dispatch] = useReducer(ledgerFormReducer, undefined, () => existing ? ledgerFormOf(existing) : emptyLedgerForm(initialGroupId ?? ''))
   const initial = useRef(values)
