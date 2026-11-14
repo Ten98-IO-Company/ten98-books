@@ -92,14 +92,15 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
     return next
   }
 
-  /** Enter on typed lookup text with no row highlighted: pick the one choice it names or show the error here; false when nothing was typed. */
-  function typedEnter(field: LookupName, text: string): boolean {
+  /** Typed lookup text with no row highlighted, on Enter or the accept chord: pick the one choice it names or show the error here. */
+  function typedEnter(field: LookupName, text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
     const lookup = lookups[field]
     const result = resolveLookup(lookup.options, text, lookup.current(values))
-    if ('value' in result && result.value === lookup.current(values)) return false
-    // A pick moves on like Enter does after a highlighted row: once the new value is on screen.
-    if (settle(field, text, values)) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
-    return true
+    if ('value' in result && result.value === lookup.current(values)) return 'unchanged'
+    if (!settle(field, text, values)) return 'error'
+    // On Enter a pick moves on, as after a highlighted row, once the new value is on screen.
+    if (advance) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
+    return 'picked'
   }
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
@@ -190,15 +191,15 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
       <Stack data-entry-field='parentId'>
         <LookupField label='Under' options={parentChoices} value={values.parentId} disabled={readOnly} required error={errors.parentId}
           description={values.parentId === primaryChoice ? 'A primary group sits at the top of the chart and has its own nature.' : parent ? `Takes the nature of its parent: ${natureSingular[parent.nature]}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} onTypedEnter={text => typedEnter('parentId', text)} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} onTypedEnter={(text, advance) => typedEnter('parentId', text, advance)} />
       </Stack>
       {fields.includes('nature') && <Stack data-entry-field='nature'>
         <LookupField label='Nature' options={natureChoices} value={values.nature} disabled={readOnly || natureLock !== null} required error={errors.nature}
-          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} onTypedEnter={text => typedEnter('nature', text)} />
+          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} onTypedEnter={(text, advance) => typedEnter('nature', text, advance)} />
       </Stack>}
       {fields.includes('grossProfit') && <Stack data-entry-field='grossProfit'>
         <LookupField label='Counts towards gross profit' options={yesNo} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly} error={errors.grossProfit}
-          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} onTypedEnter={text => typedEnter('grossProfit', text)} />
+          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} onTypedEnter={(text, advance) => typedEnter('grossProfit', text, advance)} />
       </Stack>}
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>

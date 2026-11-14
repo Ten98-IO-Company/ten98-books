@@ -11,7 +11,8 @@ export function KeyboardHelp({ open, onOpenChange, keymap }: { open: boolean; on
       {commandContexts.map(context => <Stack key={context} gap={2}>
         <Heading level={3} size='sm'>{contextTitles[context]}</Heading>
         {context === 'company-home' && <Text size='sm' tone='muted'>These keys work while the company menu has focus.</Text>}
-        {(context === 'list' || context === 'entry') && <Text size='sm' tone='muted'>Reserved for screens that are not built yet.</Text>}
+        {context === 'list' && <Text size='sm' tone='muted'>Keys for the lists of masters; the voucher lists join them later.</Text>}
+        {context === 'entry' && <Text size='sm' tone='muted'>Keys for the create and alter forms of masters; the voucher entry keys are reserved for that screen.</Text>}
         <DescriptionList columns={2} items={commandIds.filter(id => commands[id].context === context).map(id => ({
           key: id, term: commands[id].title,
           description: <Inline gap={1}>{(bound[id] ?? []).map(chord => <KeyHint key={chord} chord={chord} />)}</Inline>,

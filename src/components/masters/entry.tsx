@@ -5,8 +5,7 @@ import { ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
-import { keepsEscape } from '../../lib/commands'
-import { useAppCommand, useBackOverride } from '../KeyboardShell'
+import { useAppCommand } from '../KeyboardShell'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
 export function EntryScope({ children }: { children: ReactNode }) {
@@ -74,26 +73,12 @@ export function useEntryCommands(options: {
     if (next === 'confirm') onLastField(); else focusEntryField(form.current, next)
   }, { allowInTextInput: true })
   useAppCommand('entry.accept', () => latest.current.onAccept(), { allowInTextInput: true, enabled: !options.readOnly })
-  // One Escape command at a time, so the bar and the help never list two: while a text field has focus the shell's
-  // back is off (it keeps Escape for the field) and entry.cancel runs; anywhere else back is this screen's cancel.
-  const inText = useTextFocus()
-  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true, enabled: inText })
-  useBackOverride(() => latest.current.onCancel())
+  // Always enabled: a scope whose command for a key is disabled still claims that key (the registry's rule), so Escape
+  // would do nothing on a button, the Save panel or a viewer's screen. The shell's nav.back shares the key but this
+  // scope is inside it and wins; the action bar lists only the innermost (barCommands in src/lib/commands.ts).
+  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true })
   useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
   useAppCommand('entry.history', () => latest.current.onHistory?.(), { enabled: options.onHistory !== undefined })
-}
-
-/** Whether the focused element is a text field, select or lookup, which keep Escape for themselves. */
-function useTextFocus() {
-  const [text, setText] = useState(false)
-  useEffect(() => {
-    const update = () => setText(keepsEscape(document.activeElement))
-    update()
-    document.addEventListener('focusin', update)
-    document.addEventListener('focusout', update)
-    return () => { document.removeEventListener('focusin', update); document.removeEventListener('focusout', update) }
-  }, [])
-  return text
 }
 
 /** Leaves an entry screen one level: back to where the user came from, or to `fallback` after a direct visit. */

@@ -99,6 +99,24 @@ export function isCommandId(id: string): id is CommandId {
 /** The definition behind a command id, widened so optional fields read uniformly. */
 export const commandOf = (id: CommandId): CommandDefinition => commands[id]
 
+/**
+ * The commands the action bar lists: enabled, not marked `bar: false`, once each, within `contexts` when given, and for
+ * a key that two of them share only the one from the innermost context, which is the one the registry runs. So the bar
+ * shows exactly one command per key (Escape on an entry screen is "Leave without saving", not also "Go back one level").
+ */
+export function barCommands<T extends { id: string; enabled: boolean; keys: readonly string[] }>(list: readonly T[], contexts?: readonly CommandContext[]): T[] {
+  const seen = new Set<string>()
+  const eligible = list.filter(command => {
+    if (!command.enabled || !isCommandId(command.id) || seen.has(command.id)) return false
+    const definition = commandOf(command.id)
+    if (definition.bar === false || (contexts && !contexts.includes(definition.context))) return false
+    seen.add(command.id)
+    return true
+  })
+  const rank = (command: T) => commandContexts.indexOf(commandOf(command.id as CommandId).context)
+  return eligible.filter(command => !eligible.some(other => other !== command && rank(other) > rank(command) && other.keys.some(key => command.keys.includes(key))))
+}
+
 /** The parts of a focused element the Escape guard reads, so tests can pass plain objects. */
 export interface FocusedElementLike {
   readonly tagName: string

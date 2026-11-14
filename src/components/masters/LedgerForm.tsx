@@ -100,14 +100,15 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
     return next
   }
 
-  /** Enter on typed lookup text with no row highlighted: pick the one choice it names or show the error here; false when nothing was typed. */
-  function typedEnter(field: LookupName, text: string): boolean {
+  /** Typed lookup text with no row highlighted, on Enter or the accept chord: pick the one choice it names or show the error here. */
+  function typedEnter(field: LookupName, text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
     const lookup = lookups[field]
     const result = resolveLookup(lookup.options, text, lookup.current(values))
-    if ('value' in result && result.value === lookup.current(values)) return false
-    // A pick moves on like Enter does after a highlighted row: once the new value is on screen.
-    if (settle(field, text, values)) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
-    return true
+    if ('value' in result && result.value === lookup.current(values)) return 'unchanged'
+    if (!settle(field, text, values)) return 'error'
+    // On Enter a pick moves on, as after a highlighted row, once the new value is on screen.
+    if (advance) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
+    return 'picked'
   }
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
@@ -202,7 +203,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       <Stack data-entry-field='groupId'>
         <LookupField label='Group' options={groupOptions} value={values.groupId} disabled={readOnly || outsideGroups} required={!outsideGroups} error={errors.groupId}
           description={outsideGroups ? 'The profit and loss ledger stays outside every group.' : group ? `Nature: ${natureSingular[group.nature]}. New balances default to ${group.nature === 'liability' || group.nature === 'income' ? 'credit' : 'debit'}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} onTypedEnter={text => typedEnter('groupId', text)} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} onTypedEnter={(text, advance) => typedEnter('groupId', text, advance)} />
       </Stack>
       <Stack data-entry-field='amount'>
         <Field label='Opening balance' description={locked ? lockNote : `Optional, as of ${company.booksBeginning}, in ${company.baseCurrency}, for example ${amountExample(exponent)}.`} error={errors.amount}>
@@ -211,7 +212,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       </Stack>
       <Stack data-entry-field='side'>
         <LookupField label='Debit or credit' options={sideChoices} value={side} disabled={readOnly || locked} error={errors.side}
-          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} onTypedEnter={text => typedEnter('side', text)} />
+          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} onTypedEnter={(text, advance) => typedEnter('side', text, advance)} />
       </Stack>
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
