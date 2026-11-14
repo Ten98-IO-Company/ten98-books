@@ -20,7 +20,7 @@ const ledgerTables = ['account_group', 'ledger', 'voucher_type', 'voucher_counte
 before(async () => {
   database = await freshDatabase('ledger_golden');
   owner = await setupOwner();
-  companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Golden Trading' });
+  companyId = await createCompany(owner.browser, { name: 'Golden Trading' });
   books = await goldenMasters(owner.browser, companyId);
 });
 after(async () => { await database?.drop(); });
@@ -97,7 +97,7 @@ test('the API returns the trial balance and a ledger balance with amounts as dec
 });
 
 test('a three-decimal company keeps exact amounts and refuses a fourth decimal place', async () => {
-  const kwd = await createCompany(owner.browser, owner.workspaceId, { name: 'Three Decimals', baseCurrency: 'KWD' });
+  const kwd = await createCompany(owner.browser, { name: 'Three Decimals', baseCurrency: 'KWD' });
   const chartOf = await chart(owner.browser, kwd);
   const bank = await addLedger(owner.browser, kwd, 'Gulf Bank', chartOf.group('bank_accounts'), { amount: '1500.125', side: 'Dr' });
   await addLedger(owner.browser, kwd, 'Capital Paid In', chartOf.group('capital'), { amount: '1500.125', side: 'Cr' });
@@ -117,9 +117,9 @@ test('a three-decimal company keeps exact amounts and refuses a fourth decimal p
 
 test('another workspace\'s user gets "not found" from every handler module and writes nothing', async () => {
   // The intruder is an admin of a second workspace only, with a company of their own.
-  const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
+  const other = await createCompany(owner.browser, { name: 'Elsewhere' });
   const intruder = await invite(owner.browser, other, 'admin');
-  const own = await createCompany(intruder.browser, other, { name: 'Intruder Books' });
+  const own = await createCompany(intruder.browser, { name: 'Intruder Books' });
   assert.equal((await intruder.browser.call(`/api/companies/${own}/groups`)).status, 200, 'the intruder reads their own company');
   const before = await Promise.all(ledgerTables.map(table => rowCount(database.adminUrl, table, companyId)));
   const sales = L('Trade Sales'), cash = L('Cash'), voucherId = (await owner.browser.call(`/api/companies/${companyId}/vouchers?from=2026-01-01&to=2026-12-31`)).body.vouchers[0].id;
@@ -141,7 +141,7 @@ test('another workspace\'s user gets "not found" from every handler module and w
 });
 
 test('a viewer reads the books but cannot write; a cross-origin post is refused before any work', async () => {
-  const viewer = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const viewer = await invite(owner.browser, companyId, 'viewer');
   assert.equal((await viewer.browser.call(`/api/companies/${companyId}/ledgers`)).status, 200);
   assert.equal((await viewer.browser.call(`/api/companies/${companyId}/trial-balance?from=2026-01-01&to=2026-02-03`)).status, 200);
   const before = await Promise.all(ledgerTables.map(table => rowCount(database.adminUrl, table, companyId)));

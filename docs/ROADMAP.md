@@ -29,7 +29,7 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md) |
 | Masters screens: chart of accounts, create and alter group and ledger, history | in review | |
-| Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | in review | Migration 0005 |
+| Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | in review | Same data is loaded into the reference installation for like-for-like checks |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | planned | After the masters and company-model merges |
@@ -78,3 +78,4 @@ Everything in the requirement inventory not covered above, in the order the evid
 | [LEDGER.md](LEDGER.md) | Data model, posting rules, numbering, ledger HTTP API |
 | [REPORTS.md](REPORTS.md) | Report definitions, period rules, reports HTTP API |
 | [KEYBOARD.md](KEYBOARD.md) | Commands and both keymaps |
+| [TENANCY.md](TENANCY.md) | Company model, roles, creation paths, what migration 0005 changes |

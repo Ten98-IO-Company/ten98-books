@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../../components/KeyboardMenu'
 import { KeymapPrompt } from '../../components/KeymapChoice'
-import { useCompany } from '../../lib/app-context'
+import { useApp, useCompany } from '../../lib/app-context'
 import { commands, type CommandId } from '../../lib/commands'
 import { baseCurrencies, financialYearOf } from '../../lib/company'
 
@@ -13,10 +13,10 @@ const longDate = (date: string) => new Intl.DateTimeFormat('en-GB', { dateStyle:
 /** Today's calendar date in the company's time zone (D-09). */
 const companyToday = (timeZone: string) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
-/** The M1 destinations. Screens that are not built yet open their NotBuilt page. */
+/** The M1 destinations. Screens that are not built yet open their NotBuilt page. `write` entries need a role that writes. */
 const destinations = [
-  { group: 'Masters', command: 'home.new-master', to: '/app/c/$companyId/masters/new' },
-  { group: 'Masters', command: 'home.edit-master', to: '/app/c/$companyId/masters/edit' },
+  { group: 'Masters', command: 'home.new-master', to: '/app/c/$companyId/masters/new', write: true },
+  { group: 'Masters', command: 'home.edit-master', to: '/app/c/$companyId/masters/edit', write: true },
   { group: 'Masters', command: 'home.chart-of-accounts', to: '/app/c/$companyId/masters/chart-of-accounts' },
   { group: 'Transactions', command: 'home.vouchers', to: '/app/c/$companyId/vouchers' },
   { group: 'Transactions', command: 'home.day-book', to: '/app/c/$companyId/reports/day-book' },
@@ -24,21 +24,26 @@ const destinations = [
   { group: 'Reports', command: 'home.profit-and-loss', to: '/app/c/$companyId/reports/profit-and-loss' },
   { group: 'Reports', command: 'home.trial-balance', to: '/app/c/$companyId/reports/trial-balance' },
   { group: 'Reports', command: 'home.ledger', to: '/app/c/$companyId/reports/ledger' },
-] as const satisfies readonly { group: string; command: CommandId; to: string }[]
+] as const satisfies readonly { group: string; command: CommandId; to: string; write?: true }[]
 
 /** The item last opened per company in this tab, so going back highlights it again. */
 const lastOpened = new Map<string, CommandId>()
 
 function CompanyHome() {
   const company = useCompany()
+  const { companies } = useApp()
   const navigate = useNavigate()
-  const [active, setActive] = useState<CommandId>(() => lastOpened.get(company.id) ?? destinations[0].command)
+  // A viewer sees only what a viewer can do; a hidden entry registers no key, so its letter does nothing.
+  const role = companies?.find(item => item.id === company.id)?.role
+  const writer = role === 'owner' || role === 'admin' || role === 'editor'
+  const offered = destinations.filter(entry => writer || !('write' in entry))
+  const [active, setActive] = useState<CommandId>(() => lastOpened.get(company.id) ?? offered[0].command)
   const [focusRequest, setFocusRequest] = useState(0)
   const year = financialYearOf(company.financialYearStart, companyToday(company.timeZone))
 
-  const groups: KeyboardMenuGroup[] = [...new Set(destinations.map(entry => entry.group))].map(group => ({
+  const groups: KeyboardMenuGroup[] = [...new Set(offered.map(entry => entry.group))].map(group => ({
     id: group.toLowerCase(), label: group,
-    items: destinations.filter(entry => entry.group === group).map(entry => ({
+    items: offered.filter(entry => entry.group === group).map(entry => ({
       command: entry.command, label: commands[entry.command].title,
       open: () => { lastOpened.set(company.id, entry.command); void navigate({ to: entry.to, params: { companyId: company.id } }) },
     })),

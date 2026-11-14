@@ -23,8 +23,8 @@ const ids = { rent: '', bank: '' };
 before(async () => {
   database = await freshDatabase('ledger_api');
   owner = await setupOwner();
-  editor = await invite(owner.browser, owner.workspaceId, 'editor');
-  companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Screen Books' });
+  companyId = await createCompany(owner.browser, { name: 'Screen Books' });
+  editor = await invite(owner.browser, companyId, 'editor');
   books = await chart(owner.browser, companyId);
   ids.rent = await addLedger(owner.browser, companyId, 'Rent', books.group('indirect_expenses'));
   ids.bank = await addLedger(owner.browser, companyId, 'Bank', books.group('bank_accounts'), { amount: '100', side: 'Dr' });
@@ -57,14 +57,14 @@ test('revision rows name the actor inside the company, never by email, and null 
   assert.equal((await owner.browser.call(`${base()}/vouchers/${voucher.id}/revisions`)).body.revisions[0].actorName, 'Owner');
 
   // A user who no longer exists keeps the id on the row; the name becomes null.
-  const leaver = await invite(owner.browser, owner.workspaceId, 'editor');
+  const leaver = await invite(owner.browser, companyId, 'editor');
   const group = (await leaver.browser.call(`${base()}/groups`, { name: 'Leaver Group', nature: 'expense' })).body.group;
   await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM "user" WHERE id = $1', [leaver.userId]));
   const orphan = (await owner.browser.call(`${base()}/groups/${group.id}/revisions`)).body.revisions;
   assert.deepEqual(orphan.map((row: { actorId: string; actorName: string | null }) => [row.actorId, row.actorName]), [[leaver.userId, null]]);
 
-  // Another workspace's user gets the same answer as for a missing company, with no name in it.
-  const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
+  // Another company's user gets the same answer as for a missing company, with no name in it.
+  const other = await createCompany(owner.browser, { name: 'Elsewhere' });
   const intruder = await invite(owner.browser, other, 'admin');
   const foreign = await intruder.browser.call(`${base()}/ledgers/${ids.rent}/revisions`);
   const missing = await intruder.browser.call(`/api/companies/${randomUUID()}/ledgers/${ids.rent}/revisions`);
@@ -131,8 +131,8 @@ test('ledger refusals carry a stable code with their status and message unchange
 
   // Non-ledger areas answer exactly as before: no code.
   assert.deepEqual(await owner.browser.call(`/api/companies/${randomUUID()}`), { status: 404, body: { error: companyNotFound } });
-  assert.deepEqual(await owner.browser.call(`/api/workspaces/${randomUUID()}/companies`, { name: 'Nowhere', ...{ baseCurrency: 'AED', financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai' } }),
-    { status: 404, body: { error: 'Workspace not found or unavailable.' } });
+  assert.deepEqual(await owner.browser.call(`/api/companies/${randomUUID()}/setup`, { name: 'Nowhere', ...{ baseCurrency: 'AED', financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai' } }),
+    { status: 404, body: { error: companyNotFound } });
   assert.ok(ledgerErrorCodes.length >= 14);
 });
 

@@ -67,21 +67,28 @@ test('sign-in rejects a wrong password, accepts the right one, and sign-out ends
 test('creating a company persists its books settings; invalid currency, time zone or date is rejected', async () => {
   const session = browser();
   await session.call('/api/auth/sign-in/email', { email: owner.email, password: owner.password });
-  const workspaceId = (await session.call('/api/me')).body.workspaces[0].id as string;
+  const setupCompany = (await session.call('/api/me')).body.workspaces[0].id as string;
 
-  const created = await session.call(`/api/workspaces/${workspaceId}/companies`, company);
+  const created = await session.call('/api/companies', company);
   assert.equal(created.status, 201);
   assert.deepEqual({ ...created.body.company, id: undefined }, {
-    id: undefined, workspaceId, name: company.name, secondLanguageName: company.secondLanguageName, baseCurrency: 'KWD', currencyMinorUnits: 3,
+    id: undefined, name: company.name, secondLanguageName: company.secondLanguageName, baseCurrency: 'KWD', currencyMinorUnits: 3,
     financialYearStart: { month: 4, day: 1 }, booksBeginning: '2026-04-01', timeZone: 'Asia/Kuwait', lockedThrough: null,
   });
+  // D-03: the company is a workspace of its own, owned by its creator.
+  assert.deepEqual((await admin.query('SELECT w.name, m.role FROM workspace w JOIN membership m ON m.workspace_id = w.id WHERE w.id = $1', [created.body.company.id])).rows,
+    [{ name: company.name, role: 'owner' }]);
   const read = await session.call(`/api/companies/${created.body.company.id}`);
   assert.equal(read.status, 200);
-  assert.deepEqual(read.body, created.body);
+  assert.deepEqual(read.body, { company: created.body.company });
+  assert.equal(created.body.replayed, false);
   assert.deepEqual(await session.call(`/api/companies/${created.body.company.id.toUpperCase()}`), read, 'an uppercase id reads the same company');
-  assert.deepEqual((await session.call(`/api/workspaces/${workspaceId}/companies`)).body, { companies: [{ id: created.body.company.id, name: company.name }] });
+  assert.deepEqual((await session.call('/api/companies')).body, { companies: [
+    { id: setupCompany, name: owner.workspaceName, role: 'owner', twoFactorLocked: false, company: null },
+    { id: created.body.company.id, name: company.name, role: 'owner', twoFactorLocked: false, company: created.body.company },
+  ] });
 
-  const projects = await count('SELECT count(*) FROM project');
+  const workspaces = await count('SELECT count(*) FROM workspace');
   for (const [field, value, message] of [
     ['baseCurrency', 'XYZ', 'Check the base currency and try again.'],
     ['baseCurrency', 'kwd', 'Check the base currency and try again.'],
@@ -90,21 +97,22 @@ test('creating a company persists its books settings; invalid currency, time zon
     ['booksBeginning', '01/04/2026', 'Check the books beginning date and try again.'],
     ['financialYearStart', { month: 2, day: 29 }, 'Check the financial year start and try again.'],
   ] as const) {
-    const refused = await session.call(`/api/workspaces/${workspaceId}/companies`, { ...company, [field]: value });
+    const refused = await session.call('/api/companies', { ...company, [field]: value });
     assert.equal(refused.status, 400, `${field}=${JSON.stringify(value)} must be refused`);
     assert.equal(refused.body.error, message);
   }
-  assert.equal(await count('SELECT count(*) FROM project'), projects, 'a refused company leaves no project behind');
+  assert.equal(await count('SELECT count(*) FROM workspace'), workspaces, 'a refused company leaves no workspace behind');
 });
 
 test('state-changing requests from another origin or without an Origin header are refused before any work', async () => {
   const session = browser();
   await session.call('/api/auth/sign-in/email', { email: owner.email, password: owner.password });
   const workspaceId = (await session.call('/api/me')).body.workspaces[0].id as string;
-  const [projects, workspaces, invitations] = [await count('SELECT count(*) FROM project'), await count('SELECT count(*) FROM workspace'), await count('SELECT count(*) FROM workspace_invitation')];
+  const [companies, workspaces, invitations] = [await count('SELECT count(*) FROM company'), await count('SELECT count(*) FROM workspace'), await count('SELECT count(*) FROM workspace_invitation')];
   for (const origin of ['https://attacker.example', 'http://localhost:1', null]) {
     for (const [path, body] of [
-      [`/api/workspaces/${workspaceId}/companies`, company],
+      ['/api/companies', company],
+      [`/api/companies/${workspaceId}/setup`, company],
       ['/api/workspaces', { name: 'Forged workspace' }],
       [`/api/workspaces/${workspaceId}/invitations`, { email: `forged-${randomUUID()}@books.test`, role: 'viewer' }],
       ['/api/invitations/accept', { token: 'a'.repeat(43), name: 'Forged', password: 'correct horse battery staple' }],
@@ -116,7 +124,7 @@ test('state-changing requests from another origin or without an Origin header ar
       assert.deepEqual(refused.body, { error: 'This action must originate from the application.' });
     }
   }
-  assert.equal(await count('SELECT count(*) FROM project'), projects);
+  assert.equal(await count('SELECT count(*) FROM company'), companies);
   assert.equal(await count('SELECT count(*) FROM workspace'), workspaces);
   assert.equal(await count('SELECT count(*) FROM workspace_invitation'), invitations);
   assert.equal((await session.call('/api/me')).status, 200, 'the forged sign-out did not end the session');

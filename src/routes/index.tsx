@@ -70,7 +70,7 @@ function Entry() {
   if (phase === 'invite' && fragment.current?.kind === 'invite') return <InvitePanel token={fragment.current.token} signedInEmail={signedInEmail}
     onAccepted={async (acceptedEmail, _created, workspaceId) => {
       fragment.current = null
-      try { await api('/api/me'); void navigate({ to: '/app', search: { workspace: workspaceId } }) }
+      try { await api('/api/me'); void navigate({ to: '/app/c/$companyId', params: { companyId: workspaceId } }) }
       catch (error) { if (error instanceof ApiError && error.status === 401) { setEmail(acceptedEmail); setPhase('signin') } else { setPageError(errMsg(error)); setPhase('error') } }
     }}
     onSignIn={async invitedEmail => {
@@ -86,7 +86,7 @@ function Entry() {
   }} onCancel={() => setPhase('signin')} />
   const inviting = fragment.current?.kind === 'invite'
   return <SignInForm initialEmail={email} notice={notice}
-    {...(inviting ? { title: 'Sign in to join', description: `Sign in as ${email || 'the invited account'} to accept your workspace invitation.` } : {})}
+    {...(inviting ? { title: 'Sign in to join', description: `Sign in as ${email || 'the invited account'} to accept your company invitation.` } : {})}
     onForgot={value => beginRecovery({ kind: 'request' }, value)}
     onCancel={inviting ? () => setPhase('invite') : undefined}
     onSignIn={async (value, password) => {
@@ -113,12 +113,13 @@ function OwnerForm({ onSetup, onSignInInstead }: { onSetup: (v: SetupValues) => 
   const [outcome, setOutcome] = useState(noOutcome)
   const [ownerExists, setOwnerExists] = useState(false)
   // Remounting after success clears the password; the other entries are kept.
-  const [form, setForm] = useState({ generation: 0, name: '', email: '', workspaceName: 'My workspace' })
+  const [form, setForm] = useState({ generation: 0, name: '', email: '' })
 
   async function submit(v: FirstUserSetupValues) {
-    const values = { name: v.name.trim(), email: v.email.trim(), password: v.password, workspaceName: (v.workspaceName ?? '').trim() }
+    // The company is named by the next step, with its books settings; the server gives it a placeholder name until then.
+    const values = { name: v.name.trim(), email: v.email.trim(), password: v.password, workspaceName: '' }
     setBusy(true); setOutcome(noOutcome); setOwnerExists(false)
-    setForm(f => ({ ...f, name: values.name, email: values.email, workspaceName: values.workspaceName }))
+    setForm(f => ({ ...f, name: values.name, email: values.email }))
     try {
       await onSetup(values)
       setForm(f => ({ ...f, generation: f.generation + 1 }))
@@ -129,9 +130,9 @@ function OwnerForm({ onSetup, onSignInInstead }: { onSetup: (v: SetupValues) => 
   }
 
   return <FirstUserSetupFlow key={form.generation} title='Create owner account'
-    description='The first account becomes the owner of this installation and its workspace. You add companies to the workspace next.'
-    setupToken={false} workspaceName workspaceNameRequired={false} passwordPolicy={{ minLength: 12, maxLength: 128 }}
-    defaultValues={{ name: form.name, email: form.email, workspaceName: form.workspaceName }}
+    description='The first account becomes the owner of this installation and of its first company. You enter the company details next.'
+    setupToken={false} workspaceName={false} passwordPolicy={{ minLength: 12, maxLength: 128 }}
+    defaultValues={{ name: form.name, email: form.email }}
     busy={busy} error={outcome.error || undefined} unconfirmed={outcome.unconfirmed || undefined}
     signInInstead={ownerExists ? { onClick: email => onSignInInstead(email.trim()) } : undefined} onSubmit={submit} />
 }

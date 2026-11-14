@@ -56,8 +56,8 @@ export async function postGoldenVouchers(member: Browser, companyId: string, boo
 }
 
 /** A new company with the whole golden fixture posted. */
-export async function goldenCompany(member: Browser, workspaceId: string, name = 'Golden Trading'): Promise<{ companyId: string; books: Chart }> {
-  const companyId = await createCompany(member, workspaceId, { name });
+export async function goldenCompany(member: Browser, name = 'Golden Trading'): Promise<{ companyId: string; books: Chart }> {
+  const companyId = await createCompany(member, { name });
   const books = await goldenMasters(member, companyId);
   await postGoldenVouchers(member, companyId, books);
   return { companyId, books };

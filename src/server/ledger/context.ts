@@ -4,7 +4,7 @@ import type { z } from 'zod';
 import type { LedgerErrorCode } from '../../lib/ledger.ts';
 import { moneyToWire, type Wire } from '../../lib/money.ts';
 import { FoundationError } from '../auth.ts';
-import { withCompany, type CompanyMode } from '../tenancy.ts';
+import { companyNotSetUp, withCompany, type CompanyMode } from '../tenancy.ts';
 import { InputError, readJson } from '../validation.ts';
 
 /** The company settings every posting rule needs, read inside the company transaction. */
@@ -24,7 +24,8 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
     `SELECT base_currency, currency_minor_units, books_beginning, locked_through, fy_start_month, fy_start_day FROM company WHERE company_id = $1${mode === 'write' ? ' FOR SHARE' : ''}`,
     [companyId]);
   const row = rows[0];
-  if (!row) throw ledgerError(404, 'Company not found or unavailable.', 'not_found');
+  // withCompany already admitted a member, so a missing row is a company (workspace) without books settings yet.
+  if (!row) throw ledgerError(409, companyNotSetUp, 'not_set_up');
   return {
     client, userId,
     company: {

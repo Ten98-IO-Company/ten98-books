@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import pg from 'pg';
 import { readAuthFragment } from '../src/lib/auth-messages.ts';
-import { companyCreateInput, financialYearOf, isCalendarDate } from '../src/lib/company.ts';
+import { companyCreateInput, financialYearOf, isCalendarDate, sectionPath } from '../src/lib/company.ts';
 import { json, toJson } from '../src/server/api/http.ts';
 import { pgTypes } from '../src/server/db.ts';
 import { startWhenDatabaseReady } from '../src/server/startup-migrate.ts';
@@ -66,4 +66,17 @@ test('startup refuses to start when the application role check fails, after migr
     assertRole: async () => { steps.push('role'); throw new Error('unsafe role') },
   }), /unsafe role/);
   assert.deepEqual(steps, ['migrate', 'role'], 'the server never starts');
+});
+
+test('changing company keeps the page and drops record ids and search parameters', () => {
+  const base = '/app/c/0b7c2b1e-3d4f-4a5b-8c6d-7e8f9a0b1c2d';
+  const record = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+  assert.equal(sectionPath(base, base), '');
+  assert.equal(sectionPath(`${base}/reports/trial-balance`, base), '/reports/trial-balance');
+  assert.equal(sectionPath(`${base.toUpperCase()}/masters/chart-of-accounts`, base), '/masters/chart-of-accounts', 'an uppercase address is the same company');
+  assert.equal(sectionPath(`${base}/vouchers/${record}`, base), '/vouchers', 'a record id is never carried over');
+  for (const page of ['/masters/edit', '/reports/voucher', '/reports/ledger-vouchers', '/reports/ledger-monthly']) {
+    assert.equal(sectionPath(`${base}${page}`, base), `/${page.split('/')[1]}`, `${page} shows one record, so its section opens`);
+  }
+  assert.equal(sectionPath('/app/team', base), '', 'outside the company the other company opens at its menu');
 });

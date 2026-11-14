@@ -55,8 +55,8 @@ export type CompanyCreateInput = z.input<typeof companyCreateInput>;
 
 /** The company as the API returns it. Dates are calendar dates in the company's own time zone (D-09). */
 export type Company = {
+  /** The workspace id: a company is a workspace (D-03). */
   id: string;
-  workspaceId: string;
   name: string;
   secondLanguageName: string | null;
   baseCurrency: BaseCurrency;
@@ -67,6 +67,18 @@ export type Company = {
   lockedThrough: string | null;
 };
 
+/**
+ * One entry of GET /api/companies: a company the user belongs to, their role in it, and its books settings. `company`
+ * is null while the company is not set up yet, and for a company whose two-factor requirement the user does not meet.
+ */
+export type CompanySummary = {
+  id: string;
+  name: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+  twoFactorLocked: boolean;
+  company: Company | null;
+};
+
 /** The financial year containing `date` (YYYY-MM-DD), as inclusive first and last calendar dates. */
 export function financialYearOf(start: { month: number; day: number }, date: string): { from: string; to: string } {
   const [year, month, day] = date.split('-').map(Number);
@@ -75,4 +87,20 @@ export function financialYearOf(start: { month: number; day: number }, date: str
   const from = new Date(Date.UTC(startYear, start.month - 1, start.day));
   const to = new Date(Date.UTC(startYear + 1, start.month - 1, start.day - 1));
   return { from: iso(from), to: iso(to) };
+}
+
+/** Pages that show one record of the company they were opened in; changing company opens their section instead. */
+const recordPages: readonly string[] = ['/masters/edit', '/reports/voucher', '/reports/ledger-vouchers', '/reports/ledger-monthly'];
+const uuidSegment = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where changing company lands: the same page under the other company (`/reports/trial-balance` stays the trial balance),
+ * without record ids or search parameters, so nothing of the company left behind is carried over. A page that only
+ * shows one record falls back to its section.
+ */
+export function sectionPath(pathname: string, companyBase: string): string {
+  const rest = companyBase && pathname.toLowerCase().startsWith(companyBase.toLowerCase()) ? pathname.slice(companyBase.length) : '';
+  const kept = rest.split('/').filter(segment => segment && !uuidSegment.test(segment));
+  const path = kept.length ? `/${kept.join('/')}` : '';
+  return recordPages.some(page => path === page || path.startsWith(`${page}/`)) ? `/${kept[0]}` : path;
 }

@@ -22,8 +22,8 @@ const ids = { rent: '', bank: '' };
 before(async () => {
   database = await freshDatabase('ledger_guards');
   owner = await setupOwner();
-  companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Guarded Books' });
-  other = await createCompany(owner.browser, owner.workspaceId, { name: 'Neighbour Books' });
+  companyId = await createCompany(owner.browser, { name: 'Guarded Books' });
+  other = await createCompany(owner.browser, { name: 'Neighbour Books' });
   books = await chart(owner.browser, companyId);
   ids.rent = await addLedger(owner.browser, companyId, 'Rent', books.group('indirect_expenses'));
   ids.bank = await addLedger(owner.browser, companyId, 'Bank', books.group('bank_accounts'));
@@ -180,7 +180,7 @@ test('lines of a cancelled or deleted voucher cannot be added, changed or remove
 });
 
 test('the voucher list pages by date and entry order with a bounded page size', async () => {
-  const company = await createCompany(owner.browser, owner.workspaceId, { name: 'Paged Books' });
+  const company = await createCompany(owner.browser, { name: 'Paged Books' });
   const chartOf = await chart(owner.browser, company);
   const fee = await addLedger(owner.browser, company, 'Fee', chartOf.group('indirect_expenses'));
   const dates = ['2026-03-02', '2026-03-01', '2026-03-02', '2026-03-03', '2026-03-01'];

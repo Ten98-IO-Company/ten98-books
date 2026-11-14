@@ -14,7 +14,7 @@ export const books = { baseCurrency: 'AED', financialYearStart: { month: 1, day:
 
 export type Member = { browser: Browser; userId: string };
 
-/** First-user setup: the owner of a new workspace. Only once per database. */
+/** First-user setup: the owner of the installation's first company, which is not set up yet. Only once per database. */
 export async function setupOwner(workspaceName = 'Ledger tests'): Promise<Member & { workspaceId: string }> {
   const owner = browser();
   const setup = await owner.call('/api/auth/setup', { name: 'Owner', email: `owner-${randomUUID()}@books.test`, password, workspaceName });
@@ -23,9 +23,9 @@ export async function setupOwner(workspaceName = 'Ledger tests'): Promise<Member
   return { browser: owner, userId: me.user.id, workspaceId: me.workspaces[0].id };
 }
 
-/** Invites a new user to `workspaceId` with `role` and signs them in. */
-export async function invite(owner: Browser, workspaceId: string, role: 'admin' | 'editor' | 'viewer'): Promise<Member> {
-  const invited = await owner.call(`/api/workspaces/${workspaceId}/invitations`, { email: `${role}-${randomUUID()}@books.test`, role });
+/** Invites a new user to company `companyId` (its workspace, D-03) with `role` and signs them in. */
+export async function invite(owner: Browser, companyId: string, role: 'admin' | 'editor' | 'viewer'): Promise<Member> {
+  const invited = await owner.call(`/api/workspaces/${companyId}/invitations`, { email: `${role}-${randomUUID()}@books.test`, role });
   assert.equal(invited.status, 201, JSON.stringify(invited.body));
   const token = new URL(invited.body.inviteUrl).hash.replace('#invite=', '');
   const member = browser();
@@ -33,8 +33,9 @@ export async function invite(owner: Browser, workspaceId: string, role: 'admin' 
   return { browser: member, userId: (await member.call('/api/me')).body.user.id };
 }
 
-export async function createCompany(owner: Browser, workspaceId: string, settings: Partial<typeof books> & { name?: string } = {}): Promise<string> {
-  const created = await owner.call(`/api/workspaces/${workspaceId}/companies`, { name: `Company ${randomUUID().slice(0, 8)}`, ...books, ...settings });
+/** Creates a company (a workspace of its own, owned by `owner`) with books settings and the default chart. */
+export async function createCompany(owner: Browser, settings: Partial<typeof books> & { name?: string } = {}): Promise<string> {
+  const created = await owner.call('/api/companies', { name: `Company ${randomUUID().slice(0, 8)}`, ...books, ...settings });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   return created.body.company.id;
 }

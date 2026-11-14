@@ -5,26 +5,23 @@ import { getConfig } from '../config.ts';
 import { emailLimitKey } from '../client-rate-limit.ts';
 import { getDatabase } from '../db.ts';
 import { getEmailStatus, sendTransactionalEmail } from '../email.ts';
-import { changeRole, createWorkspace, getTeam, inviteMember, removeMember, renameWorkspace, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
+import { changeRole, getTeam, inviteMember, removeMember, renameWorkspace, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
 import { team } from '../workspace-team.ts';
 import { readJson } from '../validation.ts';
 import { json, limit, limitWindow, type SignedInArea } from './http.ts';
 
 const id = '[0-9a-f-]{36}';
 
-// Fixed text: workspace and inviter names are member-chosen, so they never reach the installation's sender (phishing surface).
+// Fixed text: company and inviter names are member-chosen, so they never reach the installation's sender (phishing surface).
 function sendInvitationEmail(to: string, role: string, inviteUrl: string) {
-  return sendTransactionalEmail({ to, subject: 'Your Books workspace invitation', text: `You were invited to join a workspace on the Books installation at ${getConfig().appUrl} with the ${role} role.\n\nOpen this link within 7 days to accept:\n${inviteUrl}\n\nOnly the newest invitation link sent to this address for a workspace works. If you did not expect this invitation, ignore this email.` });
+  return sendTransactionalEmail({ to, subject: 'Your Books company invitation', text: `You were invited to join a company's books on the Books installation at ${getConfig().appUrl} with the ${role} role.\n\nOpen this link within 7 days to accept:\n${inviteUrl}\n\nOnly the newest invitation link sent to this address for a company works. If you did not expect this invitation, ignore this email.` });
 }
 
-/** The signed-in account, its workspaces, members, roles and invitations. */
+/** The signed-in account, its workspaces (each one company, D-03), members, roles and invitations. */
 export const teamApi: SignedInArea = async ({ request, path, user }) => {
   const config = getConfig();
-  if (path === '/api/workspaces' && request.method === 'POST') {
-    await limit(`workspaces:${user.id}`, 10);
-    const result = await createWorkspace(user.id, await readJson(request));
-    return json({ workspace: { ...result.workspace, role: result.role } }, 201);
-  }
+  // No POST /api/workspaces: a workspace is a company (D-03), so companies come only from first-user setup and
+  // POST /api/companies, never without their books settings.
   if (path === '/api/me' && request.method === 'GET') {
     const { pool } = getDatabase();
     const { rows } = await pool.query(

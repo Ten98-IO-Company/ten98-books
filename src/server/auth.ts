@@ -56,8 +56,8 @@ const claimInput = z.object({
   email: z.string().trim().toLowerCase().max(254).email(),
   password: z.string().min(12).max(128),
   workspaceName: z.string().trim().max(120)
-    .transform((value) => value || 'My workspace')
-    .default('My workspace'),
+    .transform((value) => value || 'My company')
+    .default('My company'),
 }).strict()
 
 export async function claimInstallation(input: z.input<typeof claimInput>): Promise<void> {

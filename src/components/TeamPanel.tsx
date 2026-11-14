@@ -46,7 +46,7 @@ export function TeamPanel({ workspaceId, userId, onChanged, onUnauthorized }: { 
     : <StatusLine busy>Loading team…</StatusLine>
 
   const owner = team.role === 'owner'
-  return <TeamFlow title={`${team.workspace.name} team`} description='Invite people, set their roles and decide whether two-factor authentication is required.'
+  return <TeamFlow title={`${team.workspace.name} team`} messages={{ removeDescription: 'They lose access to this company immediately.' }} description='Invite people, set their roles and decide whether two-factor authentication is required.'
     currentUserId={userId} busy={busy} error={error || undefined} notice={notice ? { tone: 'info', text: notice } : undefined}
     members={team.members.map(member => ({ id: member.userId, name: member.name, email: member.email, role: member.role }))}
     roles={inviteRoleOptions(team.role)}
@@ -65,7 +65,7 @@ export function TeamPanel({ workspaceId, userId, onChanged, onUnauthorized }: { 
       // The flow confirms the choice; the server rechecks it against the member's saved email.
       onTransfer: ({ userId: target }) => run(async () => {
         const member = team.members.find(item => item.userId === target)
-        if (!member) throw new Error('That member is no longer in the workspace. Reload the team.')
+        if (!member) throw new Error('That member is no longer in the company. Reload the team.')
         await post('/transfer-ownership', { targetUserId: member.userId, confirmationEmail: member.email.toLowerCase() })
         setInviteLink(undefined)
         return `Ownership moved to ${member.name}. You are now an admin.`

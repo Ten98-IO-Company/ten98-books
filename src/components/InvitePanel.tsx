@@ -134,7 +134,7 @@ function InvitePanelContent(props: InvitePanelProps) {
       <InvitationAcceptFlow
         {...frame}
         state='unavailable'
-        eyebrow='WORKSPACE INVITATION'
+        eyebrow='COMPANY INVITATION'
         title='This invitation link does not work'
         description='The link may have expired or already been used. Ask the person who invited you for a new one.'
         error={error ?? undefined}
@@ -147,8 +147,9 @@ function InvitePanelContent(props: InvitePanelProps) {
     <InvitationAcceptFlow
       {...frame}
       state={mismatch ? 'mismatch' : needsSignIn ? 'signin-required' : 'details'}
-      eyebrow='WORKSPACE INVITATION'
+      eyebrow='COMPANY INVITATION'
       title={`You’re invited to join ${info.workspaceName}`}
+      messages={{ workspaceTerm: 'Company' }}
       invitation={info}
       signedInEmail={signedInEmail ?? undefined}
       accountExists={info.accountExists === true}

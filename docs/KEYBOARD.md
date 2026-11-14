@@ -21,7 +21,7 @@ The one intended overlap: Escape on an entry screen is `entry.cancel`, not `nav.
 |---|---|---|---|---|
 | `help.keyboard` | Show keyboard shortcuts | Everywhere | `Ctrl+/` | `F1`, `Ctrl+/` |
 | `nav.back` | Go back one level | Everywhere | `Escape` | `Escape` |
-| `company.switch` | Choose another company | Everywhere | `Alt+K` | `F3` |
+| `company.switch` | Change company: lists every company you belong to (each is its own workspace) with Create company | Everywhere | `Alt+K` | `F3` |
 | `menu.next` | Highlight the next item | Company menu | `ArrowDown` | `ArrowDown` |
 | `menu.previous` | Highlight the previous item | Company menu | `ArrowUp` | `ArrowUp` |
 | `menu.first` | Highlight the first item | Company menu | `Home` | `Home` |

@@ -46,7 +46,8 @@ export async function handleApi(request: Request): Promise<Response> {
       if (response) return response;
     }
     const user = await signedIn(request);
-    // Every route below is under /api/(workspaces|companies)/<id> except GET /api/me and POST /api/workspaces, which stay reachable.
+    // Every route below is under /api/(workspaces|companies)/<id> (a company id is its workspace id) except GET /api/me
+    // and GET or POST /api/companies, which stay reachable.
     await requireWorkspaceFactor(path, user.id);
     for (const area of signedInAreas) {
       const response = await area({ ...context, user });
@@ -59,7 +60,7 @@ export async function handleApi(request: Request): Promise<Response> {
     if (error instanceof z.ZodError) return json({ error: 'Check the submitted fields and try again.' }, 400);
     if (error instanceof DatabaseRoleError) { console.error(error.message); return json({ error: 'The installation is not ready. Check the database roles.' }, 503); }
     const code = (error as { code?: string })?.code;
-    if (code === '23505') return json({ error: 'This item already exists in the workspace.' }, 409);
+    if (code === '23505') return json({ error: 'This item already exists in the company.' }, 409);
     if (['SCHEMA_MISMATCH', '42P01', '42703', 'ECONNREFUSED', 'ENOTFOUND'].includes(code ?? '')) return json({ error: 'The installation is not ready. Check configuration and database migrations.' }, 503);
     console.error('Application request failed; inspect configuration and database availability.');
     return json({ error: 'The request could not be completed. Try again or contact your operator.' }, 500);

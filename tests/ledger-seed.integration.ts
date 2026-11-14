@@ -13,7 +13,8 @@ import { asAdmin, createCompany, setupOwner } from './helpers/ledger.ts';
 const local = new Set(['localhost', '127.0.0.1', '[::1]']);
 const name = `books_ledger_seed_${randomBytes(4).toString('hex')}`;
 let adminUrl = '';
-const legacyCompany = randomUUID();
+// A company of the earlier model (a project); from migration 0005 on, its books live under its workspace id (D-03).
+const legacyCompany = randomUUID(), legacyWorkspace = randomUUID();
 
 const primaryGroups = ['branches', 'capital', 'current_assets', 'current_liabilities', 'deferred_expenses', 'direct_expenses', 'direct_income', 'fixed_assets',
   'indirect_expenses', 'indirect_income', 'investments', 'loans', 'purchases', 'sales', 'suspense'];
@@ -58,13 +59,15 @@ before(async () => {
     const beforeLedger = createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: beforeFiles, lockKey: migrationLockKey });
     await migrateDatabase({ pool, ledger: beforeLedger, log: () => undefined });
     await asAdmin(adminUrl, async admin => {
-      const workspace = randomUUID();
-      await admin.query(`INSERT INTO workspace (id, name) VALUES ($1, 'Existing')`, [workspace]);
-      await admin.query(`INSERT INTO project (id, workspace_id, name) VALUES ($1, $2, 'Company before the ledger')`, [legacyCompany, workspace]);
+      await admin.query(`INSERT INTO workspace (id, name) VALUES ($1, 'Existing')`, [legacyWorkspace]);
+      await admin.query(`INSERT INTO project (id, workspace_id, name) VALUES ($1, $2, 'Company before the ledger')`, [legacyCompany, legacyWorkspace]);
       await admin.query(`INSERT INTO company (company_id, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
         VALUES ($1, 'OMR', 3, 1, 1, '2025-01-01', 'Asia/Muscat')`, [legacyCompany]);
     });
-    assert.deepEqual(await migrateDatabase({ pool, log: () => undefined }), ['0004']);
+    // The ledger migration alone performs the backfill; the later ones then run as an upgrade would.
+    const throughLedger = createMigrationLedger({ directory: join(process.cwd(), 'migrations'), files: migrationFiles.slice(0, beforeFiles.length + 1), lockKey: migrationLockKey });
+    assert.deepEqual(await migrateDatabase({ pool, ledger: throughLedger, log: () => undefined }), ['0004']);
+    assert.deepEqual(await migrateDatabase({ pool, log: () => undefined }), migrationFiles.slice(beforeFiles.length + 1).map(file => file.slice(0, 4)));
   } finally { await pool.end(); }
 });
 
@@ -77,7 +80,7 @@ after(async () => {
 });
 
 test('the migration backfills the default chart for a company created before it', async () => {
-  const chart = await seeded(legacyCompany);
+  const chart = await seeded(legacyWorkspace);
   const natures: Record<string, string> = { branches: 'liability', capital: 'liability', current_assets: 'asset', current_liabilities: 'liability', deferred_expenses: 'asset',
     direct_expenses: 'expense', direct_income: 'income', fixed_assets: 'asset', indirect_expenses: 'expense', indirect_income: 'income', investments: 'asset',
     loans: 'liability', purchases: 'expense', sales: 'income', suspense: 'liability' };
@@ -94,8 +97,8 @@ test('the migration backfills the default chart for a company created before it'
 
 test('company creation seeds the same chart, and seeding again changes nothing', async () => {
   const owner = await setupOwner();
-  const companyId = await createCompany(owner.browser, owner.workspaceId);
-  assert.deepEqual(await seeded(companyId), await seeded(legacyCompany), 'creation and backfill run the same routine');
+  const companyId = await createCompany(owner.browser);
+  assert.deepEqual(await seeded(companyId), await seeded(legacyWorkspace), 'creation and backfill run the same routine');
 
   const { getDatabase } = await import('../src/server/db.ts');
   const { withCompany } = await import('../src/server/tenancy.ts');
