@@ -1,9 +1,8 @@
 import { periodQuery } from '../../lib/ledger.ts';
-import { parseInput, runLedger, type LedgerContext } from '../ledger/context.ts';
+import { parseInput, readLedgerBody, runLedger, type LedgerContext } from '../ledger/context.ts';
 import { ledgerBalance, trialBalance } from '../ledger/reports.ts';
 import { listRevisions } from '../ledger/revisions.ts';
 import { alterVoucher, cancelVoucher, createVoucher, deleteVoucher, listVouchers, readVoucher } from '../ledger/vouchers.ts';
-import { readJson } from '../validation.ts';
 import { json, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -42,7 +41,7 @@ export const vouchersApi: SignedInArea = async ({ request, url, path, user }) =>
   const companyId = match[1], voucherId = match[2]?.toLowerCase(), action = match[3]?.toLowerCase();
   const write = async <T>(run: (context: LedgerContext, body: unknown) => Promise<T>) => {
     await limit(`vouchers:${user.id}`, 600);
-    const body = await readJson(request, voucherBodyBytes);
+    const body = await readLedgerBody(request, voucherBodyBytes);
     return runLedger(user.id, companyId, 'write', context => run(context, body));
   };
 

@@ -14,6 +14,30 @@ export const voucherKinds = ['contra', 'payment', 'receipt', 'journal', 'sales',
 export type VoucherKind = (typeof voucherKinds)[number];
 export type VoucherStatus = 'regular' | 'cancelled' | 'optional';
 
+/**
+ * Stable reasons the ledger API sends as `code` beside the plain-language `error`, so screens branch on the reason, not
+ * the sentence. Statuses stay as they were; a code never changes meaning once published.
+ */
+export const ledgerErrorCodes = [
+  'validation', // a field is missing, malformed, out of range or contradicts another field
+  'not_found', // the company, master or voucher (or one it refers to) is not there or not reachable
+  'stale_revision', // someone changed the row since the client read it
+  'retry', // a deadlock or serialization failure; nothing was saved
+  'duplicate_name', // another group, ledger or voucher type of the company has the name
+  'in_use', // a group holds sub-groups or ledgers, or a ledger has voucher lines
+  'seeded_row', // a built-in row cannot be deleted
+  'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
+  'family_rule', // a built-in ledger would leave its behaviour family
+  'cycle', // a group would sit under its own sub-group
+  'locked_period', // the date or the opening balances are inside the locked period
+  'before_books_beginning', // the date is before the company's books begin
+  'unbalanced', // fewer than two lines, or debits differ from credits
+  'posting_rule', // the voucher type's rule for cash and bank ledgers is broken
+  'voucher_state', // the voucher's status does not allow this change (cancelled, optional, numbered)
+  'idempotency_mismatch', // the idempotency key was used for a different voucher body
+] as const;
+export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
+
 const id = z.uuid().transform(value => value.toLowerCase());
 const clean = (value: string) => !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(value);
 const name = z.string().trim().min(1).max(120).refine(clean);
@@ -87,6 +111,14 @@ export type Ledger = {
   name: string; secondLanguageName: string | null; cashOrBank: boolean;
   opening: { amount: bigint; side: Side }; revision: number;
 };
+/**
+ * A group or ledger as the list and read routes return it: plus `inUse`, true when a delete would be refused because
+ * the group holds sub-groups or ledgers, or because voucher lines (also of cancelled or deleted vouchers) name the
+ * ledger. Built-in rows are refused on another ground: `systemKey` is set. Create and alter answers, and revision
+ * snapshots, are the plain master without `inUse`.
+ */
+export type GroupListItem = AccountGroup & { inUse: boolean };
+export type LedgerListItem = Ledger & { inUse: boolean };
 export type VoucherType = {
   id: string; kind: VoucherKind; systemKey: string | null; name: string; secondLanguageName: string | null;
   numberingSeries: string; revision: number;
@@ -118,5 +150,6 @@ export type TrialBalance = {
 
 export type Revision = {
   id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher'; entityId: string;
-  action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; at: string; before: unknown; after: unknown;
+  /** `actorName` is the user's display name, or null once that user no longer exists; never an email. */
+  action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; actorName: string | null; at: string; before: unknown; after: unknown;
 };

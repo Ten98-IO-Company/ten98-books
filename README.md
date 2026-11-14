@@ -5,7 +5,7 @@ Web accounting for GCC businesses on the Ten98 stack: double-entry books, invent
 - [Contributor rules](AGENTS.md)
 - [Decisions](docs/DECISIONS.md)
 - [Keyboard commands](docs/KEYBOARD.md)
-- [Ledger core](docs/LEDGER.md): data model, posting rules, numbering and the API of the double-entry books (server only so far)
+- [Ledger core](docs/LEDGER.md): data model, posting rules, numbering and the API of the double-entry books (the API the masters screens use)
 
 `main` is production, `dev` is staging; feature branches start from `dev`.
 

@@ -53,6 +53,7 @@ export async function handleApi(request: Request): Promise<Response> {
     }
     return json({ error: 'Route unavailable.' }, 404);
   } catch (error) {
+    if (error instanceof FoundationError && error.code !== undefined) return json({ error: error.message, code: error.code }, error.status);
     if (error instanceof FoundationError || error instanceof InputError) return json({ error: error.message }, error.status);
     if (error instanceof z.ZodError) return json({ error: 'Check the submitted fields and try again.' }, 400);
     if (error instanceof DatabaseRoleError) { console.error(error.message); return json({ error: 'The installation is not ready. Check the database roles.' }, 503); }

@@ -5,8 +5,7 @@ import {
   revisionInput, voucherAlterInput, voucherCreateInput, voucherListQuery,
   type Side, type Voucher, type VoucherKind, type VoucherLine, type VoucherPage, type VoucherSummary, type VoucherType,
 } from '../../lib/ledger.ts';
-import { FoundationError } from '../auth.ts';
-import { conflict, parseAmount, parseInput, type LedgerContext } from './context.ts';
+import { conflict, ledgerError, parseAmount, parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql, missingAs, readVoucherType } from './masters.ts';
 import { logRevision } from './revisions.ts';
 
@@ -17,7 +16,7 @@ import { logRevision } from './revisions.ts';
  * counter last.
  */
 
-const voucherNotFound = new FoundationError(404, 'Voucher not found.');
+const voucherNotFound = ledgerError(404, 'Voucher not found.', 'not_found');
 
 const voucherFields = (path: readonly PropertyKey[]): string => {
   const [first, index, inner] = path;
@@ -50,7 +49,7 @@ const cursorShape = /^(\d{4}-\d{2}-\d{2})~([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 const encodeCursor = (voucher: VoucherSummary) => Buffer.from(`${voucher.date}~${voucher.id}`).toString('base64url');
 function decodeCursor(cursor: string): [date: string, id: string] {
   const match = cursorShape.exec(Buffer.from(cursor, 'base64url').toString());
-  if (!match || !isCalendarDate(match[1])) throw new FoundationError(400, 'Check the page cursor and try again.');
+  if (!match || !isCalendarDate(match[1])) throw ledgerError(400, 'Check the page cursor and try again.', 'validation');
   return [match[1], match[2]];
 }
 
@@ -72,8 +71,8 @@ export async function listVouchers(context: LedgerContext, value: unknown): Prom
 /** D-09: nothing is created, altered, cancelled or deleted before the books begin or on or before the locked-through date. */
 function assertDateOpen(context: LedgerContext, date: string): void {
   const { booksBeginning, lockedThrough } = context.company;
-  if (date < booksBeginning) throw new FoundationError(400, `The date ${date} is before the books begin on ${booksBeginning}.`);
-  if (lockedThrough !== null && date <= lockedThrough) throw new FoundationError(409, `The books are locked through ${lockedThrough}. Choose a later date or ask an owner to unlock the period.`);
+  if (date < booksBeginning) throw ledgerError(400, `The date ${date} is before the books begin on ${booksBeginning}.`, 'before_books_beginning');
+  if (lockedThrough !== null && date <= lockedThrough) throw ledgerError(409, `The books are locked through ${lockedThrough}. Choose a later date or ask an owner to unlock the period.`, 'locked_period');
 }
 
 type PreparedLine = { lineNo: number; ledgerId: string; side: Side; amount: bigint };
@@ -88,18 +87,18 @@ type LineInput = { ledgerId: string; side: Side; amount: string };
 async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { date: string; lines: LineInput[] }): Promise<PreparedLine[]> {
   const { client, company } = context;
   assertDateOpen(context, body.date);
-  if (body.lines.length < 2) throw new FoundationError(400, 'A voucher needs at least two lines.');
+  if (body.lines.length < 2) throw ledgerError(400, 'A voucher needs at least two lines.', 'unbalanced');
   const lines = body.lines.map((line, index): PreparedLine => {
     const amount = parseAmount(line.amount, company.exponent, `The amount on line ${index + 1}`);
-    if (amount <= 0n) throw new FoundationError(400, `The amount on line ${index + 1} must be more than zero.`);
+    if (amount <= 0n) throw ledgerError(400, `The amount on line ${index + 1} must be more than zero.`, 'validation');
     return { lineNo: index + 1, ledgerId: line.ledgerId, side: line.side, amount };
   });
   let debit = 0n, credit = 0n;
   for (const line of lines) if (line.side === 'Dr') debit = addMoney(debit, line.amount); else credit = addMoney(credit, line.amount);
   try { assertMoneyInRange(debit); assertMoneyInRange(credit); }
-  catch { throw new FoundationError(400, 'The voucher total is too large.'); }
+  catch { throw ledgerError(400, 'The voucher total is too large.', 'validation'); }
   if (compareMoney(debit, credit) !== 0) {
-    throw new FoundationError(400, `Debits (${formatMoney(debit, company.exponent)}) and credits (${formatMoney(credit, company.exponent)}) must be equal.`);
+    throw ledgerError(400, `Debits (${formatMoney(debit, company.exponent)}) and credits (${formatMoney(credit, company.exponent)}) must be equal.`, 'unbalanced');
   }
 
   // Key-share the ledgers in id order before anything else locks them: a concurrent nature change locks the same rows
@@ -112,10 +111,10 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
      WHERE l.company_id = $1 AND l.id = ANY($2::uuid[])`, [company.companyId, ledgerIds]);
   const cashBank = new Map(rows.map(row => [row.id, row.cash_bank]));
   const missing = lines.find(line => !cashBank.has(line.ledgerId));
-  if (missing) throw new FoundationError(400, `The ledger on line ${missing.lineNo} was not found in this company.`);
+  if (missing) throw ledgerError(400, `The ledger on line ${missing.lineNo} was not found in this company.`, 'not_found');
 
   const isCash = (line: PreparedLine) => cashBank.get(line.ledgerId) === true;
-  const refuse = (message: string) => { throw new FoundationError(400, message); };
+  const refuse = (message: string) => { throw ledgerError(400, message, 'posting_rule'); };
   const first = (match: (line: PreparedLine) => boolean) => lines.find(match)?.lineNo;
   if (kind === 'contra') {
     const other = first(line => !isCash(line));
@@ -172,10 +171,10 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`voucher:${company.companyId}:${idempotencyKey}`]);
   const prior = await client.query<{ id: string; request_hash: string }>('SELECT id, request_hash FROM voucher WHERE company_id = $1 AND idempotency_key = $2', [company.companyId, idempotencyKey]);
   if (prior.rows[0]) {
-    if (prior.rows[0].request_hash !== hash) throw new FoundationError(409, 'This idempotency key was already used for a different voucher. Send a new key for a new voucher.');
+    if (prior.rows[0].request_hash !== hash) throw ledgerError(409, 'This idempotency key was already used for a different voucher. Send a new key for a new voucher.', 'idempotency_mismatch');
     return { voucher: await readVoucher(context, prior.rows[0].id), replayed: true };
   }
-  const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(new FoundationError(400, 'The voucher type was not found.')));
+  const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found')));
   const lines = await prepareLines(context, type.kind, body);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO voucher (company_id, voucher_type_id, series, date, narration, status, post_dated, idempotency_key, request_hash, created_by)
@@ -206,8 +205,8 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   const { client, company } = context;
   const input = parseInput(voucherAlterInput, value, voucherFields);
   const before = await changeable(context, voucherId, input.revision);
-  if (before.status === 'cancelled') throw new FoundationError(409, 'A cancelled voucher cannot be altered.');
-  if (before.status !== 'optional' && input.status === 'optional') throw new FoundationError(409, 'A numbered voucher cannot become optional. Cancel or delete it instead.');
+  if (before.status === 'cancelled') throw ledgerError(409, 'A cancelled voucher cannot be altered.', 'voucher_state');
+  if (before.status !== 'optional' && input.status === 'optional') throw ledgerError(409, 'A numbered voucher cannot become optional. Cancel or delete it instead.', 'voucher_state');
   assertDateOpen(context, before.date);
   const lines = await prepareLines(context, before.kind, input);
   await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
@@ -225,8 +224,8 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
 export async function cancelVoucher(context: LedgerContext, voucherId: string, value: unknown): Promise<Voucher> {
   const input = parseInput(revisionInput, value, voucherFields);
   const before = await changeable(context, voucherId, input.revision);
-  if (before.status === 'cancelled') throw new FoundationError(409, 'This voucher is already cancelled.');
-  if (before.status === 'optional') throw new FoundationError(409, 'An optional voucher has no number to keep. Delete it instead.');
+  if (before.status === 'cancelled') throw ledgerError(409, 'This voucher is already cancelled.', 'voucher_state');
+  if (before.status === 'optional') throw ledgerError(409, 'An optional voucher has no number to keep. Delete it instead.', 'voucher_state');
   assertDateOpen(context, before.date);
   await context.client.query(`UPDATE voucher SET status = 'cancelled', revision = revision + 1, updated_at = now() WHERE company_id = $1 AND id = $2`, [context.company.companyId, voucherId]);
   const after = await readVoucher(context, voucherId);
