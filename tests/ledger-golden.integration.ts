@@ -7,13 +7,10 @@ import { trialBalance } from '../src/server/ledger/reports.ts';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import type { TrialBalanceRow } from '../src/lib/ledger.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
+import { goldenMasters, goldenVouchers, postGoldenVouchers } from './helpers/golden.ts';
 import { addLedger, chart, createCompany, inCompany, invite, post, rowCount, setupOwner, voucherBody, type Chart, type Member } from './helpers/ledger.ts';
 
-/**
- * Golden fixture: a small trading company's first five weeks, 18 vouchers across the eight voucher types, with opening
- * balances. The expected figures are the accounting outcome accountants expect from this set of entries; the ledger
- * names, narrations and company are this project's own.
- */
+/** The ledger's own checks of the golden fixture (tests/helpers/golden.ts) and of the read model's tenancy. */
 let database: TestDatabase;
 let owner: Member & { workspaceId: string };
 let companyId = '';
@@ -24,46 +21,11 @@ before(async () => {
   database = await freshDatabase('ledger_golden');
   owner = await setupOwner();
   companyId = await createCompany(owner.browser, owner.workspaceId, { name: 'Golden Trading' });
-  books = await chart(owner.browser, companyId);
-  const b = owner.browser;
-  const promotionCosts = (await b.call(`/api/companies/${companyId}/groups`, { name: 'Promotion Costs', parentId: books.group('indirect_expenses') })).body.group.id;
-  await addLedger(b, companyId, 'Harbour Bank', books.group('bank_accounts'), { amount: '10000', side: 'Dr' });
-  await addLedger(b, companyId, 'Customer North', books.group('receivables'), { amount: '2000', side: 'Dr' });
-  await addLedger(b, companyId, 'Supplier South', books.group('payables'));
-  await addLedger(b, companyId, "Owners' Capital", books.group('capital'), { amount: '12000', side: 'Cr' });
-  await addLedger(b, companyId, 'Equipment', books.group('fixed_assets'));
-  await addLedger(b, companyId, 'Output Tax', books.group('duties_taxes'));
-  await addLedger(b, companyId, 'Input Tax', books.group('duties_taxes'));
-  await addLedger(b, companyId, 'Trade Sales', books.group('sales'));
-  await addLedger(b, companyId, 'Trade Purchases', books.group('purchases'));
-  await addLedger(b, companyId, 'Premises Rent', books.group('indirect_expenses'));
-  await addLedger(b, companyId, 'Wages', books.group('indirect_expenses'));
-  await addLedger(b, companyId, 'Promotion', promotionCosts);
-  books = await chart(b, companyId);
+  books = await goldenMasters(owner.browser, companyId);
 });
 after(async () => { await database?.drop(); });
 
 const L = (name: string) => books.ledger(name);
-const golden: [kind: string, date: string, lines: [string, 'Dr' | 'Cr', string][]][] = [
-  ['payment', '2026-01-01', [['Premises Rent', 'Dr', '4000'], ['Harbour Bank', 'Cr', '4000']]],
-  ['receipt', '2026-01-02', [["Owners' Capital", 'Cr', '20000'], ['Cash', 'Dr', '20000']]],
-  ['contra', '2026-01-04', [['Cash', 'Cr', '5000'], ['Harbour Bank', 'Dr', '5000']]],
-  ['payment', '2026-01-06', [['Wages', 'Dr', '3000'], ['Cash', 'Cr', '3000']]],
-  ['journal', '2026-01-07', [['Promotion', 'Dr', '500'], ['Supplier South', 'Cr', '500']]],
-  ['purchase', '2026-01-08', [['Supplier South', 'Cr', '6300'], ['Trade Purchases', 'Dr', '6000'], ['Input Tax', 'Dr', '300']]],
-  ['sales', '2026-01-10', [['Customer North', 'Dr', '9450'], ['Trade Sales', 'Cr', '9000'], ['Output Tax', 'Cr', '450']]],
-  ['receipt', '2026-01-12', [['Customer North', 'Cr', '2000'], ['Harbour Bank', 'Dr', '2000']]],
-  ['payment', '2026-01-16', [['Supplier South', 'Dr', '6300'], ['Harbour Bank', 'Cr', '6300']]],
-  ['purchase', '2026-01-18', [['Supplier South', 'Cr', '2100'], ['Trade Purchases', 'Dr', '2000'], ['Input Tax', 'Dr', '100']]],
-  ['sales', '2026-01-20', [['Customer North', 'Dr', '3150'], ['Trade Sales', 'Cr', '3000'], ['Output Tax', 'Cr', '150']]],
-  ['credit_note', '2026-01-22', [['Customer North', 'Cr', '1050'], ['Trade Sales', 'Dr', '1000'], ['Output Tax', 'Dr', '50']]],
-  ['debit_note', '2026-01-23', [['Supplier South', 'Dr', '525'], ['Trade Purchases', 'Cr', '500'], ['Input Tax', 'Cr', '25']]],
-  ['contra', '2026-01-25', [['Harbour Bank', 'Cr', '1000'], ['Cash', 'Dr', '1000']]],
-  ['journal', '2026-01-28', [['Equipment', 'Dr', '8000'], ['Supplier South', 'Cr', '8000']]],
-  ['receipt', '2026-01-30', [['Customer North', 'Cr', '9450'], ['Harbour Bank', 'Dr', '9450']]],
-  ['payment', '2026-01-31', [['Promotion', 'Dr', '400'], ['Cash', 'Cr', '400']]],
-  ['payment', '2026-02-03', [['Wages', 'Dr', '3000'], ['Cash', 'Cr', '3000']]],
-];
 
 /** AED amounts of this fixture are whole, so they read without the decimal places. */
 const money = (amount: bigint) => formatMoney(amount, 2).replace(/.00$/, '');
@@ -71,10 +33,8 @@ const sum = (rows: TrialBalanceRow[], pick: (row: TrialBalanceRow) => bigint) =>
 
 test('the golden fixture posts 18 vouchers numbered per type in entry order', async () => {
   const numbers: string[] = [];
-  for (const [kind, date, lines] of golden) {
-    const voucher = await post(owner.browser, companyId, books.type(kind), date, lines.map(([name, side, amount]) => [L(name), side, amount]), { narration: `Golden entry ${numbers.length + 1}` });
-    numbers.push(`${kind} ${voucher.number}`);
-  }
+  const posted = await postGoldenVouchers(owner.browser, companyId, books);
+  posted.forEach((voucher, index) => numbers.push(`${goldenVouchers[index][0]} ${voucher.number}`));
   assert.deepEqual(numbers, ['payment 1', 'receipt 1', 'contra 1', 'payment 2', 'journal 1', 'purchase 1', 'sales 1', 'receipt 2', 'payment 3',
     'purchase 2', 'sales 2', 'credit_note 1', 'debit_note 1', 'contra 2', 'journal 2', 'receipt 3', 'payment 4', 'payment 5']);
 });

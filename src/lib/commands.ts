@@ -8,8 +8,9 @@
  * - company-home: the company menu, only while it has focus, so its single letters never fire elsewhere (WCAG 2.1.4).
  * - list: a list or register screen.
  * - entry: a master or voucher entry screen.
+ * - report: a report screen (statements, registers, drill-down levels).
  */
-export const commandContexts = ['global', 'company-home', 'list', 'entry'] as const
+export const commandContexts = ['global', 'company-home', 'list', 'entry', 'report'] as const
 export type CommandContext = (typeof commandContexts)[number]
 
 export const contextTitles: Record<CommandContext, string> = {
@@ -17,6 +18,7 @@ export const contextTitles: Record<CommandContext, string> = {
   'company-home': 'Company menu',
   list: 'Lists',
   entry: 'Entry screens',
+  report: 'Reports',
 }
 
 export interface CommandDefinition {
@@ -60,6 +62,22 @@ export const commands = {
   'entry.voucher.journal': { title: 'Switch to a journal voucher', context: 'entry' },
   'entry.voucher.sales': { title: 'Switch to a sales voucher', context: 'entry' },
   'entry.voucher.purchase': { title: 'Switch to a purchase voucher', context: 'entry' },
+
+  // Reports (feat/reports). Escape goes back one report level through nav.back (KeyboardShell's useBackOverride).
+  'report.next': { title: 'Highlight the next line', context: 'report', bar: false },
+  'report.previous': { title: 'Highlight the previous line', context: 'report', bar: false },
+  'report.page-down': { title: 'Move one page down', context: 'report', bar: false },
+  'report.page-up': { title: 'Move one page up', context: 'report', bar: false },
+  'report.first': { title: 'Highlight the first line', context: 'report', bar: false },
+  'report.last': { title: 'Highlight the last line', context: 'report', bar: false },
+  'report.drill': { title: 'Open the highlighted line', context: 'report' },
+  'report.period': { title: 'Change the period', context: 'report' },
+  'report.detail': { title: 'Show more or less detail', context: 'report' },
+  'report.zero-lines': { title: 'Show or hide lines without amounts', context: 'report' },
+  'report.export': { title: 'Export as CSV', context: 'report' },
+  'report.print': { title: 'Print', context: 'report' },
+  'report.go-to': { title: 'Open another report', context: 'report' },
+  'report.open.group-summary': { title: 'Group summary', context: 'company-home', bar: false },
 } as const satisfies Record<string, CommandDefinition>
 
 export type CommandId = keyof typeof commands

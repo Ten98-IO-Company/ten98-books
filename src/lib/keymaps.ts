@@ -48,6 +48,17 @@ const shared = {
   'entry.cancel': 'Escape',
   'entry.next-field': 'Enter',
   'entry.create-master': 'Alt+C',
+  // Reports (feat/reports): movement keys, Enter to drill down, and keys both keymaps share.
+  'report.next': 'ArrowDown',
+  'report.previous': 'ArrowUp',
+  'report.page-down': 'PageDown',
+  'report.page-up': 'PageUp',
+  'report.first': 'Home',
+  'report.last': 'End',
+  'report.drill': 'Enter',
+  'report.zero-lines': 'Alt+N',
+  'report.go-to': 'Alt+G',
+  'report.open.group-summary': 'G',
 } as const
 
 export const keymaps: Record<KeymapName, AppKeymap> = {
@@ -64,6 +75,11 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'entry.voucher.journal': 'F7',
     'entry.voucher.sales': 'F8',
     'entry.voucher.purchase': 'F9',
+    // Reports: the conventional period, detail, export and print keys.
+    'report.period': 'F2',
+    'report.detail': 'Alt+F5',
+    'report.export': 'Alt+E',
+    'report.print': 'Alt+P',
   },
   'web-safe': {
     ...shared,
@@ -79,6 +95,11 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'entry.voucher.journal': 'Alt+J',
     'entry.voucher.sales': 'Alt+L',
     'entry.voucher.purchase': 'Alt+U',
+    // Reports: Period, More detail, expOrt, prInt.
+    'report.period': 'Alt+P',
+    'report.detail': 'Alt+M',
+    'report.export': 'Alt+O',
+    'report.print': 'Alt+I',
   },
 }
 
