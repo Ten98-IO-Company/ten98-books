@@ -1,5 +1,5 @@
 import { ShortcutProvider, useCommand } from '@ten98/ui'
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { commandOf, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
 import { defaultKeymap, keymaps, type KeymapName } from '../lib/keymaps'
@@ -20,6 +20,8 @@ export type KeyboardState = {
 }
 
 const KeyboardContext = createContext<KeyboardState | null>(null)
+/** Sets or clears the page's own target for nav.back (useBackOverride). */
+const BackOverrideContext = createContext<((target: { run: () => void } | null) => void) | null>(null)
 
 export function useKeyboard(): KeyboardState {
   const state = useContext(KeyboardContext)
@@ -31,6 +33,22 @@ export function useKeyboard(): KeyboardState {
 export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false } = {}) {
   const command = commandOf(id)
   useCommand({ id, label: command.title, group: contextTitles[command.context], run, enabled, repeat })
+}
+
+/**
+ * Makes nav.back (Escape) run `run` instead of the shell's default (the company menu) while the calling component is
+ * mounted and `run` is defined: report screens go back one drill-down level. The Escape guards still apply.
+ */
+export function useBackOverride(run: (() => void) | undefined) {
+  const set = useContext(BackOverrideContext)
+  const latest = useRef(run)
+  latest.current = run
+  const defined = run !== undefined
+  useEffect(() => {
+    if (!set || !defined) return
+    set({ run: () => latest.current?.() })
+    return () => set(null)
+  }, [set, defined])
 }
 
 /**
@@ -50,6 +68,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [backOverride, setBackOverride] = useState<{ run: () => void } | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -73,13 +92,13 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const keymap = setting?.keymap ?? defaultKeymap
   const state = useMemo<KeyboardState>(() => ({ keymap, chosen: setting?.chosen ?? null, saving, error, choose, openHelp }), [keymap, setting, saving, error, choose, openHelp])
 
-  return <KeyboardContext value={state}>
+  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
-      <GlobalCommands back={back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} />
+      <GlobalCommands back={backOverride?.run ?? back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} />
       {children}
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
     </ShortcutProvider>
-  </KeyboardContext>
+  </BackOverrideContext></KeyboardContext>
 }
 
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
