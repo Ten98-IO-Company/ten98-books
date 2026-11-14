@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { baseCurrencies, companyCreateInput, type BaseCurrency, type Company } from '../lib/company.ts';
 import { FoundationError } from './auth.ts';
 import { getDatabase } from './db.ts';
+import { seedCompanyLedger } from './ledger/seed.ts';
 import { withCompany } from './tenancy.ts';
 
 const workspaceNotFound = 'Workspace not found or unavailable.';
@@ -55,6 +56,7 @@ export async function createCompany(userId: string, workspaceId: string, value: 
         `INSERT INTO company(company_id, second_language_name, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [id, input.secondLanguageName, currency, baseCurrencies[currency].minorUnits, input.financialYearStart.month, input.financialYearStart.day, input.booksBeginning, input.timeZone]);
+      await seedCompanyLedger(scoped, id);
       return readCompany(scoped, id);
     }, client);
     await client.query('COMMIT');

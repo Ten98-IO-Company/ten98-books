@@ -78,11 +78,20 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 ## D-10 Default chart of accounts and voucher types
 
 - **Decision (L2, 2026-11-14).** A new company is seeded with a default chart: 15 primary groups, each with a nature (asset, liability, income or expense), 13 sub-groups, and two ledgers (cash, and the profit and loss account), plus the eight accounting voucher types of M1 (contra, payment, receipt, journal, sales, purchase, credit note, debit note). The hierarchy and the accounting behaviour follow what accountants from desktop software expect; the names are ordinary accounting terms in our own wording. Every seeded row carries a stable `system_key`; behaviour (cash and bank handling, party ledgers, tax ledgers, stock, the profit and loss transfer, voucher-type rules) hangs on the key, never on the name, so users can rename and translate freely and seeded rows cannot be deleted. One seeding routine serves company creation and the backfill of existing companies.
+- **Seeded behaviour families (added 2026-11-14 after independent review).** Cash and bank behaviour comes from the seeded cash and bank groups by `system_key` ancestry. A seeded ledger moves only inside its own family: the cash ledger stays under the cash and bank groups, and the profit and loss account does not move. A group's nature cannot change while its sub-tree holds a seeded group or ledger, a ledger with posted lines, or a non-zero opening balance; reclassifying is done by moving user ledgers between groups, which stays allowed and is logged. The seeded-row rules are enforced in the database as well as the application; the posted-ledger rule is enforced in the application.
 - **Ledger opening balances** are entered per ledger as of the books-beginning date and may be out of balance while a company is being set up; the trial balance shows the difference instead of blocking entry.
 - **Rationale.** Later features (bank reconciliation, receivables, tax, stock valuation, import) need to recognise groups reliably; names are user data. Functional categories are not expression (D-06), wording is.
 - **Rejected.** Matching on names. An empty chart. A country-specific statutory chart in M1.
 - **Reversal trigger.** Interview evidence that GCC accountants expect a statutory chart by default.
 - **Confidence.** Medium-high. Reviewed with the ledger core change that implements it.
+
+## D-11 Task order and key paths are kept; wording and design are ours
+
+- **Decision (L2, 2026-11-14).** The company menu keeps the task grouping and order that keyboard-driven desktop accountants navigate by habit (masters, then transactions, then reports), and the `classic` keymap keeps the conventional function-key and chord assignments for voucher types and for accept, delete and create-in-place, wherever a browser tab can deliver them. These are the steps and key paths D-01 sets out to preserve. Labels, helper text, layout, visual design and icons are written and designed here (D-06), and the `web-safe` keymap is our own.
+- **Rationale.** The product's purpose is that an accountant's existing habits keep working; an independent reviewer flagged the similarity and the coordinator kept it on that ground. Order and key assignments are how the software is operated, not how it is expressed.
+- **Rejected.** Reordering the menu or reassigning classic keys only to look different, which would break the habit the product exists to serve.
+- **Reversal trigger.** Written advice from counsel, or the owner's instruction.
+- **Confidence.** Medium (not legal advice).
 
 ## Open owner decisions (L3)
 

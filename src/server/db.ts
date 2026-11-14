@@ -46,7 +46,7 @@ export async function closeDatabase() {
   if (database) await database.pool.end();
 }
 
-export const migrationFiles = ['0001_foundation.sql', '0002_company.sql', '0003_user_keymap.sql'] as const;
+export const migrationFiles = ['0001_foundation.sql', '0002_company.sql', '0003_user_keymap.sql', '0004_ledger.sql'] as const;
 /**
  * The one PostgreSQL advisory lock (two-integer form, scoped to this database) that serialises every migration:
  * the ledger takes it per transaction, and startup migration holds it at session level while it waits and applies.
