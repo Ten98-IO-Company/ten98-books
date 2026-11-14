@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseMoney, type MoneyExponent } from '@ten98/runtime';
+import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
 import { daysInMonth, isCalendarDate } from '../../lib/company.ts';
 import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
@@ -60,7 +60,7 @@ const ledgersFile = z.array(z.strictObject({
   opening: z.strictObject({ amount, side }).optional(), extras: extras.optional(),
 }));
 const vouchersFile = z.array(z.strictObject({
-  key: slug, type: z.string().min(1), date, status: z.enum(['regular', 'cancelled', 'optional']), postDated: z.boolean(),
+  key: slug, type: slug, date, status: z.enum(['regular', 'cancelled', 'optional']), postDated: z.boolean(),
   narration: z.string().max(2000).optional(),
   lines: z.array(z.strictObject({ ledger: z.string().min(1), side, amount, extras: extras.optional() })),
   inventory: z.array(z.unknown()).optional(), extras: extras.optional(),
@@ -74,9 +74,26 @@ const expectedFile = z.looseObject({
     totalDebit: amount, totalCredit: amount,
     ledgers: z.record(z.string(), z.strictObject({ closing: amount, side })),
   }).optional(),
-  profitAndLoss: z.looseObject({ grossProfit: signedAmount, netProfit: signedAmount }).optional(),
-  balanceSheet: z.looseObject({ total: signedAmount }).optional(),
+  profitAndLoss: z.looseObject({
+    grossProfit: signedAmount, netProfit: signedAmount,
+    grossProfitExcludingStock: signedAmount.optional(), netProfitExcludingStock: signedAmount.optional(),
+  }).optional(),
+  balanceSheet: z.looseObject({ total: signedAmount, closingStockInAssets: amount.optional() }).optional(),
 });
+/**
+ * items.json (units, locations, stock groups, items with opening stock per location): ten98-books does not model stock
+ * yet, so only its shape and references are checked; every other field is kept as it is.
+ */
+const itemsFile = z.looseObject({
+  units: z.array(z.looseObject({ key: slug, name: text })).optional(),
+  locations: z.array(z.looseObject({ key: slug, name: text })).optional(),
+  stockGroups: z.array(z.looseObject({ key: slug, name: text })).optional(),
+  items: z.array(z.looseObject({
+    key: slug, name: text, group: z.string().min(1).optional(), unit: z.string().min(1).optional(),
+    opening: z.array(z.looseObject({ location: z.string().min(1), quantity: amount, rate: amount })).optional(),
+  })).optional(),
+});
+export type ItemsFile = z.infer<typeof itemsFile>;
 
 export type CompanyFile = z.infer<typeof companyFile>;
 export type GroupEntry = z.infer<typeof groupsFile>[number];
@@ -91,6 +108,27 @@ export type Dataset = {
 };
 /** The parsed JSON of each file; `groups` may be absent (no groups beyond the seeded chart). */
 export type RawDataset = { company: unknown; groups?: unknown; ledgers: unknown; vouchers: unknown; expected: unknown; extraFiles?: Record<string, unknown> };
+
+/**
+ * What the opening stock in items.json is worth in minor units: quantity times rate for every item and location, each
+ * rounded half up. Opening stock is not a ledger balance, so ledger openings alone leave a difference of this amount.
+ */
+export function openingStockValue(items: ItemsFile | undefined, exponent: MoneyExponent): bigint {
+  let total = 0n;
+  for (const item of items?.items ?? []) for (const line of item.opening ?? []) total += multiplyMoney(toMinor(line.rate, exponent), line.quantity, 'half-up');
+  return total;
+}
+
+/**
+ * What ten98-books can do with a voucher: `post` it through the ledger module, skip it because its type is not one of the
+ * seeded eight (`unsupported-type`), or skip it because it has no lines to post (`no-entries`: a cancelled voucher or one
+ * with no accounting effect; a voucher needs two lines here, so it cannot be represented yet). Seeder and comparison
+ * share this so what is skipped is also what is left out of the figures compared.
+ */
+export function dispositionOf(voucher: VoucherEntry): 'post' | 'unsupported-type' | 'no-entries' {
+  if (!seededVoucherTypeKeys.includes(voucher.type)) return 'unsupported-type';
+  return voucher.lines.length === 0 ? 'no-entries' : 'post';
+}
 
 /** Minor units of a plain decimal string; refuses more decimal places than the currency has instead of rounding. */
 export function toMinor(value: string, exponent: MoneyExponent): bigint {
@@ -132,7 +170,9 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   const ledgers = structural(ledgersFile, raw.ledgers, `${label}/ledgers.json`, issues);
   const vouchers = structural(vouchersFile, raw.vouchers, `${label}/vouchers.json`, issues);
   const expected = structural(expectedFile, raw.expected, `${label}/expected.json`, issues);
-  if (!company || !groups || !ledgers || !vouchers || !expected) throw new DatasetError(issues);
+  const itemsRaw = raw.extraFiles?.['items.json'];
+  const items = itemsRaw === undefined ? undefined : structural(itemsFile, itemsRaw, `${label}/items.json`, issues);
+  if (!company || !groups || !ledgers || !vouchers || !expected || (itemsRaw !== undefined && !items)) throw new DatasetError(issues);
 
   const problem = (file: string, at: string, message: string) => issues.push(`${label}/${file}.json: ${at}${message}`);
   const exponent = company.minorUnits;
@@ -182,7 +222,9 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   duplicates('vouchers', 'voucher', vouchers.map(voucher => voucher.key));
   for (const voucher of vouchers) {
     const at = `voucher "${voucher.key}": `;
-    if (!seededVoucherTypeKeys.includes(voucher.type)) problem('vouchers', at, `type "${voucher.type}" is not a voucher type system key (${seededVoucherTypeKeys.join(', ')})`);
+    const unposted = voucher.status === 'cancelled' || voucher.extras?.noAccountingEffect === true;
+    if (voucher.lines.length === 0 && !unposted) problem('vouchers', at, 'a voucher without lines must be cancelled or carry extras.noAccountingEffect: true');
+    if (voucher.extras?.noAccountingEffect === true && voucher.lines.length > 0) problem('vouchers', at, 'a voucher marked extras.noAccountingEffect carries no lines');
     if (voucher.date < company.booksBeginning) problem('vouchers', at, `date ${voucher.date} is before the books begin on ${company.booksBeginning}`);
     let debit = 0n, credit = 0n;
     voucher.lines.forEach((line, index) => {
@@ -197,12 +239,37 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     if (voucher.status === 'regular' && debit !== credit) problem('vouchers', at, `a regular voucher must balance; debits ${debit} and credits ${credit} (in minor units) differ`);
   }
 
+  // items.json: references, and the item and location of every inventory line when the file is present.
+  const itemKeys = new Set((items?.items ?? []).map(item => item.key));
+  if (items) {
+    duplicates('items', 'item', (items.items ?? []).map(item => item.key));
+    const locationKeys = new Set((items.locations ?? []).map(location => location.key));
+    const stockGroupKeys = new Set((items.stockGroups ?? []).map(group => group.key));
+    const units = new Set((items.units ?? []).flatMap(unit => [unit.key, unit.name]));
+    for (const item of items.items ?? []) {
+      const at = `item "${item.key}": `;
+      if (item.group !== undefined && !stockGroupKeys.has(item.group)) problem('items', at, `group "${item.group}" is not a stock group key`);
+      if (item.unit !== undefined && (items.units ?? []).length && !units.has(item.unit)) problem('items', at, `unit "${item.unit}" is not a unit key or name`);
+      for (const line of item.opening ?? []) {
+        if (!locationKeys.has(line.location)) problem('items', `${at}opening: `, `location "${line.location}" is not a location key`);
+        if ((line.rate.split('.')[1] ?? '').length > exponent) problem('items', `${at}opening: `, `rate "${line.rate}" has more than ${exponent} decimal places (the company's minor units)`);
+      }
+    }
+    for (const voucher of vouchers) for (const [index, line] of (voucher.inventory ?? []).entries()) {
+      const detail = line as { item?: unknown; location?: unknown } | null;
+      const at = `voucher "${voucher.key}": inventory[${index}]: `;
+      if (typeof detail?.item === 'string' && !itemKeys.has(detail.item)) problem('vouchers', at, `item "${detail.item}" is not an item key in items.json`);
+      if (typeof detail?.location === 'string' && !locationKeys.has(detail.location)) problem('vouchers', at, `location "${detail.location}" is not a location key in items.json`);
+    }
+  }
+
   // Expected figures.
   const period = expected.period;
   if (period.from > period.to) problem('expected', 'period: ', 'from must not be after to');
   const types = expected.vouchersByType;
   if (types) {
-    for (const type of Object.keys(types)) if (!seededVoucherTypeKeys.includes(type)) problem('expected', `vouchersByType "${type}": `, 'not a voucher type system key');
+    const known = new Set([...seededVoucherTypeKeys, ...vouchers.map(voucher => voucher.type)]);
+    for (const type of Object.keys(types)) if (!known.has(type)) problem('expected', `vouchersByType "${type}": `, 'neither a seeded voucher type nor a type used in vouchers.json');
     const total = Object.values(types).reduce((sum, value) => sum + value, 0);
     if (expected.voucherCount !== undefined && total !== expected.voucherCount) problem('expected', 'vouchersByType: ', `the counts add up to ${total} but voucherCount is ${expected.voucherCount}`);
   }
@@ -215,8 +282,14 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
       fits('expected', `trialBalance.ledgers "${key}": `, figure.closing);
     }
   }
-  if (expected.profitAndLoss) for (const name of ['grossProfit', 'netProfit'] as const) fits('expected', `profitAndLoss.${name}: `, expected.profitAndLoss[name]);
-  if (expected.balanceSheet) fits('expected', 'balanceSheet.total: ', expected.balanceSheet.total);
+  if (expected.profitAndLoss) for (const name of ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'] as const) {
+    const value = expected.profitAndLoss[name];
+    if (value !== undefined) fits('expected', `profitAndLoss.${name}: `, value);
+  }
+  if (expected.balanceSheet) {
+    fits('expected', 'balanceSheet.total: ', expected.balanceSheet.total);
+    if (expected.balanceSheet.closingStockInAssets !== undefined) fits('expected', 'balanceSheet.closingStockInAssets: ', expected.balanceSheet.closingStockInAssets);
+  }
 
   if (issues.length) throw new DatasetError(issues);
   return { slug: company.slug, company, groups, ledgers, vouchers, expected, extraFiles: raw.extraFiles ?? {} };

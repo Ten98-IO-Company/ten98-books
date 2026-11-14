@@ -1,0 +1,422 @@
+[
+  {
+    "key": "cash",
+    "name": "Cash",
+    "standard": "cash"
+  },
+  {
+    "key": "profit-and-loss",
+    "name": "Profit and Loss",
+    "standard": "profit_and_loss"
+  },
+  {
+    "key": "al-reem-contracting-llc",
+    "name": "Al Reem Contracting LLC",
+    "group": "receivables",
+    "opening": {
+      "amount": "12600.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-AR-01",
+          "date": "2025-12-10",
+          "amount": "12600.00",
+          "side": "Dr"
+        }
+      ],
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "bluewave-interiors-fze",
+    "name": "Bluewave Interiors FZE",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "falcon-facilities-mgmt",
+    "name": "Falcon Facilities Mgmt",
+    "group": "receivables",
+    "opening": {
+      "amount": "8400.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-FF-01",
+          "date": "2025-12-18",
+          "amount": "8400.00",
+          "side": "Dr"
+        }
+      ],
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "marina-lighting-gallery",
+    "name": "Marina Lighting Gallery",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 15,
+      "billWise": true,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "desert-rose-hospitality",
+    "name": "Desert Rose Hospitality",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 60,
+      "billWise": true,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "skyline-developers-llc",
+    "name": "Skyline Developers LLC",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "noor-electrical-works",
+    "name": "Noor Electrical Works",
+    "group": "receivables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "lumina-industries-co-ltd",
+    "name": "Lumina Industries Co Ltd",
+    "group": "payables",
+    "opening": {
+      "amount": "25000.00",
+      "side": "Cr"
+    },
+    "extras": {
+      "creditPeriodDays": 60,
+      "billWise": true,
+      "openingBills": [
+        {
+          "ref": "OB-LI-01",
+          "date": "2025-11-25",
+          "amount": "25000.00",
+          "side": "Cr"
+        }
+      ],
+      "address": [],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "sharjah-cables-factory",
+    "name": "Sharjah Cables Factory",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "gulf-switchgear-trading",
+    "name": "Gulf Switchgear Trading",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 45,
+      "billWise": true,
+      "address": [],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "techno-components-fzco",
+    "name": "Techno Components FZCO",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 30,
+      "billWise": true,
+      "address": [],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "prime-packaging-llc",
+    "name": "Prime Packaging LLC",
+    "group": "payables",
+    "extras": {
+      "creditPeriodDays": 15,
+      "billWise": true,
+      "address": [],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "gulf-union-bank-current",
+    "name": "Gulf Union Bank - Current",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "450000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "AE070331234567890123456",
+        "bankName": "Gulf Union Bank (UAE)"
+      }
+    }
+  },
+  {
+    "key": "al-noor-islamic-bank-savings",
+    "name": "Al Noor Islamic Bank - Savings",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "80000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "AE460351111222233334444",
+        "bankName": "Al Noor Islamic Bank (UAE)"
+      }
+    }
+  },
+  {
+    "key": "petty-cash-showroom",
+    "name": "Petty Cash - Showroom",
+    "group": "cash_in_hand",
+    "opening": {
+      "amount": "3000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "warehouse-equipment",
+    "name": "Warehouse Equipment",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "90000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "delivery-vehicles",
+    "name": "Delivery Vehicles",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "120000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "office-furniture",
+    "name": "Office Furniture",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "25000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "accumulated-depreciation",
+    "name": "Accumulated Depreciation",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "35000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "term-loan-gulf-union-bank",
+    "name": "Term Loan - Gulf Union Bank",
+    "group": "secured_loans",
+    "opening": {
+      "amount": "200000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "staff-gratuity-provision",
+    "name": "Staff Gratuity Provision",
+    "group": "provisions",
+    "opening": {
+      "amount": "12000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "sales-local",
+    "name": "Sales - Local",
+    "group": "sales"
+  },
+  {
+    "key": "sales-export",
+    "name": "Sales - Export",
+    "group": "sales"
+  },
+  {
+    "key": "purchases-local",
+    "name": "Purchases - Local",
+    "group": "purchases"
+  },
+  {
+    "key": "purchases-import",
+    "name": "Purchases - Import",
+    "group": "purchases"
+  },
+  {
+    "key": "freight-inward",
+    "name": "Freight Inward",
+    "group": "direct_expenses"
+  },
+  {
+    "key": "clearing-charges",
+    "name": "Clearing Charges",
+    "group": "direct_expenses"
+  },
+  {
+    "key": "discount-allowed",
+    "name": "Discount Allowed",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "office-rent",
+    "name": "Office Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "warehouse-rent",
+    "name": "Warehouse Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "staff-salaries",
+    "name": "Staff Salaries",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "electricity-water",
+    "name": "Electricity & Water",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "insurance-expense",
+    "name": "Insurance Expense",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "bank-charges",
+    "name": "Bank Charges",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "depreciation",
+    "name": "Depreciation",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "vehicle-running-costs",
+    "name": "Vehicle Running Costs",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "telephone-internet",
+    "name": "Telephone & Internet",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "advertising",
+    "name": "Advertising",
+    "group": "selling-expenses"
+  },
+  {
+    "key": "showroom-fit-out-costs",
+    "name": "Showroom Fit-out Costs",
+    "group": "selling-expenses"
+  },
+  {
+    "key": "interest-on-term-loan",
+    "name": "Interest on Term Loan",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "discount-received",
+    "name": "Discount Received",
+    "group": "indirect_income"
+  },
+  {
+    "key": "interest-income",
+    "name": "Interest Income",
+    "group": "indirect_income"
+  },
+  {
+    "key": "round-off",
+    "name": "Round Off",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "vat-output-5",
+    "name": "VAT Output 5%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others"
+    }
+  },
+  {
+    "key": "vat-input-5",
+    "name": "VAT Input 5%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others"
+    }
+  },
+  {
+    "key": "share-capital",
+    "name": "Share Capital",
+    "group": "capital",
+    "opening": {
+      "amount": "886440.00",
+      "side": "Cr"
+    }
+  }
+]

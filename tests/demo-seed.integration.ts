@@ -88,7 +88,7 @@ test('the comparison finds zero differences against expected.json', async () => 
   assert.equal(result.differences, 0, formatCompareResult(result).join('\n'));
   assert.deepEqual(result.notComparable, []);
   const labels = result.lines.map(line => line.label);
-  for (const label of ['Voucher count', 'Vouchers of type credit_note', 'Total debit', 'Total credit', 'Closing balance of Harbour Bank', 'Gross profit', 'Net profit', 'Total assets']) assert.ok(labels.includes(label), label);
+  for (const label of ['Voucher count (types ten98-books has)', 'Vouchers of type credit_note', 'Total debit', 'Total credit', 'Closing balance of Harbour Bank', 'Gross profit', 'Net profit', 'Total assets']) assert.ok(labels.includes(label), label);
   const net = result.lines.find(line => line.label === 'Net profit')!;
   assert.deepEqual([net.expected, net.actual, net.difference], ['-7400.00', '-7400.00', '0.00']);
   const printed: string[] = [];
@@ -206,9 +206,9 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
 
 test('the first error stops the seed and names the file and key; a changed voucher is not silently replaced', async () => {
   const user = await invite(owner.browser, owner.workspaceId, 'viewer');
-  const broken: Dataset = { ...starter, vouchers: starter.vouchers.map((voucher, index) => index === 3 ? { ...voucher, type: 'receipt' } : voucher) };
+  const broken: Dataset = { ...starter, vouchers: starter.vouchers.map((voucher, index) => index === 3 ? { ...voucher, date: '2025-12-31' } : voucher) };
   await assert.rejects(seedDataset(user.userId, broken), (error: unknown) => error instanceof DemoError
-    && error.message.startsWith('demo/starter-trading/vouchers.json: voucher "payment-02":') && /cash or bank/.test(error.message));
+    && error.message.startsWith('demo/starter-trading/vouchers.json: voucher "payment-02":') && /before the books begin/.test(error.message));
   const created = (await seedDataset(user.userId, { ...starter, vouchers: starter.vouchers.slice(0, 3) }));
   assert.equal(created.vouchers.created, 0, 'the three posted before the error stay and are present on resume');
   const edited: Dataset = { ...starter, vouchers: starter.vouchers.map((voucher, index) => index === 0 ? { ...voucher, narration: 'Changed after seeding' } : voucher) };
@@ -302,4 +302,96 @@ test('starter-trading equals the golden fixture field by field: groups, ledgers 
   const fixture = await describe(owner.userId, golden.companyId);
   assert.equal(fixture.vouchers.length, 18);
   assert.deepEqual(await describe(owner.userId, companyId), fixture, 'narrations differ by design; everything else must match');
+});
+
+/**
+ * A dataset with what the large companies add: opening stock, vouchers of a type ten98-books lacks, a voucher with no
+ * lines, a cancelled one without lines, a voucher the posting rules refuse, an optional one that holds a number in the
+ * dataset, and one dated after the compared period.
+ */
+const stockDataset = (): Dataset => parseDataset({
+  company: { slug: 'stock-check', name: 'Stock Check', country: 'AE', baseCurrency: 'AED', minorUnits: 2, financialYearStart: { month: 1, day: 1 }, booksBeginning: '2026-01-01', timeZone: 'Asia/Dubai', features: ['accounting', 'inventory'] },
+  ledgers: [
+    { key: 'cash', name: 'Cash', standard: 'cash' },
+    { key: 'capital', name: 'Capital', group: 'capital', opening: { amount: '1000.00', side: 'Cr' } },
+    { key: 'bank', name: 'Bank', group: 'bank_accounts', opening: { amount: '500.00', side: 'Dr' } },
+    { key: 'sales', name: 'Sales', group: 'sales' },
+    { key: 'purchases', name: 'Purchases', group: 'purchases' },
+    { key: 'promo', name: 'Promo', group: 'indirect_expenses' },
+  ],
+  vouchers: [
+    { key: 'receipt-1', type: 'receipt', date: '2026-01-02', status: 'regular', postDated: false, expectedNumber: 1,
+      lines: [{ ledger: 'cash', side: 'Dr', amount: '100.00' }, { ledger: 'sales', side: 'Cr', amount: '100.00' }], inventory: [{ item: 'lamp', location: 'main', quantity: '2' }] },
+    { key: 'order-1', type: 'sales_order', date: '2026-01-03', status: 'regular', postDated: false, expectedNumber: 1, lines: [], extras: { noAccountingEffect: true } },
+    { key: 'journal-1', type: 'journal', date: '2026-01-04', status: 'optional', postDated: false, expectedNumber: 1,
+      lines: [{ ledger: 'promo', side: 'Dr', amount: '10.00' }, { ledger: 'bank', side: 'Cr', amount: '10.00' }] },
+    { key: 'journal-2', type: 'journal', date: '2026-01-05', status: 'cancelled', postDated: false, expectedNumber: 2, lines: [], extras: { noAccountingEffect: true } },
+    { key: 'journal-3', type: 'journal', date: '2026-01-06', status: 'regular', postDated: false, expectedNumber: 3,
+      lines: [{ ledger: 'promo', side: 'Dr', amount: '20.00' }, { ledger: 'capital', side: 'Cr', amount: '20.00' }] },
+    { key: 'memo-1', type: 'memorandum', date: '2026-01-07', status: 'regular', postDated: false,
+      lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
+    { key: 'payment-1', type: 'payment', date: '2026-01-08', status: 'optional', postDated: false, expectedNumber: 1,
+      lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
+    { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 2,
+      lines: [{ ledger: 'cash', side: 'Dr', amount: '50.00' }, { ledger: 'sales', side: 'Cr', amount: '50.00' }] },
+  ],
+  expected: {
+    period: { from: '2026-01-01', to: '2026-12-31' }, voucherCount: 7, vouchersByType: { receipt: 1, sales_order: 1, journal: 3, memorandum: 1, payment: 1 },
+    trialBalance: {
+      totalDebit: '1120.00', totalCredit: '1120.00',
+      ledgers: { cash: { closing: '100.00', side: 'Dr' }, bank: { closing: '500.00', side: 'Dr' }, capital: { closing: '1020.00', side: 'Cr' }, sales: { closing: '100.00', side: 'Cr' }, promo: { closing: '20.00', side: 'Dr' } },
+    },
+    profitAndLoss: { grossProfit: '400.00', netProfit: '380.00', grossProfitExcludingStock: '100.00', netProfitExcludingStock: '80.00' },
+    balanceSheet: { total: '1500.00', closingStockInAssets: '500.00' }, stockSummary: { closingValue: '500.00' },
+  },
+  extraFiles: { 'items.json': {
+    units: [{ key: 'nos', name: 'Nos' }], locations: [{ key: 'main', name: 'Main' }], stockGroups: [{ key: 'lamps', name: 'Lamps' }],
+    items: [{ key: 'lamp', name: 'Lamp', group: 'lamps', unit: 'Nos', opening: [{ location: 'main', quantity: '10', rate: '50.00' }] }],
+  } },
+}, 'demo/stock-check');
+
+test('vouchers ten98-books cannot post are skipped, counted by type and never dropped silently', async () => {
+  const report = await seedDataset(owner.userId, stockDataset());
+  assert.deepEqual(report.vouchers, { created: 4, present: 0, cancelled: 0 }, 'receipt-1, journal-3, the optional payment and the 2027 receipt');
+  assert.deepEqual(report.unsupportedTypes, { sales_order: 1, memorandum: 1 });
+  assert.deepEqual(report.noEntries, { journal: 1 });
+  assert.equal(report.refused.length, 1);
+  assert.match(report.refused[0], /^voucher "journal-1" \(journal, 2026-01-04, optional\): A journal cannot use a cash or bank ledger/);
+  assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 1 });
+  assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (refused by a posting rule), journal-2 (cancelled without lines)']);
+  assert.ok(report.skipped.includes('items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)'));
+  const printed = formatSeedReport(report).join('\n');
+  assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
+  assert.match(printed, /no entries to post .*: 1 journal/);
+  assert.match(printed, /vouchers refused by ten98-books posting rules and not posted/);
+  assert.match(printed, /voucher numbers: 2 of 3 checked match expectedNumber; 1 optional voucher\(s\) hold a number in the dataset but take none until regular/);
+  assert.deepEqual(await seedDataset(owner.userId, stockDataset()).then(again => [again.vouchers, again.refused.length]), [{ created: 0, present: 4, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
+});
+
+test('the comparison leaves skipped vouchers and stock out of the counts, checks the opening stock difference and names what it cannot compare', async () => {
+  const result = await compareDataset(owner.userId, stockDataset());
+  const byLabel = Object.fromEntries(result.lines.map(line => [line.label, line]));
+  // Seven vouchers expected in the period; three are never posted (an order, a memorandum, a cancelled voucher without lines).
+  assert.deepEqual([byLabel['Voucher count (types ten98-books has)'].expected, byLabel['Voucher count (types ten98-books has)'].actual], ['4', '3'], 'the refused journal is the one missing');
+  assert.deepEqual([byLabel['Vouchers of type journal'].expected, byLabel['Vouchers of type journal'].actual], ['2', '1']);
+  assert.ok(!('Vouchers of type sales_order' in byLabel) && !('Vouchers of type memorandum' in byLabel));
+  assert.deepEqual([byLabel['Vouchers of type receipt'].ok, byLabel['Vouchers of type payment'].ok], [true, true], 'the 2027 receipt is outside the period');
+  const stock = byLabel['Opening-balance difference (equals the opening stock value)'];
+  assert.deepEqual([stock.expected, stock.actual, stock.ok], ['500.00 Cr', '500.00 Cr', true]);
+  assert.deepEqual([byLabel['Total debit'].ok, byLabel['Total credit'].ok, byLabel['Gross profit (excluding stock)'].ok, byLabel['Net profit (excluding stock)'].ok], [true, true, true, true]);
+  assert.deepEqual(result.lines.filter(line => !line.ok).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type journal']);
+  assert.ok(!('Gross profit' in byLabel) && !('Total assets' in byLabel), 'stock-inclusive figures are not compared');
+  assert.deepEqual(result.notComparable, [
+    'stockSummary (needs inventory)',
+    'voucher types ten98-books does not have, left out of the voucher counts: sales_order 1, memorandum 1 (needs those voucher types)',
+    'vouchers without lines of supported types (cancelled or no accounting effect) cannot be represented yet, left out of the voucher counts: journal 1',
+    'trialBalance: 2 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss, Purchases)',
+    'profitAndLoss.grossProfit and profitAndLoss.netProfit (include opening and closing stock; need inventory)',
+    'balanceSheet.total and balanceSheet.closingStockInAssets (include closing stock; need inventory)',
+  ]);
+  // A wrong opening stock is a difference, not an adjustment.
+  const wrong = stockDataset();
+  (wrong.extraFiles['items.json'] as { items: { opening: { quantity: string }[] }[] }).items[0].opening[0].quantity = '11';
+  const off = (await compareDataset(owner.userId, wrong)).lines.find(line => line.label.startsWith('Opening-balance difference'))!;
+  assert.deepEqual([off.expected, off.actual, off.difference, off.ok], ['550.00 Cr', '500.00 Cr', '50.00 Dr', false]);
 });

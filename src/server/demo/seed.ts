@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { formatMoney } from '@ten98/runtime';
 import { baseCurrencies } from '../../lib/company.ts';
 import { FoundationError } from '../auth.ts';
 import { createCompany, listCompanies } from '../companies.ts';
@@ -7,7 +8,7 @@ import { ledgerContext, runLedger } from '../ledger/context.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
-import { DemoError, demoRoot, listDatasetFolders, loadDataset, toMinor, type Dataset } from './dataset.ts';
+import { DemoError, demoRoot, dispositionOf, listDatasetFolders, loadDataset, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 
 /**
  * The demo seeder. For an existing user it creates each dataset's company through the app's own `createCompany` (the
@@ -31,6 +32,18 @@ export type Counts = { created: number; present: number };
 export type SeedReport = {
   slug: string; companyId: string; companyName: string; companyCreated: boolean;
   groups: Counts; ledgers: Counts & { openingsSet: number }; vouchers: Counts & { cancelled: number };
+  /** Vouchers not posted because their type is not one ten98-books has, by type (not yet supported). */
+  unsupportedTypes: Record<string, number>;
+  /** Vouchers of a supported type not posted because they have no lines (cancelled or no accounting effect), by type. */
+  noEntries: Record<string, number>;
+  /**
+   * Vouchers the ledger module's posting rules refuse (for example a journal on a bank ledger): not posted and listed with
+   * the ledger's reason, because the rules are ten98-books' own and a difference from the reference system. Any other
+   * refusal still stops the seed.
+   */
+  refused: string[];
+  /** expectedNumber checks of posted vouchers: how many were compared, how many matched, and optional ones that take no number. */
+  numbers: { checked: number; matched: number; unnumbered: number };
   /** Voucher numbers ten98-books assigned that differ from the dataset's `expectedNumber` (reported, never forced). */
   numberDifferences: string[];
   /** Standard ledgers the dataset names differently from ten98-books; the seeded name is kept, so the difference is listed. */
@@ -108,7 +121,12 @@ export function unmodelled(dataset: Dataset): string[] {
   note('vouchers.json', dataset.vouchers.flatMap(voucher => voucher.lines), 'voucher line(s)');
   const inventory = dataset.vouchers.filter(voucher => voucher.inventory?.length);
   if (inventory.length) lines.push(`vouchers.json: inventory on ${inventory.length} voucher(s), ${inventory.reduce((sum, voucher) => sum + voucher.inventory!.length, 0)} item line(s) (stock is not modelled)`);
-  for (const file of Object.keys(dataset.extraFiles)) lines.push(`${file}: feature file not modelled (kept as is)`);
+  for (const [file, content] of Object.entries(dataset.extraFiles)) {
+    if (file !== 'items.json') { lines.push(`${file}: feature file not modelled (kept as is)`); continue; }
+    const items = content as ItemsFile;
+    const value = formatMoney(openingStockValue(items, dataset.company.minorUnits), dataset.company.minorUnits);
+    lines.push(`items.json: stock not yet supported (${items.items?.length ?? 0} item(s), ${items.locations?.length ?? 0} location(s); opening stock worth ${value} is not a ledger balance)`);
+  }
   return lines;
 }
 
@@ -186,8 +204,19 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
     }
     return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])) };
   });
+  // Earlier vouchers of each type that hold a number in the dataset but receive none here (skipped or optional), which
+  // shifts the numbers of the later ones; named beside any number that differs.
+  const holes = new Map<string, string[]>();
+  const hole = (type: string, label: string) => holes.set(type, [...holes.get(type) ?? [], label]);
+  const bump = (counts: Record<string, number>, type: string) => { counts[type] = (counts[type] ?? 0) + 1; };
   for (const voucher of dataset.vouchers) {
     const at = `voucher "${voucher.key}"`;
+    const disposition = dispositionOf(voucher);
+    if (disposition !== 'post') {
+      bump(disposition === 'unsupported-type' ? report.unsupportedTypes : report.noEntries, voucher.type);
+      if (disposition === 'no-entries' && voucher.expectedNumber !== undefined) hole(voucher.type, `${voucher.key} (${voucher.status === 'cancelled' ? 'cancelled without lines' : 'no entries'})`);
+      continue;
+    }
     try {
       const body = {
         idempotencyKey: voucherKeyPrefix(dataset.slug) + voucher.key, voucherTypeId: typeIds[voucher.type], date: voucher.date,
@@ -205,10 +234,21 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
       });
       if (done.replayed && !done.cancelled) report.vouchers.present++; else report.vouchers.created++;
       if (done.cancelled) report.vouchers.cancelled++;
-      if (voucher.expectedNumber !== undefined && String(done.number ?? '') !== String(voucher.expectedNumber)) {
-        report.numberDifferences.push(`${at} (${voucher.type}): expected number ${voucher.expectedNumber}, ten98-books assigned ${done.number ?? 'none'}`);
+      if (voucher.expectedNumber === undefined) continue;
+      if (done.number === null) { report.numbers.unnumbered++; hole(voucher.type, `${voucher.key} (${voucher.status})`); continue; }
+      report.numbers.checked++;
+      if (String(done.number) === String(voucher.expectedNumber)) { report.numbers.matched++; continue; }
+      const earlier = holes.get(voucher.type) ?? [];
+      const why = earlier.length ? `; ${earlier.length} earlier ${voucher.type} voucher(s) hold numbers in the dataset but none here${Number(voucher.expectedNumber) === done.number + earlier.length ? ', which accounts for the whole difference' : ''}: ${earlier.join(', ')}` : '';
+      report.numberDifferences.push(`${at} (${voucher.type}): expected number ${voucher.expectedNumber}, ten98-books assigned ${done.number}${why}`);
+    } catch (error) {
+      if (error instanceof FoundationError && error.code === 'posting_rule') {
+        report.refused.push(`${at} (${voucher.type}, ${voucher.date}, ${voucher.status}): ${error.message}`);
+        if (voucher.expectedNumber !== undefined) hole(voucher.type, `${voucher.key} (refused by a posting rule)`);
+        continue;
       }
-    } catch (error) { failure(dataset, 'vouchers', at, error); }
+      failure(dataset, 'vouchers', at, error);
+    }
   }
 }
 
@@ -244,6 +284,7 @@ async function seedUnderLock(userId: string, dataset: Dataset): Promise<SeedRepo
   const report: SeedReport = {
     slug: dataset.slug, companyId: '', companyName: settings.name, companyCreated: false,
     groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
+    unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0 },
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
   };
   if (!company) {
@@ -284,6 +325,13 @@ export function formatSeedReport(report: SeedReport): string[] {
     `  ledgers: ${part(report.ledgers)}${report.ledgers.openingsSet ? `; ${report.ledgers.openingsSet} opening balance(s) set` : ''}`,
     `  vouchers: ${part(report.vouchers)}${report.vouchers.cancelled ? `; ${report.vouchers.cancelled} cancelled` : ''}`,
   ];
+  const typeCounts = (counts: Record<string, number>) => Object.entries(counts).map(([type, count]) => `${count} ${type.replace(/_/g, ' ')}`).join(', ');
+  if (Object.keys(report.unsupportedTypes).length) lines.push(`  vouchers not posted, type not yet supported: ${typeCounts(report.unsupportedTypes)}`);
+  if (Object.keys(report.noEntries).length) lines.push(`  vouchers not posted, no entries to post (cancelled or no accounting effect; cannot be represented yet): ${typeCounts(report.noEntries)}`);
+  if (report.refused.length) lines.push('  vouchers refused by ten98-books posting rules and not posted (a difference from the dataset):', ...report.refused.map(line => `    ${line}`));
+  if (report.numbers.checked || report.numbers.unnumbered) {
+    lines.push(`  voucher numbers: ${report.numbers.matched} of ${report.numbers.checked} checked match expectedNumber${report.numbers.unnumbered ? `; ${report.numbers.unnumbered} optional voucher(s) hold a number in the dataset but take none until regular` : ''}`);
+  }
   if (report.numberDifferences.length) lines.push('  voucher numbers that differ from expectedNumber (reported, not forced):', ...report.numberDifferences.map(line => `    ${line}`));
   if (report.nameDifferences.length) lines.push('  standard ledger names that differ from the dataset:', ...report.nameDifferences.map(line => `    ${line}`));
   if (report.openingDifferences.length) lines.push('  opening balances left as they were:', ...report.openingDifferences.map(line => `    ${line}`));

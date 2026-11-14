@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { notComparable } from '../src/server/demo/compare.ts';
-import { DatasetError, duplicateKeys, listDatasetFolders, loadDataset, parseDataset, demoRoot, toMinor, type RawDataset } from '../src/server/demo/dataset.ts';
+import { DatasetError, dispositionOf, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
 import { goldenVouchers } from './helpers/golden.ts';
 
@@ -41,13 +41,13 @@ test('a valid dataset parses and keeps extras, inventory and further feature fil
   raw.vouchers[0].extras = { reference: 'FL-9' };
   raw.vouchers[0].inventory = [{ item: 'flyer', quantity: '500' }];
   raw.expected.cashFlow = { net: '1.00' };
-  raw.extraFiles = { 'items.json': [{ key: 'flyer' }] };
+  raw.extraFiles = { 'suppliers.json': [{ key: 'flyer' }] };
   const dataset = parseDataset(raw, 'demo/sample-shop');
   assert.deepEqual(dataset.vouchers[0].inventory, [{ item: 'flyer', quantity: '500' }]);
   assert.deepEqual(dataset.ledgers[2].extras, { creditDays: 30 });
   assert.deepEqual(dataset.company.extras, { registration: 'x-1' });
   assert.deepEqual(dataset.expected.cashFlow, { net: '1.00' });
-  assert.deepEqual(dataset.extraFiles, { 'items.json': [{ key: 'flyer' }] });
+  assert.deepEqual(dataset.extraFiles, { 'suppliers.json': [{ key: 'flyer' }] });
   assert.deepEqual(problems(raw), []);
 });
 
@@ -91,13 +91,16 @@ test('every ledger group resolves; a group is required unless the ledger is stan
   assert.deepEqual(problems({ ...good(), ledgers: [...good().ledgers, { key: 'profit-and-loss', name: 'Profit and Loss', standard: 'profit_and_loss' }] }), []);
 });
 
-test('every voucher type and ledger reference resolves', () => {
+test('a voucher type is a slug (types ten98-books lacks are allowed) and every ledger reference resolves', () => {
   const raw = good();
-  raw.vouchers[0].type = 'petty_cash';
   raw.vouchers[0].lines[0].ledger = 'ghost';
-  const found = problems(raw);
-  mentions(found, 'vouchers.json', '"pay-1"', 'petty_cash');
-  mentions(found, 'vouchers.json', '"pay-1"', 'lines[0]', 'ghost');
+  mentions(problems(raw), 'vouchers.json', '"pay-1"', 'lines[0]', 'ghost');
+  raw.vouchers[0].type = 'Petty Cash';
+  mentions(problems(raw), 'vouchers.json', '"pay-1"', 'type', 'slug');
+  raw.vouchers[0].type = 'petty_cash';
+  raw.vouchers[0].lines[0].ledger = 'promotion';
+  assert.deepEqual(problems(raw), [], 'an unsupported type is valid; the seeder skips and counts it');
+  assert.equal(dispositionOf(parseDataset(raw, 'demo/sample-shop').vouchers[0]), 'unsupported-type');
 });
 
 test('amounts are plain decimal strings that fit the company minor units', () => {
@@ -171,10 +174,10 @@ test('loading a folder reports invalid JSON and a missing file by name, and the 
     await mkdir(folder);
     const raw = good();
     for (const name of ['company', 'groups', 'ledgers', 'vouchers', 'expected'] as const) await writeFile(join(folder, `${name}.json`), JSON.stringify(raw[name]));
-    await writeFile(join(folder, 'items.json'), '[{"key":"flyer"}]');
+    await writeFile(join(folder, 'suppliers.json'), '[{"key":"flyer"}]');
     await writeFile(join(folder, 'README.md'), 'notes');
     const loaded = await loadDataset(folder);
-    assert.deepEqual(loaded.extraFiles, { 'items.json': [{ key: 'flyer' }] });
+    assert.deepEqual(loaded.extraFiles, { 'suppliers.json': [{ key: 'flyer' }] });
 
     await writeFile(join(folder, 'ledgers.json'), '[ { "key": ');
     await assert.rejects(loadDataset(folder), /demo\/sample-shop\/ledgers\.json: not valid JSON/);
@@ -253,8 +256,8 @@ test('loading refuses a file with a repeated key in one entry and a file over th
     await assert.rejects(loadDataset(folder), /demo\/sample-shop\/vouchers\.json: \[0\]\.lines\[1\]: the key "amount" appears more than once/);
     await writeFile(join(folder, 'vouchers.json'), JSON.stringify(raw.vouchers));
     await assert.rejects(loadDataset(folder, { maxBytes: 100 }), /demo\/sample-shop\/\w+\.json: the file is \d+ bytes; the limit is 100 bytes per file/);
-    await writeFile(join(folder, 'items.json'), JSON.stringify([{ a: 1 }]).replace('"a":1', '"a":1,"a":2'));
-    await assert.rejects(loadDataset(folder), /items\.json: \[0\]: the key "a" appears more than once/);
+    await writeFile(join(folder, 'suppliers.json'), JSON.stringify([{ a: 1 }]).replace('"a":1', '"a":1,"a":2'));
+    await assert.rejects(loadDataset(folder), /suppliers\.json: \[0\]: the key "a" appears more than once/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -267,4 +270,116 @@ test('starter-trading carries every golden voucher: type, date, ledger names, si
     assert.deepEqual([voucher.type, voucher.date, voucher.status, voucher.postDated], [kind, date, 'regular', false], `voucher ${index + 1}`);
     assert.deepEqual(voucher.lines.map(line => [ledgerName.get(line.ledger), line.side, line.amount]), lines.map(([name, side, amount]) => [name, side, `${amount}.00`]), `lines of voucher ${index + 1}`);
   });
+});
+
+test('a voucher without lines must be cancelled or marked as having no accounting effect, and a marked one carries no lines', () => {
+  const raw = good();
+  raw.vouchers[0].lines = [];
+  mentions(problems(raw), 'vouchers.json', '"pay-1"', 'without lines', 'noAccountingEffect');
+  raw.vouchers[0].status = 'cancelled';
+  assert.deepEqual(problems(raw), [], 'a cancelled voucher may have no lines');
+  raw.vouchers[0].status = 'regular';
+  raw.vouchers[0].extras = { noAccountingEffect: true };
+  assert.deepEqual(problems(raw), [], 'a marked voucher may have no lines');
+  raw.vouchers[0].lines = good().vouchers[0].lines;
+  mentions(problems(raw), 'vouchers.json', '"pay-1"', 'carries no lines');
+});
+
+test('dispositionOf: post, unsupported type, or no entries to post', () => {
+  const voucher = (type: string, lines: unknown[]) => ({ ...good().vouchers[0], type, lines }) as Parameters<typeof dispositionOf>[0];
+  assert.equal(dispositionOf(voucher('payment', good().vouchers[0].lines)), 'post');
+  assert.equal(dispositionOf(voucher('payment', [])), 'no-entries');
+  assert.equal(dispositionOf(voucher('sales_order', [])), 'unsupported-type');
+  assert.equal(dispositionOf(voucher('memorandum', good().vouchers[0].lines)), 'unsupported-type');
+});
+
+/** A small items.json: one unit, location, stock group and item with an opening at that location. */
+const stock = () => ({
+  units: [{ key: 'nos', name: 'Nos' }], locations: [{ key: 'main', name: 'Main' }], stockGroups: [{ key: 'lamps', name: 'Lamps' }],
+  items: [{ key: 'lamp', name: 'Lamp', group: 'lamps', unit: 'Nos', opening: [{ location: 'main', quantity: '10', rate: '50.00' }], hsn: 'kept' }],
+});
+
+test('items.json is checked for shape and references only, and everything else in it is kept', () => {
+  const raw = good();
+  raw.extraFiles = { 'items.json': stock() };
+  const dataset = parseDataset(raw, 'demo/sample-shop');
+  assert.deepEqual(dataset.extraFiles['items.json'], stock());
+  assert.equal(openingStockValue(dataset.extraFiles['items.json'] as ItemsFile, 2), 50000n);
+
+  const bad = good();
+  const items = stock();
+  items.items[0].group = 'nowhere';
+  items.items[0].unit = 'Kg';
+  items.items[0].opening = [{ location: 'attic', quantity: '10', rate: '50.005' }];
+  bad.extraFiles = { 'items.json': items };
+  const found = problems(bad);
+  mentions(found, 'items.json', '"lamp"', 'group "nowhere"');
+  mentions(found, 'items.json', '"lamp"', 'unit "Kg"');
+  mentions(found, 'items.json', '"lamp"', 'location "attic"');
+  mentions(found, 'items.json', '"lamp"', 'rate "50.005"', '2 decimal places');
+  const badKey = good();
+  badKey.extraFiles = { 'items.json': { items: [{ key: 'Lamp Two', name: 'x' }] } };
+  mentions(problems(badKey), 'items.json', 'items[0].key', 'slug');
+  const notAFile = good();
+  notAFile.extraFiles = { 'items.json': { items: 'many' } };
+  mentions(problems(notAFile), 'items.json', 'items');
+});
+
+test('inventory lines name items and locations that items.json has, once the file is present', () => {
+  const raw = good();
+  raw.extraFiles = { 'items.json': stock() };
+  raw.vouchers[0].inventory = [{ item: 'lamp', location: 'main', quantity: '1' }, { item: 'ghost', location: 'attic' }];
+  const found = problems(raw);
+  mentions(found, 'vouchers.json', '"pay-1"', 'inventory[1]', 'item "ghost"');
+  mentions(found, 'vouchers.json', '"pay-1"', 'inventory[1]', 'location "attic"');
+  assert.equal(found.length, 2);
+  delete raw.extraFiles;
+  assert.deepEqual(problems(raw), [], 'without items.json the inventory content is kept untouched and unchecked');
+});
+
+test('the opening stock value is quantity times rate for every item and location, rounded half up to the minor unit', () => {
+  const items = { items: [
+    { key: 'a', name: 'A', opening: [{ location: 'x', quantity: '480', rate: '38.00' }, { location: 'y', quantity: '160', rate: '38.00' }] },
+    { key: 'b', name: 'B', opening: [{ location: 'x', quantity: '0.5', rate: '0.05' }] },
+    { key: 'c', name: 'C' },
+  ] } as ItemsFile;
+  assert.equal(openingStockValue(items, 2), 2432003n, '24,320.00 plus 0.025 rounded to 0.03');
+  assert.equal(openingStockValue(undefined, 2), 0n);
+  assert.equal(openingStockValue({ items: [{ key: 'a', name: 'A', opening: [{ location: 'x', quantity: '3', rate: '1.250' }] }] } as ItemsFile, 3), 3750n);
+});
+
+test('expected.json may name voucher types the dataset uses beyond the seeded eight, and carries stock-aware figures', () => {
+  const raw = good();
+  raw.vouchers.push({ key: 'order-1', type: 'sales_order', date: '2026-01-06', status: 'regular', postDated: false, lines: [], extras: { noAccountingEffect: true } });
+  raw.expected.voucherCount = 2;
+  raw.expected.vouchersByType = { payment: 1, sales_order: 1 };
+  raw.expected.profitAndLoss.grossProfitExcludingStock = '10.005';
+  raw.expected.balanceSheet.closingStockInAssets = '1.234';
+  const found = problems(raw);
+  assert.equal(found.length, 2, found.join('\n'));
+  mentions(found, 'expected.json', 'profitAndLoss.grossProfitExcludingStock', '"10.005"');
+  mentions(found, 'expected.json', 'balanceSheet.closingStockInAssets', '"1.234"');
+  raw.expected.profitAndLoss.grossProfitExcludingStock = '10.00';
+  raw.expected.balanceSheet.closingStockInAssets = '1.23';
+  assert.deepEqual(problems(raw), []);
+});
+
+test('blocks and fields the comparison cannot read are named with their reason; annotations are not listed', () => {
+  const expected = { ...good().expected, source: 'x', voucherCountNote: 'y', stockSummary: { closingValue: '1.00' }, receivables: {}, payables: {}, vat: {},
+    trialBalance: { ...good().expected.trialBalance, report: 'r', note: 'n' }, balanceSheet: { total: '1.00', closingStockInAssets: '1.00' } };
+  assert.deepEqual(notComparable(expected), [
+    'stockSummary (needs inventory)',
+    'receivables (needs bill-wise receivables, which ten98-books does not track yet)',
+    'payables (needs bill-wise payables, which ten98-books does not track yet)',
+    'vat (needs the VAT return, which ten98-books does not compute yet)',
+  ]);
+});
+
+test('the skipped-feature summary words items.json with its counts and the opening stock value', () => {
+  const raw = good();
+  raw.extraFiles = { 'items.json': stock(), 'employees.json': [] };
+  assert.deepEqual(unmodelled(parseDataset(raw, 'demo/sample-shop')), [
+    'items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)',
+    'employees.json: feature file not modelled (kept as is)',
+  ]);
 });
