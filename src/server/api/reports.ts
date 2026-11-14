@@ -33,7 +33,7 @@ const reports: Record<ReportName, Report> = {
 };
 
 /** Every parameter of the URL as given, so an unknown or repeated one reaches the schema and is refused there. */
-function queryOf(url: URL, keys: readonly string[]): Record<string, string> {
+export function queryOf(url: URL, keys: readonly string[]): Record<string, string> {
   const query: Record<string, string> = {};
   for (const [key, value] of url.searchParams) {
     if (Object.hasOwn(query, key) || !keys.includes(key)) query[`unexpected ${key}`] = value;
@@ -42,7 +42,7 @@ function queryOf(url: URL, keys: readonly string[]): Record<string, string> {
   return query;
 }
 
-function csvResponse(name: string, body: string): Response {
+export function csvResponse(name: string, body: string): Response {
   return new Response(body, {
     status: 200,
     headers: {

@@ -1,8 +1,10 @@
 import {
   groupAlterInput, groupCreateInput, ledgerAlterInput, ledgerCreateInput, revisionInput, voucherTypeAlterInput,
-  type AccountGroup, type GroupListItem, type Ledger, type LedgerListItem, type Nature, type Side, type VoucherType,
+  type AccountGroup, type CreditPeriod, type CreditUnit, type GroupListItem, type Ledger, type LedgerListItem, type Nature,
+  type OpeningBill, type Side, type VoucherType,
 } from '../../lib/ledger.ts';
 import { FoundationError } from '../auth.ts';
+import { assertBillRowsFit, planOpeningBills, writeBills } from './bills.ts';
 import { conflict, ledgerError, parseAmount, parseInput, refusal, type LedgerContext } from './context.ts';
 import { logRevision } from './revisions.ts';
 
@@ -41,12 +43,15 @@ const groupRefusals = {
   account_group_cycle: ledgerError(400, 'A group cannot be placed under one of its own sub-groups.', 'cycle'),
   account_group_builtin: ledgerError(400, 'A built-in group keeps its nature. Choose a parent group of the same nature.', 'nature_fixed'),
   ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group, so this group cannot move there.', 'family_rule'),
+  ledger_bill_wise_family: ledgerError(400, 'This group holds bill-wise ledgers or ledgers with bills, so it cannot move under the cash and bank groups.', 'family_rule'),
 };
 const groupInUse = { ...groupRefusals, '23503': ledgerError(409, 'This group still holds sub-groups or ledgers. Move or delete them first.', 'in_use') };
 const ledgerRefusals = {
   ledger_name_idx: ledgerError(409, 'A ledger with this name already exists.', 'duplicate_name'),
   ledger_builtin: ledgerError(400, 'A built-in ledger keeps its nature. Choose a group of the same nature.', 'nature_fixed'),
   ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group.', 'family_rule'),
+  ledger_bill_wise_family: ledgerError(400, 'Cash, bank and the profit and loss ledger keep no bills: they cannot be bill-wise, and a ledger with bills cannot move under the cash and bank groups.', 'family_rule'),
+  bill_allocation_opening_locked: ledgerError(409, 'Opening bills are locked with the opening balances.', 'locked_period'),
 };
 const ledgerInUse = { ...ledgerRefusals, '23503': ledgerError(409, 'This ledger is used in vouchers and cannot be deleted.', 'in_use') };
 const typeRefusals = { voucher_type_name_idx: ledgerError(409, 'A voucher type with this name already exists.', 'duplicate_name') };
@@ -64,7 +69,8 @@ const groupColumns = `id, parent_id AS "parentId", nature, gross_profit AS "gros
  */
 const groupInUseSql = `(EXISTS (SELECT 1 FROM account_group c WHERE c.company_id = g.company_id AND c.parent_id = g.id)
   OR EXISTS (SELECT 1 FROM ledger x WHERE x.company_id = g.company_id AND x.group_id = g.id))`;
-const ledgerInUseSql = `EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = l.company_id AND x.ledger_id = l.id)`;
+const ledgerInUseSql = `(EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = l.company_id AND x.ledger_id = l.id)
+  OR EXISTS (SELECT 1 FROM bill x WHERE x.company_id = l.company_id AND x.ledger_id = l.id))`;
 
 /** Groups as the list and read routes answer them: the group plus whether a delete would be refused for use. */
 export async function listGroups(context: LedgerContext): Promise<GroupListItem[]> {
@@ -190,15 +196,31 @@ export async function deleteGroup(context: LedgerContext, groupId: string, value
 
 // ---- Ledgers ----
 
-type LedgerRow<T extends object = object> = Omit<Ledger, 'opening'> & { openingAmount: bigint; openingSide: Side } & T;
+type OpeningBillRow = Omit<OpeningBill, 'amount' | 'creditPeriod'> & { amount: string; creditCount: number | null; creditUnit: CreditUnit | null };
+type LedgerRow<T extends object = object> = Omit<Ledger, 'opening' | 'creditPeriod' | 'openingBills'> & {
+  openingAmount: bigint; openingSide: Side; creditCount: number | null; creditUnit: CreditUnit | null; creditDueDate: string | null;
+  openingBills: OpeningBillRow[];
+} & T;
 /** The ledger columns; `inUse` adds the delete test for the list and read routes (snapshots and write answers omit it). */
 const ledgerSelect = (inUse: boolean) => `WITH RECURSIVE ${groupTreeSql}
   SELECT l.id, l.group_id AS "groupId", g.name AS "groupName", g.nature, l.system_key AS "systemKey", l.name,
     l.second_language_name AS "secondLanguageName", coalesce(t.cash_bank, false) AS "cashOrBank",
-    l.opening_amount AS "openingAmount", l.opening_side AS "openingSide", l.revision${inUse ? `, ${ledgerInUseSql} AS "inUse"` : ''}
+    l.opening_amount AS "openingAmount", l.opening_side AS "openingSide", l.revision, l.bill_wise AS "billWise",
+    l.credit_count AS "creditCount", l.credit_unit AS "creditUnit", to_char(l.credit_due_date, 'YYYY-MM-DD') AS "creditDueDate",
+    l.credit_days_check AS "creditDaysCheck",
+    coalesce((SELECT json_agg(json_build_object('kind', a.kind, 'billId', a.bill_id, 'billName', b.name, 'billDate', a.bill_date,
+        'dueDate', a.due_date, 'creditCount', a.credit_count, 'creditUnit', a.credit_unit, 'amount', a.amount::text, 'side', a.side) ORDER BY a.id)
+      FROM bill_allocation a LEFT JOIN bill b ON b.company_id = a.company_id AND b.id = a.bill_id
+      WHERE a.company_id = l.company_id AND a.ledger_id = l.id AND a.voucher_id IS NULL), '[]'::json) AS "openingBills"${inUse ? `, ${ledgerInUseSql} AS "inUse"` : ''}
   FROM ledger l LEFT JOIN account_group g ON g.company_id = l.company_id AND g.id = l.group_id LEFT JOIN tree t ON t.id = l.group_id
   WHERE l.company_id = $1`;
-const toLedger = <T extends object>({ openingAmount, openingSide, ...row }: LedgerRow<T>) => ({ ...row, opening: { amount: openingAmount, side: openingSide } });
+const period = (count: number | null, unit: CreditUnit | null, dueDate: string | null): CreditPeriod | null =>
+  count !== null && unit !== null ? { count, unit } : dueDate !== null ? { dueDate } : null;
+const toLedger = <T extends object>({ openingAmount, openingSide, creditCount, creditUnit, creditDueDate, openingBills, ...row }: LedgerRow<T>) => ({
+  ...row, opening: { amount: openingAmount, side: openingSide }, creditPeriod: period(creditCount, creditUnit, creditDueDate),
+  openingBills: openingBills.map(({ amount, creditCount: count, creditUnit: unit, ...bill }): OpeningBill =>
+    ({ ...bill, amount: BigInt(amount), creditPeriod: count !== null && unit !== null ? { count, unit } : null })),
+});
 
 export async function listLedgers(context: LedgerContext): Promise<LedgerListItem[]> {
   const { rows } = await context.client.query<LedgerRow<{ inUse: boolean }>>(`${ledgerSelect(true)} ORDER BY lower(l.name), l.id`, [context.company.companyId]);
@@ -241,10 +263,19 @@ export async function createLedger(context: LedgerContext, value: unknown): Prom
   await lockGroupTree(context);
   const group = await ledgerGroup(context, input.groupId);
   const opening = parseOpening(context, input.opening);
-  if (opening.amount !== 0n) assertOpeningOpen(context);
+  if (opening.amount !== 0n || input.opening?.bills?.length) assertOpeningOpen(context);
+  // New ledgers under trade receivables or payables keep bills by default (observed), as in the reference.
+  const billWise = input.billWise ?? await inPartyGroups(context, group.id);
+  const credit = creditColumns(input.creditPeriod ?? null);
   const { rows } = await context.client.query<{ id: string }>(
-    `INSERT INTO ledger (company_id, group_id, name, second_language_name, opening_amount, opening_side) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [context.company.companyId, group.id, input.name, input.secondLanguageName, opening.amount, opening.side]).catch(error => refusal(error, ledgerRefusals));
+    `INSERT INTO ledger (company_id, group_id, name, second_language_name, opening_amount, opening_side, bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+    [context.company.companyId, group.id, input.name, input.secondLanguageName, opening.amount, opening.side, billWise, credit.count, credit.unit, credit.dueDate,
+      input.creditDaysCheck ?? false]).catch(error => refusal(error, ledgerRefusals));
+  if (input.opening?.bills?.length) {
+    const plan = await planOpeningBills(context, { id: rows[0].id, billWise, credit: input.creditPeriod ?? null }, opening, input.opening.bills);
+    await writeBills(context, null, plan).catch(error => refusal(error, ledgerRefusals));
+  }
   const ledger = await readLedger(context, rows[0].id);
   await logRevision(context, 'ledger', ledger.id, 'create', null, ledger);
   return ledger;
@@ -269,14 +300,48 @@ export async function alterLedger(context: LedgerContext, ledgerId: string, valu
     groupId = group.id;
   }
   const opening = input.opening ? parseOpening(context, input.opening) : before.opening;
-  if (opening.amount !== before.opening.amount || (opening.amount !== 0n && opening.side !== before.opening.side)) assertOpeningOpen(context);
+  const openingBills = input.opening?.bills;
+  if (opening.amount !== before.opening.amount || (opening.amount !== 0n && opening.side !== before.opening.side)
+    || (openingBills !== undefined && (openingBills.length || before.openingBills.length))) assertOpeningOpen(context);
+  const billWise = input.billWise ?? before.billWise;
+  const creditPeriod = input.creditPeriod === undefined ? before.creditPeriod : input.creditPeriod;
+  const credit = creditColumns(creditPeriod);
+  // Turning bill-wise off keeps the ledger's bills (observed); new rows on it are dropped from then on.
   await context.client.query(
-    `UPDATE ledger SET group_id = $3, name = $4, second_language_name = $5, opening_amount = $6, opening_side = $7, revision = revision + 1
+    `UPDATE ledger SET group_id = $3, name = $4, second_language_name = $5, opening_amount = $6, opening_side = $7, bill_wise = $8,
+       credit_count = $9, credit_unit = $10, credit_due_date = $11, credit_days_check = $12, revision = revision + 1
      WHERE company_id = $1 AND id = $2`,
-    [context.company.companyId, ledgerId, groupId, input.name, input.secondLanguageName, opening.amount, opening.side]).catch(error => refusal(error, ledgerRefusals));
+    [context.company.companyId, ledgerId, groupId, input.name, input.secondLanguageName, opening.amount, opening.side, billWise,
+      credit.count, credit.unit, credit.dueDate, input.creditDaysCheck ?? before.creditDaysCheck]).catch(error => refusal(error, ledgerRefusals));
+  // Opening rows kept as they are must still fit a changed opening balance.
+  if (openingBills === undefined && before.openingBills.length) assertBillRowsFit(before.openingBills, opening.side, opening.amount, context.company.exponent, 'the opening balance');
+  if (openingBills !== undefined) {
+    // The opening rows are stated whole: the list replaces the rows the ledger had.
+    await context.client.query('DELETE FROM bill_allocation WHERE company_id = $1 AND ledger_id = $2 AND voucher_id IS NULL', [context.company.companyId, ledgerId])
+      .catch(error => refusal(error, ledgerRefusals));
+    const plan = await planOpeningBills(context, { id: ledgerId, billWise, credit: creditPeriod }, opening, openingBills);
+    await writeBills(context, null, plan).catch(error => refusal(error, ledgerRefusals));
+  }
   const after = await readLedger(context, ledgerId);
   await logRevision(context, 'ledger', ledgerId, 'alter', before, after);
   return after;
+}
+
+/** A ledger's credit period as its three columns. */
+function creditColumns(credit: CreditPeriod | null): { count: number | null; unit: CreditUnit | null; dueDate: string | null } {
+  if (!credit) return { count: null, unit: null, dueDate: null };
+  return 'count' in credit ? { count: credit.count, unit: credit.unit, dueDate: null } : { count: null, unit: null, dueDate: credit.dueDate };
+}
+
+/** Whether a group is, or sits below, the trade receivables or payables group (by system key, D-10). */
+async function inPartyGroups(context: LedgerContext, groupId: string): Promise<boolean> {
+  const { rows } = await context.client.query<{ party: boolean }>(
+    `WITH RECURSIVE up(id, key, parent) AS (
+       SELECT id, system_key, parent_id FROM account_group WHERE company_id = $1 AND id = $2
+       UNION ALL SELECT g.id, g.system_key, g.parent_id FROM account_group g JOIN up ON g.company_id = $1 AND g.id = up.parent)
+     SELECT coalesce(bool_or(key IN ('receivables', 'payables')), false) AND NOT ledger_in_cash_family($1, $2) AS party FROM up`,
+    [context.company.companyId, groupId]);
+  return rows[0].party;
 }
 
 export async function deleteLedger(context: LedgerContext, ledgerId: string, value: unknown): Promise<void> {

@@ -18,6 +18,8 @@ import { freshDatabase, type TestDatabase } from './helpers/database.ts';
  */
 const thisMigration = '0005_company_is_workspace.sql';
 const earlier = migrationFiles.slice(0, migrationFiles.indexOf(thisMigration));
+/** The accounting tables as 0005 found them; later migrations add tables and keys of their own. */
+const tablesAt0005 = ['company', 'account_group', 'ledger', 'voucher_type', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log'];
 
 let database: TestDatabase;
 let admin: pg.Client;
@@ -89,13 +91,13 @@ async function snapshot(client: pg.Client | pg.PoolClient, companyId: string) {
       FROM voucher v JOIN voucher_type t ON t.company_id = v.company_id AND t.id = v.voucher_type_id WHERE v.company_id = $1 ORDER BY t.kind, v.number`),
     counters: await rows(`SELECT t.kind, c.series, c.last_number FROM voucher_counter c JOIN voucher_type t ON t.company_id = c.company_id AND t.id = c.voucher_type_id
       WHERE c.company_id = $1 ORDER BY t.kind`),
-    sizes: await rows(`SELECT ${accountingTables.map(table => `(SELECT count(*) FROM ${table} WHERE company_id = $1)::int AS ${table}`).join(', ')}`),
+    sizes: await rows(`SELECT ${tablesAt0005.map(table => `(SELECT count(*) FROM ${table} WHERE company_id = $1)::int AS ${table}`).join(', ')}`),
   };
 }
 
 const foreignKeys = async () => (await admin.query<{ table: string; name: string; definition: string }>(
   `SELECT conrelid::regclass::text AS table, conname AS name, pg_get_constraintdef(oid) AS definition FROM pg_constraint
-   WHERE contype = 'f' AND (conrelid::regclass::text = ANY ($1) OR confrelid::regclass::text = ANY ($1)) ORDER BY 1, 2`, [accountingTables])).rows;
+   WHERE contype = 'f' AND conrelid::regclass::text = ANY ($1) ORDER BY 1, 2`, [tablesAt0005])).rows;
 
 before(async () => {
   database = await freshDatabase('companymodel', { migrations: earlier });
