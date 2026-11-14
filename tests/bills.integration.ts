@@ -104,7 +104,7 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
   assert.deepEqual(await g.listed('payable', '2026-02-28'), [['C-77', 'Creditor C', '3400.00', '2026-03-20']]);
   const receivable = await g.report('bills-outstanding?side=receivable&asOf=2026-02-28');
   assert.equal(receivable.total, '13925.00');
-  assert.equal(receivable.group.name, 'Trade Receivables');
+  assert.deepEqual(receivable.groups.map((group: any) => group.name), ['Trade Receivables', 'Trade Payables'], 'by default a list covers both trade groups');
 
   // Debtors 14,225.00 at 28 Feb: A 10,975 (bills 10,675 and 300 on account: 500 opening less 200 received), B 3,250.
   const partyA = await g.partyBills(a, '2026-02-28');
@@ -160,6 +160,27 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
       assert.equal(sum, Math.round(Number(read.balance) * 100), `${asOf} ${read.ledger.name}`);
     }
   }
+});
+
+test('each list holds the bills lying on its side: a customer advance is a payable, a supplier debit bill a receivable, ageing follows (observed)', async () => {
+  const g = await books('Bills By Side');
+  const bank = await g.ledger('Bank', 'bank_accounts'), sales = await g.ledger('Sales', 'sales'), costs = await g.ledger('Costs', 'purchases');
+  const customer = await g.ledger('Customer', 'receivables'), supplier = await g.ledger('Supplier', 'payables');
+  await g.voucher('sales', '2026-03-01', [[customer, 'Dr', '500', [newRef('INV-1', '500')]], [sales, 'Cr', '500']]);
+  await g.voucher('receipt', '2026-03-02', [[bank, 'Dr', '800'], [customer, 'Cr', '800', [{ kind: 'advance', name: 'ADV-C', amount: '800' }]]]);
+  await g.voucher('purchase', '2026-03-03', [[costs, 'Dr', '300'], [supplier, 'Cr', '300', [newRef('SUP-1', '300')]]]);
+  await g.voucher('payment', '2026-03-04', [[supplier, 'Dr', '200', [{ kind: 'advance', name: 'ADV-S', amount: '200' }]], [bank, 'Cr', '200']]);
+  assert.deepEqual(await g.listed('receivable', '2026-03-31'), [['INV-1', 'Customer', '500.00', '2026-03-01'], ['ADV-S', 'Supplier', '200.00', '2026-03-04']]);
+  assert.deepEqual(await g.listed('payable', '2026-03-31'), [['ADV-C', 'Customer', '800.00', '2026-03-02'], ['SUP-1', 'Supplier', '300.00', '2026-03-03']]);
+  const payables = await g.report('bills-outstanding?side=payable&asOf=2026-03-31');
+  assert.equal(payables.total, '1100.00');
+  const ageing = await g.report('ageing?side=payable&asOf=2026-03-31');
+  assert.deepEqual([ageing.parties.map((party: any) => [party.name, party.total]), ageing.totals.total], [[['Customer', '800.00'], ['Supplier', '300.00']], '1100.00']);
+  // A group asked for limits the list to that group's parties, on the list's side.
+  const onlyDebtors = await g.report(`bills-outstanding?side=payable&asOf=2026-03-31&groupId=${g.accounts.group('receivables')}`);
+  assert.deepEqual([onlyDebtors.groups.map((group: any) => group.name), onlyDebtors.bills.map((bill: any) => bill.name)], [['Trade Receivables'], ['ADV-C']]);
+  const csv = await (await raw(owner, `/api/companies/${g.companyId}/reports/bills-outstanding/export?side=payable&asOf=2026-03-31`)).text();
+  assert.match(csv, /"2026-03-02","ADV-C","Customer","800.00"/);
 });
 
 test('a bill is the party\'s name ignoring case: reuse attaches, also after settlement or deletion; another party has its own', async () => {

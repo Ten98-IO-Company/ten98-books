@@ -132,17 +132,23 @@ async function onAccount(context: LedgerContext, ledgerIds: string[], asOf: stri
   return new Map(rows.map(row => [row.ledgerId, row.amount]));
 }
 
-/** The group a list covers (default: trade receivables or payables) and the ledgers below it that hold bills. */
-async function scope(context: LedgerContext, side: BillSide, groupId: string | undefined): Promise<{ group: { id: string; name: string }; ledgerIds: string[] }> {
-  const { rows: [group] } = await context.client.query<{ id: string; name: string }>(
-    groupId ? 'SELECT id, name FROM account_group WHERE company_id = $1 AND id = $2' : 'SELECT id, name FROM account_group WHERE company_id = $1 AND system_key = $2',
-    [context.company.companyId, groupId ?? (side === 'receivable' ? 'receivables' : 'payables')]);
-  if (!group) throw ledgerError(404, 'Group not found.', 'not_found');
+/**
+ * The groups a list covers and the ledgers below them that hold bills. By default both trade receivables and trade
+ * payables, whichever list is asked for: a list holds the bills lying on its side, whatever the party's group
+ * (observed: a customer's advance, a credit bill of a debtor, is listed under bills payable and not under bills
+ * receivable). With `groupId`, that group alone.
+ */
+async function scope(context: LedgerContext, groupId: string | undefined): Promise<{ groups: { id: string; name: string }[]; ledgerIds: string[] }> {
+  const { rows: groups } = await context.client.query<{ id: string; name: string }>(
+    groupId ? 'SELECT id, name FROM account_group WHERE company_id = $1 AND id = $2'
+      : "SELECT id, name FROM account_group WHERE company_id = $1 AND system_key = ANY('{receivables,payables}'::text[]) ORDER BY system_key DESC",
+    groupId ? [context.company.companyId, groupId] : [context.company.companyId]);
+  if (!groups.length) throw ledgerError(404, 'Group not found.', 'not_found');
   const { rows } = await context.client.query<{ id: string }>(
-    `WITH RECURSIVE below(id) AS (SELECT $2::uuid UNION ALL SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
+    `WITH RECURSIVE below(id) AS (SELECT unnest($2::uuid[]) UNION SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
      SELECT l.id FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM below)
-       AND EXISTS (SELECT 1 FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id)`, [context.company.companyId, group.id]);
-  return { group, ledgerIds: rows.map(row => row.id) };
+       AND EXISTS (SELECT 1 FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id)`, [context.company.companyId, groups.map(group => group.id)]);
+  return { groups, ledgerIds: rows.map(row => row.id) };
 }
 
 const naturalSide = (side: BillSide) => side === 'receivable' ? 'Dr' as const : 'Cr' as const;
@@ -150,13 +156,14 @@ const positive = (amount: bigint) => amount < 0n ? subtractMoney(0n, amount) : a
 
 /**
  * Bills receivable or payable at a date, a page at a time (`limit`, `after`; an export reads them all), by party and bill
- * name. Bills on the other side (advances, settlements left on their own) are not listed (observed). The total of every
+ * name: the bills pending on the list's side, of the ledgers below both trade groups unless a group is given. A bill on
+ * the other side (a customer's advance, a settlement left on its own) is in the other list (observed). The total of every
  * page comes with the first page only (a later page would have to read every bill again).
  */
 export async function billsOutstandingReport(context: LedgerContext, query: unknown, all = false): Promise<BillsOutstandingReport> {
   const { side, groupId, asOf, limit, after } = parseInput(outstandingQuery, query, queryFields);
   await reportBudget(context, listBudget);
-  const { group, ledgerIds } = await scope(context, side, groupId);
+  const { groups, ledgerIds } = await scope(context, groupId);
   const pageSize = all ? exportLimit : limit;
   const cursor = all ? undefined : decodeKey(after);
   const { page, more } = await pendingPage(context, ledgerIds, asOf, naturalSide(side), cursor, pageSize);
@@ -164,7 +171,7 @@ export async function billsOutstandingReport(context: LedgerContext, query: unkn
   const details = new Map((await states(context, [...new Set(page.map(item => item.ledgerId))], asOf, 'all', { billIds: page.map(item => item.billId) }))
     .map(bill => [bill.billId, bill]));
   return {
-    asOf, side, group, total: cursor ? null : positive(await pendingTotal(context, ledgerIds, asOf, naturalSide(side))),
+    asOf, side, groups, total: cursor ? null : positive(await pendingTotal(context, ledgerIds, asOf, naturalSide(side))),
     bills: page.map(item => { const bill = details.get(item.billId)!; return { ...bill, amount: positive(bill.pending) }; }),
     next: more ? encodeKey(page[page.length - 1].key) : null,
   };
@@ -259,7 +266,7 @@ export function bucketIndex(buckets: readonly AgeingBucket[], days: number): num
 export async function ageingReport(context: LedgerContext, query: unknown): Promise<AgeingReport> {
   const { side, groupId, asOf, basis } = parseInput(ageingQuery, query, queryFields);
   await reportBudget(context, listBudget);
-  const { group, ledgerIds } = await scope(context, side, groupId);
+  const { groups, ledgerIds } = await scope(context, groupId);
   // The columns always end open-ended, so they add up to the total: the company's own, with an open column after a
   // closed last one, or a single open column while none is defined.
   const defined = await readAgeingBuckets(context);
@@ -286,7 +293,7 @@ export async function ageingReport(context: LedgerContext, query: unknown): Prom
     party.total = addMoney(party.total, amount);
     totals.total = addMoney(totals.total, amount);
   }
-  return { asOf, side, basis, group, buckets, parties: [...parties.values()], totals };
+  return { asOf, side, basis, groups, buckets, parties: [...parties.values()], totals };
 }
 
 /**
