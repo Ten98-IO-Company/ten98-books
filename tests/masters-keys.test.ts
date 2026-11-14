@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mergeKeymaps, parseChord, resolveShortcut, type ResolvedCommand, type ShortcutTarget } from '@ten98/ui';
 import { barCommands, commandIds, commands } from '../src/lib/commands.ts';
+import { lookupKeyAction } from '../src/lib/masters.ts';
 import { keymapNames, keymaps, type KeymapName } from '../src/lib/keymaps.ts';
 
 /**
@@ -56,4 +57,44 @@ test('the action bar lists one Escape command on an entry screen and the shell\'
     // A disabled command never lists, and a duplicate registration lists once.
     assert.deepEqual(barCommands([{ id: 'nav.back', enabled: false, keys: ['Escape'] }, { id: 'help.keyboard', enabled: true, keys: ['Ctrl+/'] }, { id: 'help.keyboard', enabled: true, keys: ['Ctrl+/'] }]).map(command => command.id), ['help.keyboard']);
   }
+});
+
+test('a lookup handles every chord its keymap binds to accept, and hands Escape on as the keymap says', () => {
+  for (const name of keymapNames) {
+    const merged = mergeKeymaps(keymaps[name]);
+    const acceptKeys = (merged['entry.accept'] ?? []).map(chord => parseChord(chord)!);
+    assert.ok(acceptKeys.length > 0);
+    for (const chord of acceptKeys) {
+      // With the list open the combobox would swallow (or never pass on) the chord: the lookup picks the row, or settles the text.
+      assert.equal(lookupKeyAction({ chord, open: true, highlighted: true, acceptKeys }), 'accept-row', `${name} ${chord} with a row highlighted`);
+      assert.equal(lookupKeyAction({ chord, open: true, highlighted: false, acceptKeys }), 'accept-text', `${name} ${chord} with none`);
+      // With it closed the shortcut layer sees the chord itself.
+      assert.equal(lookupKeyAction({ chord, open: false, highlighted: false, acceptKeys }), 'ignore', `${name} ${chord} closed`);
+    }
+    // The chords of the other keymap's accept that this one does not bind are not accept here (classic Ctrl+A is not web-safe's).
+    const foreign = Object.values(keymaps).flatMap(map => mergeKeymaps(map)['entry.accept'] ?? []).map(chord => parseChord(chord)!).filter(chord => !acceptKeys.includes(chord));
+    for (const chord of foreign) assert.equal(lookupKeyAction({ chord, open: true, highlighted: true, acceptKeys }), 'ignore', `${name} ${chord} is not accept`);
+    // Escape: list open closes only the list (the combobox does it); closed, the screen's cancel runs. Enter on typed text settles it.
+    assert.equal(lookupKeyAction({ chord: 'Escape', open: true, highlighted: false, acceptKeys }), 'ignore');
+    assert.equal(lookupKeyAction({ chord: 'Escape', open: true, highlighted: true, acceptKeys }), 'ignore');
+    assert.equal(lookupKeyAction({ chord: 'Escape', open: false, highlighted: false, acceptKeys }), 'cancel');
+    assert.equal(lookupKeyAction({ chord: 'Enter', open: true, highlighted: false, acceptKeys }), 'pick-text');
+    assert.equal(lookupKeyAction({ chord: 'Enter', open: true, highlighted: true, acceptKeys }), 'ignore', 'a highlighted row is the combobox\'s own pick');
+    assert.equal(lookupKeyAction({ chord: undefined, open: true, highlighted: true, acceptKeys }), 'ignore');
+  }
+});
+
+test('on the alter list the search field and the list share one Escape owner, list.cancel, from every focus target, in both keymaps', () => {
+  const listCommands = (name: KeymapName) => {
+    const merged = mergeKeymaps(keymaps[name]);
+    return commandIds.filter(id => commands[id].context === 'global' || id === 'list.cancel').map(id => ({
+      id, scope: commands[id].context, enabled: true, allowInTextInput: id === 'list.cancel', chords: (merged[id] ?? []).map(chord => parseChord(chord)!),
+    }));
+  };
+  for (const name of keymapNames) for (const chord of escapes(name)) for (const target of targets) {
+    const match = resolveShortcut({ chord: parseChord(chord)!, scopes: [{ id: 'list', focus: false }, { id: 'global', focus: false }], commands: listCommands(name), target });
+    assert.equal(match?.command.id, 'list.cancel', `${name} ${chord} on ${target}`);
+  }
+  const live = (name: KeymapName, ids: string[]) => ids.map(id => ({ id, enabled: true, keys: mergeKeymaps(keymaps[name])[id] ?? [] }));
+  for (const name of keymapNames) assert.deepEqual(barCommands(live(name, ['nav.back', 'list.cancel', 'list.history'])).map(command => command.id), ['list.cancel', 'list.history'], name);
 });

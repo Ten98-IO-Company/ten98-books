@@ -1,5 +1,5 @@
-import { Combobox, Stack, useShortcutCommands, type ComboboxProps } from '@ten98/ui'
-import { isChoice, type Choice } from '../../lib/masters'
+import { chordFromEvent, Combobox, Stack, useShortcutCommands, type ComboboxProps } from '@ten98/ui'
+import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
 
 /**
  * A lookup whose value is always one of its options. The stock combobox can hand its text back as the value, and on
@@ -8,10 +8,11 @@ import { isChoice, type Choice } from '../../lib/masters'
  * form picks the one choice the text names, or shows an error on this field).
  * What the text means is also decided when the field is left or the form is saved (`resolveLookup` in src/lib/masters.ts).
  *
- * The stock combobox also keeps every Escape to itself, even with its list closed, so the shortcut layer never sees it
- * and the screen could not be left from a lookup. With the list closed, Escape here runs the screen's `entry.cancel`
- * through the registry; with it open the combobox closes the list, as it should. Ctrl+Enter with the list open likewise
- * reaches `entry.accept` after the combobox has taken its pick.
+ * The stock combobox also keeps every Escape to itself, even with its list closed, and a list that is open swallows the
+ * keys the form binds to accept, so what each key does is decided by `lookupKeyAction` (src/lib/masters.ts) and handed on
+ * through the shortcut registry: a closed lookup's Escape runs `entry.cancel`; a chord bound to `entry.accept` in the
+ * active keymap (read from the registry, whatever it is) first picks the highlighted row or settles the typed text, then
+ * accepts once.
  */
 export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: Omit<ComboboxProps, 'options' | 'allowCustom'> & {
   options: readonly Choice[]
@@ -22,26 +23,18 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
   return <Stack as='div' onKeyDownCapture={event => {
     const input = event.target as HTMLInputElement
     if (input.getAttribute('role') !== 'combobox') return
-    const open = input.getAttribute('aria-expanded') === 'true'
-    const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-    if (event.key === 'Escape' && plain && !open) {
-      const cancel = registered.find(command => command.id === 'entry.cancel' && command.enabled)
-      if (cancel) { event.preventDefault(); event.stopPropagation(); cancel.run() }
-      return
-    }
-    const unhighlighted = open && !input.getAttribute('aria-activedescendant')
-    // Ctrl or Meta with Enter is the accept chord. With the list open the combobox consumes the key (picking the highlighted
-    // row, if any) and then drops typed text that named no row, so the text is settled first, here, while it is still
-    // there; accept runs right after, once the pick has settled, unless the text was an error.
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && open) {
-      const outcome = unhighlighted && onTypedEnter ? onTypedEnter(input.value, false) : 'unchanged'
-      if (outcome === 'error') { event.preventDefault(); event.stopPropagation(); return }
-      const accept = registered.find(command => command.id === 'entry.accept' && command.enabled)
-      if (accept) window.setTimeout(() => accept.run(), 0)
-      return
-    }
-    if (event.key !== 'Enter' || !onTypedEnter || !plain || !unhighlighted) return
-    if (onTypedEnter(input.value, true) !== 'unchanged') { event.preventDefault(); event.stopPropagation() }
+    const accept = registered.find(command => command.id === 'entry.accept' && command.enabled)
+    const highlighted = input.getAttribute('aria-activedescendant')
+    const action = lookupKeyAction({ chord: chordFromEvent(event.nativeEvent), open: input.getAttribute('aria-expanded') === 'true', highlighted: !!highlighted, acceptKeys: accept?.keys ?? [] })
+    if (action === 'ignore') return
+    event.preventDefault(); event.stopPropagation()
+    if (action === 'cancel') { registered.find(command => command.id === 'entry.cancel' && command.enabled)?.run(); return }
+    if (action === 'pick-text') { onTypedEnter?.(input.value, true); return }
+    if (action === 'accept-row') {
+      // The combobox picks on click; the pick settles before accept runs.
+      if (highlighted) document.getElementById(highlighted)?.click()
+    } else if (onTypedEnter?.(input.value, false) === 'error') return
+    window.setTimeout(() => accept?.run(), 0)
   }}>
     {/* allowCustom is true only so the field's own `error` shows (the stock combobox hides it for closed lists unless its own check fails); the guard below keeps free text from ever becoming a value. */}
     <Combobox {...rest} options={[...options]} allowCustom

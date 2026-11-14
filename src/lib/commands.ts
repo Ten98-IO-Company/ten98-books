@@ -86,6 +86,7 @@ export const commands = {
   'list.last': { title: 'Highlight the last row', context: 'list', bar: false },
   'list.open': { title: 'Open the highlighted row', context: 'list', bar: false },
   'list.history': { title: 'Show the history of the selected item', context: 'list' },
+  'list.cancel': { title: 'Clear the filter, then go back', context: 'list' },
   'entry.history': { title: 'Show the history of this entry', context: 'entry' },
 } as const satisfies Record<string, CommandDefinition>
 

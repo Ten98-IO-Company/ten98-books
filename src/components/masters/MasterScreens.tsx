@@ -6,7 +6,7 @@ import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
 import { actionTitles, actorLabel, describeChanges, type RevisionRow, isolate } from '../../lib/masters'
 import { useLeave } from './entry'
-import { rememberedGroup } from './flash'
+import { rememberChoice, rememberedGroup } from './flash'
 import { GroupForm } from './GroupForm'
 import { LedgerForm } from './LedgerForm'
 import { useMasterData } from './useMasterData'
@@ -28,6 +28,8 @@ export function CreateMaster({ kind, under }: { kind: MasterKind; under?: string
   const company = useCompany()
   const { workspace } = useApp()
   const { groups, ledgers, error, reload } = useMasterData(company.id)
+  // Remembered so the choice list comes back on what was being created.
+  useEffect(() => rememberChoice(company.id, kind), [company.id, kind])
   if (workspace.role === 'viewer') return <Alert tone='info'>Viewers cannot create masters. Ask a workspace owner, admin or editor.</Alert>
   if (error) return <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>
   if (!groups || !ledgers) return <StatusLine busy>Loading the chart…</StatusLine>

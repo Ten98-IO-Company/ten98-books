@@ -395,6 +395,26 @@ export function singleFlight(): <T>(task: () => Promise<T>) => Promise<T | undef
   };
 }
 
+/** What a lookup does with a key, decided from the chord, the list state and the keymap's accept chords. */
+export type LookupKeyAction = 'ignore' | 'cancel' | 'accept-row' | 'accept-text' | 'pick-text';
+
+/**
+ * `chord` is the canonical chord of the key (undefined for a lone modifier or composition). The stock combobox keeps
+ * Escape (with its list closed too) and Enter, and a chord it ignores never reaches the form while its list is open, so
+ * the lookup decides: Escape with the list closed leaves the screen (`cancel`), with it open only the combobox closes the
+ * list (`ignore`); a chord bound to accept (any, from the active keymap) with the list open picks the highlighted row
+ * first (`accept-row`) or, with none, settles the typed text first (`accept-text`); plain Enter on typed text with no row
+ * highlighted settles it and moves on (`pick-text`).
+ */
+export function lookupKeyAction(input: { chord: string | undefined; open: boolean; highlighted: boolean; acceptKeys: readonly string[] }): LookupKeyAction {
+  const { chord, open, highlighted, acceptKeys } = input;
+  if (chord === undefined) return 'ignore';
+  if (chord === 'Escape') return open ? 'ignore' : 'cancel';
+  if (open && acceptKeys.includes(chord)) return highlighted ? 'accept-row' : 'accept-text';
+  if (chord === 'Enter' && open && !highlighted) return 'pick-text';
+  return 'ignore';
+}
+
 // ---- Fixed keyboard order ----
 
 /** The field after `current`, or 'confirm' after the last one (Enter on the last field asks to save). */

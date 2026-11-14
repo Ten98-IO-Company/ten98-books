@@ -67,6 +67,7 @@ const shared = {
   'list.last': 'End',
   'list.open': 'Enter',
   'list.history': 'Alt+Y',
+  'list.cancel': 'Escape',
   'entry.history': 'Alt+Y',
 } as const
 
@@ -80,6 +81,7 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     // Ctrl+Q goes back one level in desktop accounting software, like Escape: on every screen, and on an entry screen leaving it.
     'nav.back': ['Escape', 'Ctrl+Q'],
     'entry.cancel': ['Escape', 'Ctrl+Q'],
+    'list.cancel': ['Escape', 'Ctrl+Q'],
     'entry.delete': 'Alt+D',
     'entry.voucher.contra': 'F4',
     'entry.voucher.payment': 'F5',

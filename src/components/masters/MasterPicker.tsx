@@ -3,7 +3,8 @@ import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
 import { useApp, useCompany } from '../../lib/app-context'
 import { groupPath, type GroupRow, type LedgerRow, isolate } from '../../lib/masters'
-import { takeFlash } from './flash'
+import { rememberedChoice, takeFlash } from './flash'
+import { useAppCommand } from '../KeyboardShell'
 import { ListScope, MasterList, type ListEntry } from './MasterList'
 import { useMasterData } from './useMasterData'
 
@@ -21,7 +22,7 @@ function NewMasterBody({ under }: { under?: string }) {
   const company = useCompany()
   const { workspace } = useApp()
   const navigate = useNavigate()
-  const [active, setActive] = useState<string>('group')
+  const [active, setActive] = useState<string>(() => rememberedChoice(company.id))
   const entries = useMemo<ListEntry[]>(() => choices.map(choice => ({
     key: choice.key, cursor: true, depth: 1, label: choice.title,
     content: <Inline as='div' gap={2} align='baseline'><Text weight='semibold'>{choice.title}</Text><Text tone='muted' size='sm'>{choice.note}</Text></Inline>,
@@ -74,6 +75,12 @@ function PickerBody() {
     </Inline>,
   })), [shown])
   const current = shown.find(item => item.key === active) ?? shown[0]
+  // Escape (list.cancel, so the bar lists it): clear the filter; with nothing to clear move to the list, where the next one goes back.
+  useAppCommand('list.cancel', () => {
+    if (query) setQuery('')
+    else if (document.activeElement !== list.current) list.current?.focus()
+    else void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } })
+  }, { allowInTextInput: true })
   const open = (key: string) => {
     const item = shown.find(candidate => candidate.key === key)
     if (!item) return
@@ -86,9 +93,7 @@ function PickerBody() {
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
     <Input type='search' aria-label='Filter groups and ledgers' placeholder='Type to filter by name' value={query} autoComplete='off' autoFocus
-      onChange={event => setQuery(event.target.value)}
-      // Escape clears the filter; with nothing to clear it moves to the list, where the next Escape goes back one level.
-      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (query) setQuery(''); else list.current?.focus() } }} />
+      onChange={event => setQuery(event.target.value)} />
     <Text size='sm' tone='muted' aria-live='polite'>{query ? `${shown.length} ${shown.length === 1 ? 'match' : 'matches'}` : 'Escape clears the filter, then moves to the list; Escape again goes back.'}</Text>
     {groups && ledgers && <MasterList label='Groups and ledgers' entries={entries} active={current?.key ?? null} onActiveChange={setActive} onOpen={open}
       openHint='Enter to alter' searchField listRef={list} emptyMessage='No group or ledger matches the filter.' />}

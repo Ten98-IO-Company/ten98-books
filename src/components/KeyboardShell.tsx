@@ -34,9 +34,9 @@ export function useKeyboard(): KeyboardState {
  * `allowInTextInput` lets it run while a text field has focus, for entry screens (Enter, accept, cancel) and for a list
  * that sits under its own search field.
  */
-export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false } = {}) {
+export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false, label }: { enabled?: boolean; repeat?: boolean; allowInTextInput?: boolean; /** Wording for this screen when the registry title does not fit it. */ label?: string } = {}) {
   const command = commandOf(id)
-  useCommand({ id, label: command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+  useCommand({ id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
 }
 
 /**

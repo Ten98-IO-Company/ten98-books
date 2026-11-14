@@ -76,7 +76,7 @@ export function useEntryCommands(options: {
   // Always enabled: a scope whose command for a key is disabled still claims that key (the registry's rule), so Escape
   // would do nothing on a button, the Save panel or a viewer's screen. The shell's nav.back shares the key but this
   // scope is inside it and wins; the action bar lists only the innermost (barCommands in src/lib/commands.ts).
-  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true })
+  useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true, label: options.readOnly ? 'Go back one level' : undefined })
   useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
   useAppCommand('entry.history', () => latest.current.onHistory?.(), { enabled: options.onHistory !== undefined })
 }

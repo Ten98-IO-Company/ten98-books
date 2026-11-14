@@ -10,6 +10,11 @@ export function takeFlash(): string {
   return message
 }
 
+/** What was created last per company in this tab (`group` or `ledger`), so the choice list comes back on it. */
+const lastChoice = new Map<string, string>()
+export const rememberChoice = (companyId: string, choice: string) => { lastChoice.set(companyId, choice) }
+export const rememberedChoice = (companyId: string): string => lastChoice.get(companyId) ?? 'group'
+
 /** The group chosen last per company in this tab, so a new entry starts where the previous one ended. */
 const lastGroup = new Map<string, string>()
 export const rememberGroup = (companyId: string, groupId: string) => { lastGroup.set(companyId, groupId) }

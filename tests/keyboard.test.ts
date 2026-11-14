@@ -43,7 +43,10 @@ test('an inner context reuses a key of the global context only where that is the
     const shadows = commandsByContext.filter(command => command.scope !== 'global').flatMap(command => command.chords.filter(chord => globalKeys.has(chord)).map(chord => `${command.id} over ${globalKeys.get(chord)} on ${chord}`));
     // Escape on an entry screen discards the entry instead of leaving the page behind it.
     // Classic also goes back with Ctrl+Q, so its entry screens shadow that key the same way.
-    assert.deepEqual(shadows, name === 'classic' ? ['entry.cancel over nav.back on Escape', 'entry.cancel over nav.back on Ctrl+Q'] : ['entry.cancel over nav.back on Escape'], name);
+    // The alter list's search field owns Escape the same way (clear the filter, then go back).
+    assert.deepEqual(shadows, name === 'classic'
+      ? ['entry.cancel over nav.back on Escape', 'entry.cancel over nav.back on Ctrl+Q', 'list.cancel over nav.back on Escape', 'list.cancel over nav.back on Ctrl+Q']
+      : ['entry.cancel over nav.back on Escape', 'list.cancel over nav.back on Escape'], name);
   }
 });
 
