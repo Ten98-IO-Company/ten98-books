@@ -154,7 +154,7 @@ test('numbers and counters cannot be forged or rewound by direct SQL', async () 
   const counterRefusal = code('23514', 'voucher_counter_sequence');
   await assert.rejects(asApp(client => client.query('UPDATE voucher_counter SET last_number = 1 WHERE company_id = $1 AND voucher_type_id = $2', [counter.company, counter.type])), counterRefusal, 'rewind');
   await assert.rejects(asApp(client => client.query('UPDATE voucher_counter SET last_number = last_number + 2 WHERE company_id = $1 AND voucher_type_id = $2', [counter.company, counter.type])), counterRefusal, 'skip');
-  await assert.rejects(asApp(client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, 'other', 9)`, [counter.company, counter.type])), counterRefusal, 'start past one');
+  await assert.rejects(asApp(client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number) VALUES ($1, $2, 'other', '2026-01-01', 9)`, [counter.company, counter.type])), counterRefusal, 'start past one');
   await assert.rejects(asApp(client => client.query(
     `INSERT INTO voucher (company_id, voucher_type_id, series, number, date, idempotency_key, request_hash, created_by) VALUES ($1, $2, 'main', 999, '2026-01-11', $3, repeat('a', 64), $4)`,
     [companyId, counter.type, `forged-${randomUUID()}`, owner.userId])), code('23514', 'voucher_numbered'), 'a number the counter never issued');
@@ -294,7 +294,7 @@ test('postings running alongside nature changes all complete without deadlocks o
 
 test('a series exists only as its voucher type\'s series', async () => {
   const type = books.type('payment');
-  await assert.rejects(asApp(client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, 'invented', 1)`, [companyId, type])), code('23503'));
+  await assert.rejects(asApp(client => client.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number) VALUES ($1, $2, 'invented', '2026-01-01', 1)`, [companyId, type])), code('23503'));
   await assert.rejects(asApp(client => client.query(
     `INSERT INTO voucher (company_id, voucher_type_id, series, status, date, idempotency_key, request_hash, created_by) VALUES ($1, $2, 'invented', 'optional', '2026-01-11', $3, repeat('a', 64), $4)`,
     [companyId, type, `series-${randomUUID()}`, owner.userId])), code('23503'));
@@ -309,7 +309,7 @@ test('a counter cannot advance without a voucher for each number it issues', asy
     await advance(client);
     const { rows } = await advance(client);
     const voucher = await client.query<{ id: string }>(
-      `INSERT INTO voucher (company_id, voucher_type_id, series, number, date, idempotency_key, request_hash, created_by) VALUES ($1, $2, 'main', $3, '2026-01-11', $4, repeat('a', 64), $5) RETURNING id`,
+      `INSERT INTO voucher (company_id, voucher_type_id, series, number, number_period, date, idempotency_key, request_hash, created_by) VALUES ($1, $2, 'main', $3, '2026-01-01', '2026-01-11', $4, repeat('a', 64), $5) RETURNING id`,
       [companyId, type, rows[0].last_number, `double-${randomUUID()}`, owner.userId]);
     for (const [lineNo, ledgerId, side] of [[1, ids.rent, 'Dr'], [2, books.ledger('Cash'), 'Cr']] as const) {
       await client.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate) VALUES ($1, $2, $3, $4, $5, 7, 'AED', 7, 1)`,

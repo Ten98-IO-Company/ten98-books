@@ -74,7 +74,7 @@ function decodeCursor(cursor: string): [date: string, id: string] {
 /**
  * One page of the undeleted vouchers dated within the period, in date order and, within a day, in entry order (ids are
  * time-ordered UUIDv7). Keyset pagination on (date, id): `next` is the cursor for the following page, or null.
- * Numbers are not the key: they are per voucher type and optional vouchers have none.
+ * Numbers are not the key: they repeat per voucher type and financial year, and optional vouchers have none.
  */
 export async function listVouchers(context: LedgerContext, value: unknown): Promise<VoucherPage> {
   const query = parseInput(voucherListQuery, value, path => ({ from: 'the start date', to: 'the end date', limit: 'the page size', after: 'the page cursor' } as Record<string, string>)[String(path[0])] ?? 'the period');
@@ -169,19 +169,38 @@ async function insertLines(context: LedgerContext, voucherId: string, lines: Pre
 }
 
 /**
- * Issues the next number of the voucher's type and series from its counter row, then stores it on the voucher. The
- * counter row stays locked until commit, so concurrent postings of the same series queue here, and only here; a rolled
- * back posting returns its number, so issued numbers have no gaps except those deleted vouchers leave on purpose. Two
- * statements, so the database's number check sees the counter row this transaction has just written.
+ * Issues the next number of the voucher's type and series in the numbering period of its date (the financial year,
+ * `ledger_numbering_period` in the database decides), then stores the number and the period on the voucher. The
+ * counter row stays locked until commit, so concurrent postings of the same series and period queue here, and only
+ * here; a rolled back posting returns its number. The counter never rewinds: a number deleted at the end of a period
+ * stays used, and the next voucher dated in that period, entered whenever, takes the number after it. Two statements,
+ * so the database's number check sees the counter row this transaction has just written.
  */
-async function issueNumber(context: LedgerContext, voucherId: string, voucherTypeId: string, series: string): Promise<number> {
+async function issueNumber(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }): Promise<number> {
   const { client, company } = context;
-  const { rows } = await client.query<{ last_number: number }>(
-    `INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, $3, 1)
-     ON CONFLICT (company_id, voucher_type_id, series) DO UPDATE SET last_number = voucher_counter.last_number + 1
-     RETURNING last_number`, [company.companyId, voucherTypeId, series]);
-  await client.query('UPDATE voucher SET number = $3 WHERE company_id = $1 AND id = $2', [company.companyId, voucherId, rows[0].last_number]);
+  const { rows } = await client.query<{ last_number: number; period_start: string }>(
+    `INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number)
+     VALUES ($1, $2, $3, ledger_numbering_period($1, $2, $4::date), 1)
+     ON CONFLICT (company_id, voucher_type_id, series, period_start) DO UPDATE SET last_number = voucher_counter.last_number + 1
+     RETURNING last_number, to_char(period_start, 'YYYY-MM-DD') AS period_start`, [company.companyId, voucher.typeId, voucher.series, voucher.date]);
+  await client.query('UPDATE voucher SET number = $3, number_period = $4 WHERE company_id = $1 AND id = $2',
+    [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start]);
   return rows[0].last_number;
+}
+
+/**
+ * A numbered voucher's new date must stay in the numbering period of its number (open question (a) of the D-04
+ * amendment: what the reference does when the date moves to another year is not yet observed). Refusing keeps every
+ * number unique within its year without renumbering; the database enforces the same rule (`voucher_number_period`).
+ */
+async function numberedDateChange(context: LedgerContext, before: Voucher, date: string): Promise<void> {
+  if (before.number === null || date === before.date) return;
+  const { rows } = await context.client.query<{ same: boolean; from: string }>(
+    `SELECT ledger_numbering_period(company_id, voucher_type_id, $3::date) = number_period AS same, to_char(number_period, 'YYYY-MM-DD') AS "from"
+     FROM voucher WHERE company_id = $1 AND id = $2`, [context.company.companyId, before.id, date]);
+  if (!rows[0].same) {
+    throw ledgerError(409, `This voucher is numbered in the financial year from ${rows[0].from}. Choose a date in that year, or cancel it and enter a new voucher in the other year.`, 'voucher_state');
+  }
 }
 
 const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');
@@ -197,7 +216,7 @@ export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };
 async function writeVoucherBills(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }, plan: BillPlan, numbering: boolean, number: number | null): Promise<number | null> {
   const later = plan.rows.filter(row => row.auto);
   await writeBills(context, voucher, plan.rows.filter(row => !row.auto));
-  const issued = numbering ? await issueNumber(context, voucher.id, voucher.typeId, voucher.series) : number;
+  const issued = numbering ? await issueNumber(context, voucher) : number;
   if (later.length) await writeBills(context, voucher, later, issued);
   return issued;
 }
@@ -243,8 +262,8 @@ async function changeable(context: LedgerContext, voucherId: string, revision: n
 
 /**
  * Replaces a voucher's date, narration, reference, flags, lines and bill rows. The type, series and number never
- * change; an optional voucher made regular takes the next number then, and a numbered voucher cannot become optional
- * again. Each row finds its bill by name again, so an unchanged name keeps the bill; a renamed reference or a changed
+ * change, and a numbered voucher's date stays in its number's financial year; an optional voucher made regular takes
+ * the next number of the year of its (new) date then, and a numbered voucher cannot become optional again. Each row finds its bill by name again, so an unchanged name keeps the bill; a renamed reference or a changed
  * party leaves other vouchers' rows on the old bill, which then stands on its own (observed; answered with
  * `bill_split`). A line whose ledger is no longer bill-wise keeps the rows it had (`bills_kept`).
  */
@@ -255,6 +274,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   if (before.status === 'cancelled') throw ledgerError(409, 'A cancelled voucher cannot be altered.', 'voucher_state');
   if (before.status !== 'optional' && input.status === 'optional') throw ledgerError(409, 'A numbered voucher cannot become optional. Cancel or delete it instead.', 'voucher_state');
   assertDateOpen(context, before.date);
+  await numberedDateChange(context, before, input.date);
   const lines = await prepareLines(context, before.kind, input);
   const stored = await storedBillRows(context, voucherId);
   const plan = await planBills(context, { kind: before.kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
