@@ -87,14 +87,21 @@ BEGIN
   END IF;
 END $$;
 DROP INDEX bill_identity_idx;
--- In plain-text order (COLLATE "C"), the order the lists read a party's bills in, so a page reads only its own bills.
--- An empty key (a name of ignored characters only) sorts first.
-CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name) COLLATE "C");
+-- The key is stored with the bill (a generated column, in plain-text order), so the lists compare a plain text column:
+-- under the forced row-level policy only leakproof comparisons become index conditions, and name_match_key is not
+-- leakproof (lower and translate are not), so a keyset on the expression was a filter and every page walked the party's
+-- bills from the first one. An empty key (a name of ignored characters only) sorts first.
+ALTER TABLE bill ADD COLUMN name_key text COLLATE "C" GENERATED ALWAYS AS (name_match_key(name)) STORED;
+CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_key);
 -- A party's bills in list order, led by the ledger without company_id: the lists read a party's bills through it (a
 -- ledger belongs to one company, so the ledger implies the company; the row-level policy filters as everywhere). Led
 -- by company_id, the identity index lost to the primary key whenever the joined tables had statistics and bill had
 -- none, and a page then read every bill of the company for each party it looked at.
-CREATE INDEX bill_ledger_order_idx ON bill (ledger_id, name_match_key(name) COLLATE "C", id);
+CREATE INDEX bill_ledger_order_idx ON bill (ledger_id, name_key, id);
+-- A bill by its id alone, for the lists' details of the bills on a page: led by company_id, the primary key looked cheap
+-- for company_id alone whenever the statistics predated the company's bills, and the planner read the company's bills
+-- for each bill of the page.
+CREATE UNIQUE INDEX bill_id_idx ON bill (id);
 
 -- ---- Vouchers created cancelled, without lines ----
 
