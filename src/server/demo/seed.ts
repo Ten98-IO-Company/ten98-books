@@ -33,6 +33,8 @@ export type SeedReport = {
   groups: Counts; ledgers: Counts & { openingsSet: number }; vouchers: Counts & { cancelled: number };
   /** Voucher numbers ten98-books assigned that differ from the dataset's `expectedNumber` (reported, never forced). */
   numberDifferences: string[];
+  /** Standard ledgers the dataset names differently from ten98-books; the seeded name is kept, so the difference is listed. */
+  nameDifferences: string[];
   /** Opening balances already on a standard ledger that differ from the dataset (reported, never overwritten). */
   openingDifferences: string[];
   skipped: string[];
@@ -66,22 +68,28 @@ async function holdsDataset(userId: string, companyId: string, dataset: Dataset)
   });
 }
 
+export type DemoCompany = { id: string; name: string; role: string };
+
 /**
- * The user's company that holds `dataset`, or null when there is none. Seeding writes only for the owner; a same-named
- * company that is not this dataset's, or two that are, stops the command rather than guess.
+ * The user's company that holds `dataset`, or null when there is none. Seeding considers only companies the user owns,
+ * so membership of somebody else's copy neither blocks nor redirects it; reading considers every company the user can
+ * open and prefers the one they own. A same-named company that is not this dataset's, or two that are, stops the
+ * command rather than guess.
  */
-export async function findDemoCompany(userId: string, dataset: Dataset, purpose: 'seed' | 'read'): Promise<{ id: string; name: string } | null> {
-  const named = (await listCompanies(userId)).filter(company => company.company !== null && !company.twoFactorLocked && company.name === dataset.company.name);
-  const ours: typeof named = [];
+export async function findDemoCompany(userId: string, dataset: Dataset, purpose: 'seed' | 'read'): Promise<DemoCompany | null> {
+  const named = (await listCompanies(userId)).filter(company => company.company !== null && !company.twoFactorLocked && company.name === dataset.company.name
+    && (purpose === 'read' || company.role === 'owner'));
+  let ours: typeof named = [];
   for (const company of named) if (await holdsDataset(userId, company.id, dataset)) ours.push(company);
+  const owned = ours.filter(company => company.role === 'owner');
+  if (ours.length > 1 && owned.length === 1) ours = owned;
   const label = `"${dataset.company.name}" (${dataset.slug})`;
   if (ours.length > 1) throw new DemoError(`More than one of this user's companies holds the demo data for ${label}. Rename or remove the extra ones first.`);
   if (!ours.length) {
     if (named.length) throw new DemoError(`A company named ${label} exists that does not hold this demo data (it has other vouchers, ledgers or groups). Rename it, or use another owner.`);
     return null;
   }
-  if (purpose === 'seed' && ours[0].role !== 'owner') throw new DemoError(`This user is ${ours[0].role === 'admin' ? 'an admin' : `a ${ours[0].role}`} of ${label}, not its owner. The seeder writes only to companies its owner created.`);
-  return { id: ours[0].id, name: ours[0].name };
+  return { id: ours[0].id, name: ours[0].name, role: ours[0].role };
 }
 
 /** Everything in the dataset that ten98-books does not model, one aggregated line per file and kind of content. */
@@ -136,6 +144,10 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
         if (entry.standard) {
           const standard = existingLedgers.find(ledger => ledger.systemKey === entry.standard);
           if (!standard) throw new FoundationError(404, `the company has no ${entry.standard} ledger`);
+          if (entry.group && (await place(entry.group)) !== standard.groupId) {
+            throw new FoundationError(409, `group "${entry.group}" is not the group the ${entry.standard} ledger is in (${standard.groupName ?? 'none'}); a standard ledger keeps its place`);
+          }
+          if (standard.name !== entry.name) report.nameDifferences.push(`${at}: the dataset calls it "${entry.name}", ten98-books calls it "${standard.name}" (kept; compare by key, not by name, on the other side)`);
           report.ledgers.present++;
           if (!entry.opening) continue;
           const wanted = toMinor(entry.opening.amount, context.company.exponent);
@@ -200,8 +212,29 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
   }
 }
 
-/** Seeds one dataset for `userId`; safe to run again. */
+/**
+ * Seeds one dataset for `userId`; safe to run again, and safe to run twice at once: a session-level advisory lock keyed on
+ * the user and the dataset slug, held on one connection for the whole run, makes the second run wait and then find the
+ * first run's company instead of creating another. The lock is released on every exit path (a dropped connection
+ * releases it too). It is polled rather than awaited, because the pool's statement timeout would cut a long wait.
+ */
 export async function seedDataset(userId: string, dataset: Dataset): Promise<SeedReport> {
+  const client = await getDatabase().pool.connect();
+  const lockKey = `demo-seed:${userId}:${dataset.slug}`;
+  let broken = false;
+  try {
+    while (!(await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [lockKey])).rows[0].locked) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    try { return await seedUnderLock(userId, dataset); }
+    finally { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]).catch(() => { broken = true; }); }
+  } catch (error) {
+    broken = broken || (error as { code?: string })?.code?.startsWith('08') === true;
+    throw error;
+  } finally { client.release(broken); }
+}
+
+async function seedUnderLock(userId: string, dataset: Dataset): Promise<SeedReport> {
   const settings = dataset.company;
   const currency = baseCurrencies[settings.baseCurrency as keyof typeof baseCurrencies];
   if (!currency) throw new DemoError(`demo/${dataset.slug}/company.json: baseCurrency "${settings.baseCurrency}" is not supported by ten98-books (${Object.keys(baseCurrencies).join(', ')})`);
@@ -211,7 +244,7 @@ export async function seedDataset(userId: string, dataset: Dataset): Promise<See
   const report: SeedReport = {
     slug: dataset.slug, companyId: '', companyName: settings.name, companyCreated: false,
     groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
-    numberDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
+    numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
   };
   if (!company) {
     try {
@@ -219,7 +252,7 @@ export async function seedDataset(userId: string, dataset: Dataset): Promise<See
         name: settings.name, baseCurrency: settings.baseCurrency, financialYearStart: settings.financialYearStart, booksBeginning: settings.booksBeginning,
         timeZone: settings.timeZone, ...settings.secondLanguageName ? { secondLanguageName: settings.secondLanguageName } : {},
       });
-      company = { id: created.id, name: created.name };
+      company = { id: created.id, name: created.name, role: 'owner' };
       report.companyCreated = true;
     } catch (error) { failure(dataset, 'company', 'company', error); }
   }
@@ -252,6 +285,7 @@ export function formatSeedReport(report: SeedReport): string[] {
     `  vouchers: ${part(report.vouchers)}${report.vouchers.cancelled ? `; ${report.vouchers.cancelled} cancelled` : ''}`,
   ];
   if (report.numberDifferences.length) lines.push('  voucher numbers that differ from expectedNumber (reported, not forced):', ...report.numberDifferences.map(line => `    ${line}`));
+  if (report.nameDifferences.length) lines.push('  standard ledger names that differ from the dataset:', ...report.nameDifferences.map(line => `    ${line}`));
   if (report.openingDifferences.length) lines.push('  opening balances left as they were:', ...report.openingDifferences.map(line => `    ${line}`));
   if (report.skipped.length) lines.push('  skipped (not modelled by ten98-books yet):', ...report.skipped.map(line => `    ${line}`));
   return lines;

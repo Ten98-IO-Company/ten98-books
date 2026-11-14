@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseMoney, type MoneyExponent } from '@ten98/runtime';
@@ -173,6 +173,8 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     const at = `ledger "${ledger.key}": `;
     if (ledger.group === undefined) { if (!ledger.standard) problem('ledgers', at, 'group is required (a group key or a seeded group system key)'); }
     else if (!groupKeys.has(ledger.group) && !seededGroups.has(ledger.group)) problem('ledgers', at, `group "${ledger.group}" is neither a group key in groups.json nor a seeded group's system key`);
+    if (ledger.standard === 'profit_and_loss' && ledger.group !== undefined) problem('ledgers', at, 'the profit and loss ledger stays outside every group; remove "group"');
+    if (ledger.standard === 'cash' && ledger.group !== undefined && ledger.group !== 'cash_in_hand') problem('ledgers', at, `a standard cash ledger sits in cash_in_hand and is not moved, but group is "${ledger.group}"`);
     if (ledger.opening) fits('ledgers', `${at}opening: `, ledger.opening.amount);
   }
 
@@ -223,27 +225,80 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
 /** The demo/ folder at the repository root. */
 export const demoRoot = fileURLToPath(new URL('../../../demo/', import.meta.url));
 
-async function readJson(label: string, directory: string, name: string, required: boolean): Promise<unknown> {
+/** The most one dataset file may hold. A mistake (a data dump, the wrong file) is refused with a clear message, not parsed. */
+export const maxFileBytes = 32 * 1024 * 1024;
+
+/**
+ * Keys that appear twice in one JSON object: `JSON.parse` keeps the last silently, so the first value would vanish
+ * unseen. Runs on text that already parsed, so it only has to walk the structure, not validate it.
+ */
+export function duplicateKeys(text: string): string[] {
+  const found: string[] = [];
+  let at = 0;
+  const skip = () => { while (at < text.length && ' \t\r\n'.includes(text[at])) at++; };
+  const string = (): string => {
+    const start = at++;
+    while (text[at] !== '"') at += text[at] === '\\' ? 2 : 1;
+    return JSON.parse(text.slice(start, ++at)) as string;
+  };
+  const value = (path: string): void => {
+    skip();
+    if (text[at] === '"') { string(); return; }
+    if (text[at] === '{' || text[at] === '[') {
+      const object = text[at++] === '{', seen = new Set<string>();
+      for (let index = 0; ; index++) {
+        skip();
+        if (text[at] === '}' || text[at] === ']') { at++; return; }
+        if (object) {
+          const key = string();
+          if (seen.has(key)) found.push(`${path || 'the top level'}: the key "${key}" appears more than once`);
+          seen.add(key);
+          skip(); at++;
+          value(path ? `${path}.${key}` : key);
+        } else value(`${path}[${index}]`);
+        skip();
+        if (text[at] === ',') at++;
+      }
+    }
+    while (at < text.length && !',]} \t\r\n'.includes(text[at])) at++;
+  };
+  value('');
+  return found;
+}
+
+const bytes = (count: number) => count >= 1048576 ? `${(count / 1048576).toFixed(1)} MB` : `${count} bytes`;
+
+async function readJson(label: string, directory: string, name: string, required: boolean, limit: number): Promise<unknown> {
+  const path = join(directory, name);
   let content: string;
-  try { content = await readFile(join(directory, name), 'utf8'); }
-  catch (error) {
+  try {
+    const { size } = await stat(path);
+    if (size > limit) throw new DatasetError([`${label}/${name}: the file is ${bytes(size)}; the limit is ${bytes(limit)} per file`]);
+    content = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error instanceof DatasetError) throw error;
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !required) return undefined;
     throw new DatasetError([`${label}/${name}: ${(error as NodeJS.ErrnoException).code === 'ENOENT' ? 'the file is missing' : 'the file cannot be read'}`]);
   }
-  try { return JSON.parse(content.replace(/^﻿/, '')); }
+  content = content.replace(/^\uFEFF/, '');
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); }
   catch (error) { throw new DatasetError([`${label}/${name}: not valid JSON (${(error as Error).message})`]); }
+  const repeated = duplicateKeys(content);
+  if (repeated.length) throw new DatasetError(repeated.slice(0, 20).map(issue => `${label}/${name}: ${issue}`));
+  return parsed;
 }
 
 /** Loads and validates the dataset in `directory`; its company slug must equal the folder name. */
-export async function loadDataset(directory: string): Promise<Dataset> {
+export async function loadDataset(directory: string, { maxBytes = maxFileBytes }: { maxBytes?: number } = {}): Promise<Dataset> {
   const folder = directory.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? directory;
   const label = `demo/${folder}`;
-  const required = (name: string) => readJson(label, directory, `${name}.json`, true);
-  const [company, ledgers, vouchers, expected, groups] = await Promise.all([required('company'), required('ledgers'), required('vouchers'), required('expected'), readJson(label, directory, 'groups.json', false)]);
+  const required = (name: string) => readJson(label, directory, `${name}.json`, true, maxBytes);
+  const [company, ledgers, vouchers, expected, groups] = await Promise.all([required('company'), required('ledgers'), required('vouchers'), required('expected'), readJson(label, directory, 'groups.json', false, maxBytes)]);
   const extraFiles: Record<string, unknown> = {};
   for (const entry of (await readdir(directory)).sort()) {
     if (!entry.endsWith('.json') || (knownFiles as readonly string[]).includes(entry.slice(0, -5))) continue;
-    extraFiles[entry] = await readJson(label, directory, entry, true);
+    extraFiles[entry] = await readJson(label, directory, entry, true, maxBytes);
   }
   const dataset = parseDataset({ company, groups, ledgers, vouchers, expected, extraFiles }, label);
   if (dataset.slug !== folder) throw new DatasetError([`${label}/company.json: slug "${dataset.slug}" must equal the folder name "${folder}"`]);

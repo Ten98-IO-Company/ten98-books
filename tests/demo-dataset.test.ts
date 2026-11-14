@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { notComparable } from '../src/server/demo/compare.ts';
-import { DatasetError, listDatasetFolders, loadDataset, parseDataset, demoRoot, toMinor, type RawDataset } from '../src/server/demo/dataset.ts';
+import { DatasetError, duplicateKeys, listDatasetFolders, loadDataset, parseDataset, demoRoot, toMinor, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
+import { goldenVouchers } from './helpers/golden.ts';
 
 /** A small valid dataset; each test breaks one thing in a copy of it. */
 const good = (): RawDataset & { company: any; groups: any[]; ledgers: any[]; vouchers: any[]; expected: any } => ({
@@ -219,4 +220,51 @@ test('starter-trading carries the golden fixture: 12 ledgers beyond the standard
   assert.equal(new Set(dataset.vouchers.map(voucher => voucher.type)).size, 8);
   assert.equal(dataset.expected.trialBalance?.totalDebit, '53625.00');
   assert.equal(dataset.expected.profitAndLoss?.netProfit, '-7400.00');
+});
+
+test('a standard ledger keeps its place: the profit and loss ledger has no group and the cash ledger stays in cash_in_hand', () => {
+  const raw = good();
+  raw.ledgers.push({ key: 'profit-and-loss', name: 'Profit and Loss', standard: 'profit_and_loss', group: 'capital' });
+  mentions(problems(raw), 'ledgers.json', '"profit-and-loss"', 'outside every group');
+  raw.ledgers.pop();
+  raw.ledgers[0].group = 'bank_accounts';
+  mentions(problems(raw), 'ledgers.json', '"cash"', 'cash_in_hand', '"bank_accounts"');
+  raw.ledgers[0].group = 'cash_in_hand';
+  assert.deepEqual(problems(raw), []);
+});
+
+test('duplicateKeys finds a repeated key at any depth and ignores look-alikes inside strings and separate objects', () => {
+  assert.deepEqual(duplicateKeys('{"a":1,"b":{"c":1,"c":2},"d":[{"e":1},{"e":2}],"s":"x\\"y\\":1,\\"s\\":2"}'), ['b: the key "c" appears more than once']);
+  assert.deepEqual(duplicateKeys('[{"key":"a","amount":"1.00","amount":"2.00"}]'), ['[0]: the key "amount" appears more than once']);
+  assert.deepEqual(duplicateKeys('{"a":1,"a":2}'), ['the top level: the key "a" appears more than once']);
+  assert.deepEqual(duplicateKeys('[{"lines":[{"x":1},{"y":1,"y":1}]}]'), ['[0].lines[1]: the key "y" appears more than once']);
+  assert.deepEqual(duplicateKeys('{"n":-1.5e3,"t":true,"z":null,"o":{},"l":[]}'), []);
+});
+
+test('loading refuses a file with a repeated key in one entry and a file over the size limit, naming the file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'demo-dataset-'));
+  try {
+    const folder = join(root, 'sample-shop');
+    await mkdir(folder);
+    const raw = good();
+    for (const name of ['company', 'groups', 'ledgers', 'vouchers', 'expected'] as const) await writeFile(join(folder, `${name}.json`), JSON.stringify(raw[name]));
+    await loadDataset(folder);
+    await writeFile(join(folder, 'vouchers.json'), JSON.stringify(raw.vouchers).replace('"amount":"40.00","side":"Cr"', '"amount":"40.00","amount":"41.00","side":"Cr"').replace('"side":"Cr","amount":"40.00"', '"side":"Cr","amount":"40.00","amount":"41.00"'));
+    await assert.rejects(loadDataset(folder), /demo\/sample-shop\/vouchers\.json: \[0\]\.lines\[1\]: the key "amount" appears more than once/);
+    await writeFile(join(folder, 'vouchers.json'), JSON.stringify(raw.vouchers));
+    await assert.rejects(loadDataset(folder, { maxBytes: 100 }), /demo\/sample-shop\/\w+\.json: the file is \d+ bytes; the limit is 100 bytes per file/);
+    await writeFile(join(folder, 'items.json'), JSON.stringify([{ a: 1 }]).replace('"a":1', '"a":1,"a":2'));
+    await assert.rejects(loadDataset(folder), /items\.json: \[0\]: the key "a" appears more than once/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('starter-trading carries every golden voucher: type, date, ledger names, sides and amounts, in order', async () => {
+  const dataset = await loadDataset(join(demoRoot, 'starter-trading'));
+  const ledgerName = new Map(dataset.ledgers.map(ledger => [ledger.key, ledger.name]));
+  assert.equal(dataset.vouchers.length, goldenVouchers.length);
+  goldenVouchers.forEach(([kind, date, lines], index) => {
+    const voucher = dataset.vouchers[index];
+    assert.deepEqual([voucher.type, voucher.date, voucher.status, voucher.postDated], [kind, date, 'regular', false], `voucher ${index + 1}`);
+    assert.deepEqual(voucher.lines.map(line => [ledgerName.get(line.ledger), line.side, line.amount]), lines.map(([name, side, amount]) => [name, side, `${amount}.00`]), `lines of voucher ${index + 1}`);
+  });
 });

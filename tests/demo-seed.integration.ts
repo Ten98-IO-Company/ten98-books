@@ -4,10 +4,11 @@ import { after, before, test } from 'node:test';
 import { demoRoot, DemoError, loadDataset, parseDataset, seededGroupKeys, type Dataset } from '../src/server/demo/dataset.ts';
 import { compareDataset, compareDemo, formatCompareResult } from '../src/server/demo/compare.ts';
 import { findUserId, formatSeedReport, seedDataset, seedDemo } from '../src/server/demo/seed.ts';
-import { listGroups } from '../src/server/ledger/masters.ts';
-import { listVouchers } from '../src/server/ledger/vouchers.ts';
+import { alterLedger, listGroups, listLedgers } from '../src/server/ledger/masters.ts';
+import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
+import { goldenCompany } from './helpers/golden.ts';
 import { addLedger, chart, createCompany, inCompany, invite, rowCount, setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
@@ -41,7 +42,7 @@ const edgeDataset = (): Dataset => parseDataset({
   expected: {
     period: { from: '2026-04-01', to: '2026-05-31' }, voucherCount: 4, vouchersByType: { payment: 4 },
     // Deliberately wrong in two places (cash really closes at 30.000 Dr, the balance sheet at 30.000) to show the comparison reports them.
-    trialBalance: { totalDebit: '50.500', totalCredit: '50.500', ledgers: { cash: { closing: '20.000', side: 'Dr' } } },
+    trialBalance: { totalDebit: '50.500', totalCredit: '50.500', ledgers: { cash: { closing: '20.000', side: 'Dr' }, capital: { closing: '50.500', side: 'Cr' }, rent: { closing: '20.500', side: 'Dr' } } },
     profitAndLoss: { grossProfit: '0.000', netProfit: '-20.500' }, balanceSheet: { total: '31.000' }, payroll: { net: '0.000' },
   },
 }, 'demo/edge-check');
@@ -136,16 +137,35 @@ test('a second user gets a separate company with the same figures, and neither c
   await assert.rejects(inCompany(owner.userId, report.companyId, () => Promise.resolve(), 'read'), { message: companyNotFound });
 });
 
-test('a user who is not the owner of the company cannot seed into it', async () => {
-  for (const role of ['viewer', 'editor'] as const) {
+test('a member who does not own the company never writes to it: seeding gives them a company of their own, beside the one they belong to', async () => {
+  for (const role of ['viewer', 'editor', 'admin'] as const) {
     const member = await invite(owner.browser, companyId, role);
     const before = await rowCount(database.adminUrl, 'revision_log', companyId);
-    await assert.rejects(seedDataset(member.userId, starter), (error: unknown) => error instanceof DemoError && /not its owner/.test(error.message));
-    assert.equal(await rowCount(database.adminUrl, 'revision_log', companyId), before, `${role} wrote nothing`);
+    const report = await seedDataset(member.userId, starter);
+    assert.equal(report.companyCreated, true, role);
+    assert.notEqual(report.companyId, companyId, `${role} did not write into the owner's company`);
+    assert.equal(await rowCount(database.adminUrl, 'revision_log', companyId), before, `${role} wrote nothing into it`);
+    // Owning one copy and belonging to another is not ambiguous: a second run finds their own, and compare says which it read.
+    assert.equal((await seedDataset(member.userId, starter)).companyCreated, false);
+    const compared = await compareDataset(member.userId, starter);
+    assert.deepEqual([compared.companyId, compared.role, compared.differences], [report.companyId, 'owner', 0]);
+    assert.ok(formatCompareResult(compared)[0].includes(`company ${report.companyId} (owner)`));
   }
   const viewer = await invite(owner.browser, companyId, 'viewer');
   await assert.rejects(inCompany(viewer.userId, companyId, () => Promise.resolve(), 'write'), { message: companyNotFound });
-  assert.equal((await compareDataset(viewer.userId, starter)).differences, 0, 'a member can still read and compare');
+  const compared = await compareDataset(viewer.userId, starter);
+  assert.deepEqual([compared.companyId, compared.role, compared.differences], [companyId, 'viewer', 0], 'a member who owns no copy can still read and compare the one they belong to');
+});
+
+test('two seeds at once for one user and dataset create one company, not two', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const reports = await Promise.all([seedDataset(user.userId, starter), seedDataset(user.userId, starter), seedDataset(user.userId, starter)]);
+  assert.equal(new Set(reports.map(report => report.companyId)).size, 1);
+  assert.equal(reports.filter(report => report.companyCreated).length, 1);
+  assert.equal(reports.reduce((sum, report) => sum + report.vouchers.created, 0), 18);
+  const named = (await user.browser.call('/api/companies')).body.companies.filter((company: { name: string }) => company.name === 'Starter Trading');
+  assert.equal(named.length, 1);
+  assert.equal((await compareDataset(user.userId, starter)).differences, 0, 'seed and compare still run');
 });
 
 test('a same-named company of the user that does not hold this dataset is never written to', async () => {
@@ -172,7 +192,8 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.equal(report.companyName, 'Edge Check');
 
   const result = await compareDataset(owner.userId, edge);
-  assert.deepEqual(result.notComparable, ['payroll (a feature block ten98-books cannot compute yet)']);
+  assert.deepEqual(result.notComparable, ['payroll (a feature block ten98-books cannot compute yet)',
+    'trialBalance: 1 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss)']);
   const differing = result.lines.filter(line => !line.ok).map(line => line.label);
   assert.deepEqual(differing, ['Closing balance of Cash', 'Total capital and liabilities', 'Total assets']);
   const cash = result.lines.find(line => line.label === 'Closing balance of Cash')!;
@@ -209,4 +230,76 @@ test('the dataset company settings are applied: currency, financial year, books 
   const settings = (await owner.browser.call('/api/companies')).body.companies.find((company: { name: string }) => company.name === 'Edge Check').company;
   assert.deepEqual([settings.baseCurrency, settings.currencyMinorUnits, settings.financialYearStart, settings.booksBeginning, settings.timeZone],
     ['KWD', 3, { month: 4, day: 1 }, '2026-04-01', 'Asia/Kuwait']);
+});
+
+/** The comparison reads the whole trial balance, not only the ledgers expected.json names. */
+const withLedgers = (dataset: Dataset, ledgers: NonNullable<Dataset['expected']['trialBalance']>['ledgers']): Dataset =>
+  ({ ...dataset, expected: { ...dataset.expected, trialBalance: { ...dataset.expected.trialBalance!, ledgers } } });
+
+test('a ledger with a balance that expected.json leaves out is a difference; one that closes at zero is named, not skipped', async () => {
+  const { wages: _wages, 'profit-and-loss': _profit, ...rest } = starter.expected.trialBalance!.ledgers;
+  const result = await compareDataset(owner.userId, withLedgers(starter, rest));
+  const missing = result.lines.filter(line => !line.ok);
+  assert.deepEqual(missing.map(line => [line.label, line.expected, line.actual]), [['Closing balance of Wages', 'not in expected.json', '6000.00 Dr']]);
+  assert.equal(result.differences, 1);
+  assert.deepEqual(result.notComparable, ['trialBalance: 1 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss)']);
+});
+
+test('a ledger expected.json names that the app does not have is a difference, and so is the app ledger left unmatched', async () => {
+  const renamed: Dataset = { ...starter, ledgers: starter.ledgers.map(ledger => ledger.key === 'wages' ? { ...ledger, name: 'Salaries' } : ledger) };
+  const result = await compareDataset(owner.userId, renamed);
+  assert.deepEqual(result.lines.filter(line => !line.ok).map(line => [line.label, line.actual]),
+    [['Closing balance of Salaries', 'ledger missing'], ['Closing balance of Wages (not in the dataset)', '6000.00 Dr']]);
+  const absent: Dataset = { ...starter, ledgers: [...starter.ledgers, { key: 'petty', name: 'Petty Float', group: 'cash_in_hand' }] };
+  assert.deepEqual((await compareDataset(owner.userId, absent)).lines.filter(line => !line.ok).map(line => [line.label, line.actual]), [['Ledger Petty Float', 'ledger missing']]);
+});
+
+test('a period that spans two financial years is listed as not compared for profit and loss; any other failure stops the comparison', async () => {
+  const spanning: Dataset = { ...starter, expected: { ...starter.expected, period: { from: '2026-01-01', to: '2027-03-01' } } };
+  const result = await compareDataset(owner.userId, spanning);
+  assert.ok(result.notComparable.some(line => line.startsWith('profitAndLoss (the period spans more than one financial year')));
+  assert.ok(!result.lines.some(line => line.block === 'Profit and loss'));
+  assert.ok(result.lines.some(line => line.block === 'Balance sheet'));
+  const tooLong: Dataset = { ...starter, expected: { ...starter.expected, period: { from: '2026-01-01', to: '2037-01-02' } } };
+  await assert.rejects(compareDataset(owner.userId, tooLong), /demo\/starter-trading\/expected\.json: the reports refused the period 2026-01-01 to 2037-01-02: Check the end date/);
+});
+
+test('a standard ledger the dataset names differently is listed in the seed report, and one moved out of its group stops the seed', async () => {
+  const named: Dataset = { ...starter, ledgers: starter.ledgers.map(ledger => ledger.key === 'cash' ? { ...ledger, name: 'Kasse' } : ledger) };
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const report = await seedDataset(user.userId, named);
+  assert.equal(report.nameDifferences.length, 1);
+  assert.match(report.nameDifferences[0], /ledger "cash": the dataset calls it "Kasse", ten98-books calls it "Cash"/);
+  assert.ok(formatSeedReport(report).some(line => line.includes('standard ledger names that differ')));
+  assert.equal((await compareDataset(user.userId, starter)).differences, 0, 'the seeded name is kept, so the books still agree');
+
+  await inCompany(user.userId, report.companyId, async context => {
+    const cash = (await listLedgers(context)).find(ledger => ledger.systemKey === 'cash')!;
+    const bank = (await listGroups(context)).find(group => group.systemKey === 'bank_accounts')!;
+    await alterLedger(context, cash.id, { name: cash.name, secondLanguageName: cash.secondLanguageName, groupId: bank.id, opening: { amount: '0.00', side: 'Dr' }, revision: cash.revision });
+  }, 'write');
+  await assert.rejects(seedDataset(user.userId, starter), (error: unknown) => error instanceof DemoError
+    && error.message.startsWith('demo/starter-trading/ledgers.json: ledger "cash": group "cash_in_hand" is not the group the cash ledger is in (Bank Accounts)'));
+});
+
+test('starter-trading equals the golden fixture field by field: groups, ledgers with openings, and every voucher with its lines and number', async () => {
+  const golden = await goldenCompany(owner.browser);
+  const byName = (a: unknown[], b: unknown[]) => String(a[0]).localeCompare(String(b[0]));
+  const describe = (userId: string, id: string) => inCompany(userId, id, async context => {
+    const groups = await listGroups(context);
+    const parent = new Map(groups.map(group => [group.id, group.name]));
+    const ledgers = (await listLedgers(context)).map(ledger => [ledger.name, ledger.groupName, ledger.opening.amount.toString(), ledger.opening.side, ledger.systemKey]);
+    const vouchers = [];
+    for (const summary of (await listVouchers(context, { from: '2000-01-01', to: '2030-12-31', limit: 500 })).vouchers) {
+      const voucher = await readVoucher(context, summary.id);
+      vouchers.push([voucher.kind, voucher.number, voucher.date, voucher.status, voucher.postDated, voucher.lines.map(line => [line.ledgerName, line.side, line.amount.toString()])]);
+    }
+    return {
+      groups: groups.map(group => [group.name, group.parentId ? parent.get(group.parentId) : null, group.nature, group.grossProfit, group.systemKey]).sort(byName),
+      ledgers: ledgers.sort(byName), vouchers,
+    };
+  });
+  const fixture = await describe(owner.userId, golden.companyId);
+  assert.equal(fixture.vouchers.length, 18);
+  assert.deepEqual(await describe(owner.userId, companyId), fixture, 'narrations differ by design; everything else must match');
 });

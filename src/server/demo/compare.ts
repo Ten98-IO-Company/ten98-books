@@ -1,4 +1,5 @@
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime';
+import { financialYearOf } from '../../lib/company.ts';
 import { FoundationError } from '../auth.ts';
 import { ledgerContext } from '../ledger/context.ts';
 import { listLedgers } from '../ledger/masters.ts';
@@ -15,7 +16,7 @@ import { findDemoCompany, findUserId, selectDatasets, type DemoSelection } from 
  */
 
 export type CompareLine = { block: string; label: string; expected: string; actual: string; difference: string; ok: boolean };
-export type CompareResult = { slug: string; companyName: string; period: { from: string; to: string }; lines: CompareLine[]; notComparable: string[]; differences: number };
+export type CompareResult = { slug: string; companyName: string; companyId: string; role: string; period: { from: string; to: string }; lines: CompareLine[]; notComparable: string[]; differences: number };
 
 const comparable = { top: ['period', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'], profitAndLoss: ['grossProfit', 'netProfit'], balanceSheet: ['total'] };
@@ -67,7 +68,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       }
     }
 
-    // Trial balance: totals and each named ledger's closing balance and side.
+    // Trial balance: totals, each named ledger's closing balance and side, and every ledger the file leaves out.
     const trial = expected.trialBalance;
     if (trial) {
       const report = await trialBalanceReport(context, { from, to });
@@ -75,28 +76,46 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       amount('Trial balance', 'Total credit', trial.totalCredit, report.grandTotals.closingCredit);
       const stored = await listLedgers(context);
       const closing = new Map(report.nodes.filter(node => node.kind === 'ledger').map(node => [node.id, subtractMoney(node.closingDebit, node.closingCredit)]));
+      const appLedger = (entry: Dataset['ledgers'][number]) =>
+        stored.find(item => entry.standard ? item.systemKey === entry.standard : item.name.toLowerCase() === entry.name.toLowerCase());
+      const matched = new Set<string>();
       for (const [key, figure] of Object.entries(trial.ledgers)) {
         const entry = dataset.ledgers.find(ledger => ledger.key === key)!;
-        const ledger = stored.find(item => entry.standard ? item.systemKey === entry.standard : item.name.toLowerCase() === entry.name.toLowerCase());
+        const ledger = appLedger(entry);
         const closingAmount = toMinor(figure.closing, exponent);
         const wanted = figure.side === 'Dr' ? closingAmount : subtractMoney(0n, closingAmount);
         const label = `Closing balance of ${entry.name}`;
         if (!ledger || !closing.has(ledger.id)) { push('Trial balance', label, balance(wanted), 'ledger missing', 'n/a', false); continue; }
+        matched.add(ledger.id);
         const actual = closing.get(ledger.id)!;
         const difference = subtractMoney(actual, wanted);
         push('Trial balance', label, balance(wanted), balance(actual), balance(difference), difference === 0n);
       }
+      // Ledgers expected.json does not list: a dataset ledger missing from the app, or any ledger of the app with a
+      // balance, is a difference; a zero closing is not, but it is named rather than skipped.
+      for (const entry of dataset.ledgers) if (!appLedger(entry) && !(entry.key in trial.ledgers)) {
+        push('Trial balance', `Ledger ${entry.name}`, 'in the dataset', 'ledger missing', 'n/a', false);
+      }
+      const unlisted: string[] = [];
+      for (const ledger of stored) {
+        if (matched.has(ledger.id) || !closing.has(ledger.id)) continue;
+        const actual = closing.get(ledger.id)!;
+        const entry = dataset.ledgers.find(item => appLedger(item)?.id === ledger.id);
+        if (actual === 0n) { unlisted.push(ledger.name); continue; }
+        push('Trial balance', `Closing balance of ${entry?.name ?? ledger.name}${entry ? '' : ' (not in the dataset)'}`, 'not in expected.json', balance(actual), balance(actual), false);
+      }
+      if (unlisted.length) skipped.push(`trialBalance: ${unlisted.length} ledger(s) not listed in expected.json close at zero and were not compared (${unlisted.join(', ')})`);
     }
 
     // Profit and loss: a profit is positive, a loss negative.
     if (expected.profitAndLoss) {
-      try {
+      if (financialYearOf(context.company.financialYearStart, from).to < to) {
+        // The one condition the report refuses; any other error is a failure, not a reason to skip.
+        skipped.push('profitAndLoss (the period spans more than one financial year; ten98-books prepares one year at a time)');
+      } else {
         const report = await profitAndLossReport(context, { from, to });
         amount('Profit and loss', 'Gross profit', expected.profitAndLoss.grossProfit, report.grossProfit);
         amount('Profit and loss', 'Net profit', expected.profitAndLoss.netProfit, report.netProfit);
-      } catch (error) {
-        if (!(error instanceof FoundationError && error.status === 400)) throw error;
-        skipped.push('profitAndLoss (the period spans more than one financial year; ten98-books prepares one year at a time)');
       }
     }
 
@@ -106,8 +125,12 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       amount('Balance sheet', 'Total capital and liabilities', expected.balanceSheet.total, report.totals.liabilities);
       amount('Balance sheet', 'Total assets', expected.balanceSheet.total, report.totals.assets);
     }
+  }).catch(error => {
+    // A refusal of the report (a period the reports do not take) is a problem in expected.json, named as such.
+    if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/expected.json: the reports refused the period ${from} to ${to}: ${error.message}`);
+    throw error;
   });
-  return { slug: dataset.slug, companyName: company.name, period: expected.period, lines, notComparable: skipped, differences: lines.filter(line => !line.ok).length };
+  return { slug: dataset.slug, companyName: company.name, companyId: company.id, role: company.role, period: expected.period, lines, notComparable: skipped, differences: lines.filter(line => !line.ok).length };
 }
 
 /** A readable table: one block per heading, then expected, actual and difference per line. */
@@ -115,7 +138,7 @@ export function formatCompareResult(result: CompareResult): string[] {
   const width = (pick: (line: CompareLine) => string, head: string) => Math.max(head.length, ...result.lines.map(line => pick(line).length));
   const [wl, we, wa, wd] = [width(l => l.label, 'Line'), width(l => l.expected, 'Expected'), width(l => l.actual, 'Actual'), width(l => l.difference, 'Difference')];
   const row = (label: string, e: string, a: string, d: string, mark: string) => `  ${label.padEnd(wl)}  ${e.padStart(we)}  ${a.padStart(wa)}  ${d.padStart(wd)}  ${mark}`;
-  const out = [`${result.companyName} (${result.slug}), ${result.period.from} to ${result.period.to}`, row('Line', 'Expected', 'Actual', 'Difference', '')];
+  const out = [`${result.companyName} (${result.slug}), company ${result.companyId} (${result.role}), ${result.period.from} to ${result.period.to}`, row('Line', 'Expected', 'Actual', 'Difference', '')];
   let block = '';
   for (const line of result.lines) {
     if (line.block !== block) { block = line.block; out.push(`  ${block}`); }
