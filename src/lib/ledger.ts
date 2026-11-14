@@ -227,3 +227,17 @@ export type Revision = {
   /** `actorName` is the user's display name, or null once that user no longer exists; never an email. */
   action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; actorName: string | null; at: string; before: unknown; after: unknown;
 };
+
+/**
+ * Reads for the voucher entry screen (docs/LEDGER.md, "Voucher entry reads"). None of them writes or locks anything: a
+ * previewed number can be taken by another voucher before this one is saved, and a previewed balance is the books as
+ * they stand plus the draft.
+ */
+export const nextNumberQuery = z.object({ date: calendarDate }).strict();
+export type NextNumber = { number: number; periodStart: string; periodEnd: string };
+const previewLine = z.object({ ledgerId: id, side: z.enum(sides), amount: moneyText }).strict();
+export const balancePreviewInput = z.object({ date: calendarDate, voucherId: id.optional(), lines: z.array(previewLine).max(500) }).strict();
+/** A ledger's balance at the date, signed: positive on the debit side, negative on the credit side. */
+export type BalancePreview = { balances: { ledgerId: string; balance: bigint }[] };
+export const counterLedgerQuery = z.object({ voucherTypeId: id, side: z.enum(sides) }).strict();
+export type CounterLedger = { counter: { ledgerId: string; voucherId: string; voucherDate: string } | null };
