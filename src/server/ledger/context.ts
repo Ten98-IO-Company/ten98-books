@@ -37,11 +37,17 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
  * The API's one way into the ledger: authorizes through withCompany (viewers read, editors write), loads the context,
  * runs `run` in that single transaction and returns the result with amounts formatted for the company's currency.
  */
-export function runLedger<T>(userId: string, companyId: string, mode: CompanyMode, run: (context: LedgerContext) => Promise<T>): Promise<Wire<T>> {
-  return withCompany(userId, companyId, mode, async (client, access) => {
-    const context = await ledgerContext(client, access.companyId, userId, mode);
-    return moneyToWire(await run(context), context.company.exponent);
-  });
+export async function runLedger<T>(userId: string, companyId: string, mode: CompanyMode, run: (context: LedgerContext) => Promise<T>): Promise<Wire<T>> {
+  try {
+    return await withCompany(userId, companyId, mode, async (client, access) => {
+      const context = await ledgerContext(client, access.companyId, userId, mode);
+      return moneyToWire(await run(context), context.company.exponent);
+    });
+  } catch (error) {
+    // Deadlock or serialization failure: another change to the same rows won; nothing was committed.
+    if (['40P01', '40001'].includes((error as { code?: string })?.code ?? '')) throw new FoundationError(409, 'This change collided with another one made at the same moment. Nothing was saved; try again.');
+    throw error;
+  }
 }
 
 /** Parses `value` with `schema`, refusing with a plain-language message that names the first field at fault. */

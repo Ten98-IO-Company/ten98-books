@@ -40,11 +40,13 @@ const groupRefusals = {
   account_group_name_idx: new FoundationError(409, 'A group with this name already exists.'),
   account_group_cycle: new FoundationError(400, 'A group cannot be placed under one of its own sub-groups.'),
   account_group_builtin: new FoundationError(400, 'A built-in group keeps its nature. Choose a parent group of the same nature.'),
+  ledger_cash_family: new FoundationError(400, 'The cash ledger must stay under a cash or bank group, so this group cannot move there.'),
 };
 const groupInUse = { ...groupRefusals, '23503': new FoundationError(409, 'This group still holds sub-groups or ledgers. Move or delete them first.') };
 const ledgerRefusals = {
   ledger_name_idx: new FoundationError(409, 'A ledger with this name already exists.'),
   ledger_builtin: new FoundationError(400, 'A built-in ledger keeps its nature. Choose a group of the same nature.'),
+  ledger_cash_family: new FoundationError(400, 'The cash ledger must stay under a cash or bank group.'),
 };
 const ledgerInUse = { ...ledgerRefusals, '23503': new FoundationError(409, 'This ledger is used in vouchers and cannot be deleted.') };
 const typeRefusals = { voucher_type_name_idx: new FoundationError(409, 'A voucher type with this name already exists.') };
@@ -93,18 +95,55 @@ export async function createGroup(context: LedgerContext, value: unknown): Promi
   return group;
 }
 
+/** The groups below `groupId`, at any depth. */
+async function subGroups(context: LedgerContext, groupId: string): Promise<AccountGroup[]> {
+  const { rows } = await context.client.query<AccountGroup>(
+    `WITH RECURSIVE below(id) AS (
+       SELECT id FROM account_group WHERE company_id = $1 AND parent_id = $2
+       UNION ALL SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
+     SELECT ${groupColumns} FROM account_group WHERE company_id = $1 AND id IN (SELECT id FROM below) ORDER BY id`, [context.company.companyId, groupId]);
+  return rows;
+}
+
+/**
+ * D-10: a group's nature cannot change while its sub-tree holds a built-in group or ledger, or a ledger with posted
+ * lines or an opening balance; reclassify by moving those ledgers to another group instead.
+ */
+async function assertNatureChangeable(context: LedgerContext, groupId: string): Promise<void> {
+  const { rows } = await context.client.query<{ held: boolean }>(
+    `WITH RECURSIVE tree(id) AS (
+       SELECT $2::uuid UNION ALL SELECT g.id FROM account_group g JOIN tree t ON g.company_id = $1 AND g.parent_id = t.id)
+     SELECT EXISTS (SELECT 1 FROM account_group g JOIN tree t ON t.id = g.id WHERE g.company_id = $1 AND g.system_key IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM ledger l JOIN tree t ON t.id = l.group_id WHERE l.company_id = $1 AND (l.system_key IS NOT NULL OR l.opening_amount <> 0
+         OR EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = $1 AND x.ledger_id = l.id))) AS held`, [context.company.companyId, groupId]);
+  if (rows[0].held) throw new FoundationError(409, 'This group cannot change its nature while it holds built-in groups or ledgers, or ledgers with postings or opening balances. Move those ledgers to another group first.');
+}
+
 export async function alterGroup(context: LedgerContext, groupId: string, value: unknown): Promise<AccountGroup> {
   const input = parseInput(groupAlterInput, value, groupFields);
+  // One tree change per company at a time, taken before any row lock so concurrent moves queue instead of deadlocking.
+  await context.client.query('SELECT ledger_group_tree_lock($1)', [context.company.companyId]);
   const before = await readGroup(context, groupId, true);
   if (before.revision !== input.revision) throw conflict('group');
   const place = await placeGroup(context, input, before);
   if (before.systemKey && place.nature !== before.nature) throw groupRefusals.account_group_builtin;
+  if (place.nature !== before.nature) await assertNatureChangeable(context, groupId);
+  const cascades = place.nature !== before.nature || place.grossProfit !== before.grossProfit;
+  const belowBefore = cascades ? await subGroups(context, groupId) : [];
   await context.client.query(
     `UPDATE account_group SET parent_id = $3, nature = $4, gross_profit = $5, name = $6, second_language_name = $7, revision = revision + 1
      WHERE company_id = $1 AND id = $2`,
     [context.company.companyId, groupId, place.parentId, place.nature, place.grossProfit, input.name, input.secondLanguageName]).catch(error => refusal(error, groupRefusals));
   const after = await readGroup(context, groupId);
   await logRevision(context, 'group', groupId, 'alter', before, after);
+  // Sub-groups take the new nature and flag through the database cascade, which also bumps their revisions; log each.
+  if (cascades) {
+    const previous = new Map(belowBefore.map(group => [group.id, group]));
+    for (const group of await subGroups(context, groupId)) {
+      const old = previous.get(group.id);
+      if (old && old.revision !== group.revision) await logRevision(context, 'group', group.id, 'alter', old, group);
+    }
+  }
   return after;
 }
 
@@ -185,6 +224,11 @@ export async function alterLedger(context: LedgerContext, ledgerId: string, valu
   } else {
     const group = await ledgerGroup(context, input.groupId);
     if (before.systemKey && group.nature !== before.nature) throw ledgerRefusals.ledger_builtin;
+    // D-10: a built-in ledger moves only within its behaviour family; the cash ledger stays under the cash and bank groups.
+    if (before.systemKey === 'cash' && group.id !== before.groupId) {
+      const { rows } = await context.client.query<{ family: boolean }>('SELECT ledger_in_cash_family($1, $2) AS family', [context.company.companyId, group.id]);
+      if (!rows[0].family) throw ledgerRefusals.ledger_cash_family;
+    }
     groupId = group.id;
   }
   const opening = input.opening ? parseOpening(context, input.opening) : before.opening;

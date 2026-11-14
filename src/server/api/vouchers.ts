@@ -48,8 +48,9 @@ export const vouchersApi: SignedInArea = async ({ request, url, path, user }) =>
 
   if (!voucherId) {
     if (request.method === 'GET') {
-      const { from, to } = period(url);
-      return json({ vouchers: await runLedger(user.id, companyId, 'read', context => listVouchers(context, from, to)) });
+      // ?from=&to=[&limit=][&after=]; parameters absent from the URL stay absent so their defaults apply.
+      const query = Object.fromEntries(['from', 'to', 'limit', 'after'].flatMap(key => url.searchParams.has(key) ? [[key, url.searchParams.get(key)]] : []));
+      return json(await runLedger(user.id, companyId, 'read', context => listVouchers(context, query)));
     }
     if (request.method === 'POST') {
       const result = await write(createVoucher);

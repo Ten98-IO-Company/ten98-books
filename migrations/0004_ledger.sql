@@ -2,8 +2,9 @@
 -- voucher lines and the append-only revision log. Every table carries company_id, joins its neighbours through composite
 -- foreign keys that include it, and forces the one canonical company policy, so the application role (books_app) sees
 -- and writes only the companies listed in the transaction's app.company_ids. Posting rules live in src/server/ledger;
--- the constraints and triggers here are the last line: an unbalanced voucher, a reused or changed number, a deleted
--- built-in master or a group cycle cannot be committed whatever the application does.
+-- the constraints and triggers here are the last line against application bugs: an unbalanced voucher, a forged,
+-- reused or changed number, a deleted or misplaced built-in master, a group cycle or an edited cancelled voucher cannot
+-- be committed by any code path in scope. They are not an authorization layer (see the guards section below).
 
 -- Groups form a tree per company. Nature and the gross-profit flag are stored on every group and must equal the
 -- parent's (composite foreign key with ON UPDATE CASCADE), so a sub-tree always shares its primary group's nature and
@@ -144,60 +145,168 @@ CREATE TABLE revision_log (
 );
 CREATE INDEX revision_log_entity_idx ON revision_log (company_id, entity, entity_id, id);
 
--- Built-in rows (system_key set) cannot be deleted while their company exists, and keep their nature. Removal of the
--- whole company (cascade from project) is allowed: the company row is already gone when the cascade reaches here.
-CREATE FUNCTION ledger_guard_builtin() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+
+-- Database guards. They protect the books against application bugs; they do not replace authorization: whoever can run
+-- SQL as books_app chooses the company scope. Every trigger that reads other rows does so through row-level security,
+-- so each one first requires the row's own company to be inside the current scope: otherwise its reads would see
+-- nothing and the check would pass vacuously. Removing a company (cascade from project) therefore runs inside its scope.
+CREATE FUNCTION ledger_assert_scope(p_company text) RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NOT coalesce(p_company = ANY (string_to_array(current_setting('app.company_ids', true), ',')), false) THEN
+    RAISE EXCEPTION 'ledger row changed outside its company scope' USING ERRCODE = '42501', CONSTRAINT = 'ledger_company_scope';
+  END IF;
+END $$;
+
+-- Serialises changes to one company's group tree (moves and nature changes), so two concurrent moves cannot each pass
+-- the cycle check against a tree the other is changing.
+CREATE FUNCTION ledger_group_tree_lock(p_company text) RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('ledger_group_tree:' || p_company, 0));
+END $$;
+
+-- Cash and bank behaviour comes from the seeded cash and bank groups by system_key ancestry (D-10): a group is in the
+-- cash and bank family when it, or a group above it, is one of them.
+CREATE FUNCTION ledger_in_cash_family(p_company text, p_group uuid) RETURNS boolean LANGUAGE sql SET search_path = public, pg_temp AS $$
+  WITH RECURSIVE up(id, key, parent) AS (
+    SELECT id, system_key, parent_id FROM account_group WHERE company_id = p_company AND id = p_group
+    UNION ALL
+    SELECT g.id, g.system_key, g.parent_id FROM account_group g JOIN up ON g.company_id = p_company AND g.id = up.parent)
+  SELECT coalesce(bool_or(key IN ('cash_in_hand', 'bank_accounts', 'bank_overdraft')), false) FROM up
+$$;
+
+-- Groups: built-in groups cannot be deleted and keep their nature; a group holding a built-in ledger keeps its nature;
+-- a move can neither close a cycle nor take the cash ledger out of the cash and bank family. A nature or gross-profit
+-- change that cascades to a sub-group bumps that sub-group's revision (the application logs it).
+CREATE FUNCTION account_group_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
+    PERFORM ledger_assert_scope(OLD.company_id);
     IF OLD.system_key IS NOT NULL AND EXISTS (SELECT 1 FROM company WHERE company_id = OLD.company_id) THEN
-      RAISE EXCEPTION 'built-in % cannot be deleted', TG_TABLE_NAME USING ERRCODE = '23514', CONSTRAINT = TG_TABLE_NAME || '_builtin';
+      RAISE EXCEPTION 'built-in group cannot be deleted' USING ERRCODE = '23514', CONSTRAINT = 'account_group_builtin';
     END IF;
     RETURN OLD;
   END IF;
-  IF TG_TABLE_NAME = 'account_group' THEN
-    IF OLD.system_key IS NOT NULL AND NEW.nature <> OLD.nature THEN
-      RAISE EXCEPTION 'built-in group keeps its nature' USING ERRCODE = '23514', CONSTRAINT = 'account_group_builtin';
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF NEW.nature <> OLD.nature THEN
+    IF OLD.system_key IS NOT NULL OR EXISTS (SELECT 1 FROM ledger WHERE company_id = NEW.company_id AND group_id = NEW.id AND system_key IS NOT NULL) THEN
+      RAISE EXCEPTION 'built-in groups and groups holding built-in ledgers keep their nature' USING ERRCODE = '23514', CONSTRAINT = 'account_group_builtin';
     END IF;
+  END IF;
+  IF (NEW.nature, NEW.gross_profit) IS DISTINCT FROM (OLD.nature, OLD.gross_profit) AND NEW.revision = OLD.revision THEN
+    NEW.revision := OLD.revision + 1;
+  END IF;
+  IF NEW.parent_id IS DISTINCT FROM OLD.parent_id THEN
+    -- The walks below must see moves committed while this transaction waited for the lock.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'groups are moved in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'account_group_cycle';
+    END IF;
+    PERFORM ledger_group_tree_lock(NEW.company_id);
     -- Walk up from the new parent: reaching this group would close a cycle.
-    IF NEW.parent_id IS NOT NULL AND NEW.parent_id IS DISTINCT FROM OLD.parent_id AND EXISTS (
+    IF NEW.parent_id IS NOT NULL AND EXISTS (
       WITH RECURSIVE up(id) AS (
         SELECT NEW.parent_id
         UNION SELECT g.parent_id FROM account_group g JOIN up ON g.company_id = NEW.company_id AND g.id = up.id WHERE g.parent_id IS NOT NULL)
       SELECT 1 FROM up WHERE id = NEW.id) THEN
       RAISE EXCEPTION 'group cannot sit under its own sub-group' USING ERRCODE = '23514', CONSTRAINT = 'account_group_cycle';
     END IF;
-  ELSIF TG_TABLE_NAME = 'ledger' THEN
-    IF OLD.system_key IS NOT NULL AND NEW.group_id IS DISTINCT FROM OLD.group_id AND (
-      SELECT nature FROM account_group WHERE company_id = NEW.company_id AND id = NEW.group_id) IS DISTINCT FROM (
-      SELECT nature FROM account_group WHERE company_id = OLD.company_id AND id = OLD.group_id) THEN
-      RAISE EXCEPTION 'built-in ledger keeps its nature' USING ERRCODE = '23514', CONSTRAINT = 'ledger_builtin';
+    -- Walk down this sub-tree with the family it will have under the new parent.
+    IF EXISTS (
+      WITH RECURSIVE down(id, family) AS (
+        SELECT NEW.id, coalesce(NEW.system_key IN ('cash_in_hand', 'bank_accounts', 'bank_overdraft'), false) OR ledger_in_cash_family(NEW.company_id, NEW.parent_id)
+        UNION ALL
+        SELECT g.id, d.family OR coalesce(g.system_key IN ('cash_in_hand', 'bank_accounts', 'bank_overdraft'), false)
+        FROM account_group g JOIN down d ON g.company_id = NEW.company_id AND g.parent_id = d.id)
+      SELECT 1 FROM down JOIN ledger l ON l.company_id = NEW.company_id AND l.group_id = down.id WHERE l.system_key = 'cash' AND NOT down.family) THEN
+      RAISE EXCEPTION 'the cash ledger stays in the cash and bank groups' USING ERRCODE = '23514', CONSTRAINT = 'ledger_cash_family';
     END IF;
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER account_group_guard BEFORE UPDATE OR DELETE ON account_group FOR EACH ROW EXECUTE FUNCTION ledger_guard_builtin();
-CREATE TRIGGER ledger_guard BEFORE UPDATE OR DELETE ON ledger FOR EACH ROW EXECUTE FUNCTION ledger_guard_builtin();
+CREATE TRIGGER account_group_guard BEFORE UPDATE OR DELETE ON account_group FOR EACH ROW EXECUTE FUNCTION account_group_guard();
 
--- Voucher lifecycle in the database: a number, once issued, never changes; a deleted voucher is frozen; a cancelled
--- voucher stays cancelled; a regular (numbered) voucher cannot become optional again.
-CREATE FUNCTION voucher_guard_lifecycle() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+-- Ledgers: built-in ledgers cannot be deleted and keep their nature; the cash ledger stays in the cash and bank family
+-- (the profit and loss ledger has no group at all: ledger_group_required).
+CREATE FUNCTION ledger_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
-  IF OLD.deleted_at IS NOT NULL THEN
-    RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+  IF TG_OP = 'DELETE' THEN
+    PERFORM ledger_assert_scope(OLD.company_id);
+    IF OLD.system_key IS NOT NULL AND EXISTS (SELECT 1 FROM company WHERE company_id = OLD.company_id) THEN
+      RAISE EXCEPTION 'built-in ledger cannot be deleted' USING ERRCODE = '23514', CONSTRAINT = 'ledger_builtin';
+    END IF;
+    RETURN OLD;
   END IF;
-  IF OLD.number IS NOT NULL AND NEW.number IS DISTINCT FROM OLD.number THEN
-    RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF TG_OP = 'UPDATE' AND OLD.system_key IS NOT NULL AND NEW.group_id IS DISTINCT FROM OLD.group_id AND (
+    SELECT nature FROM account_group WHERE company_id = NEW.company_id AND id = NEW.group_id) IS DISTINCT FROM (
+    SELECT nature FROM account_group WHERE company_id = OLD.company_id AND id = OLD.group_id) THEN
+    RAISE EXCEPTION 'built-in ledger keeps its nature' USING ERRCODE = '23514', CONSTRAINT = 'ledger_builtin';
   END IF;
-  IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
-    RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+  IF NEW.system_key = 'cash' AND (TG_OP = 'INSERT' OR NEW.group_id IS DISTINCT FROM OLD.group_id) AND NOT ledger_in_cash_family(NEW.company_id, NEW.group_id) THEN
+    RAISE EXCEPTION 'the cash ledger stays in the cash and bank groups' USING ERRCODE = '23514', CONSTRAINT = 'ledger_cash_family';
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER voucher_guard BEFORE UPDATE ON voucher FOR EACH ROW EXECUTE FUNCTION voucher_guard_lifecycle();
+CREATE TRIGGER ledger_guard BEFORE INSERT OR UPDATE OR DELETE ON ledger FOR EACH ROW EXECUTE FUNCTION ledger_guard();
+
+-- Counters only move forward, one number at a time, from 1.
+CREATE FUNCTION voucher_counter_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF (TG_OP = 'INSERT' AND NEW.last_number <> 1) OR (TG_OP = 'UPDATE' AND (
+      NEW.last_number <> OLD.last_number + 1 OR (NEW.company_id, NEW.voucher_type_id, NEW.series) IS DISTINCT FROM (OLD.company_id, OLD.voucher_type_id, OLD.series))) THEN
+    RAISE EXCEPTION 'a voucher counter only moves forward by one' USING ERRCODE = '23514', CONSTRAINT = 'voucher_counter_sequence';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER voucher_counter_guard BEFORE INSERT OR UPDATE ON voucher_counter FOR EACH ROW EXECUTE FUNCTION voucher_counter_guard();
+
+-- Voucher lifecycle: a number is set only to the value its type and series counter issued in this same transaction
+-- (the counter row was written by this transaction: its xmin is ours) and never changes afterwards; a deleted voucher
+-- is frozen; a cancelled voucher stays cancelled; a numbered voucher never becomes optional again.
+CREATE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF TG_OP = 'UPDATE' THEN
+    IF OLD.deleted_at IS NOT NULL THEN
+      RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF OLD.number IS NOT NULL AND NEW.number IS DISTINCT FROM OLD.number THEN
+      RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
+      RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+  END IF;
+  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL) AND NOT EXISTS (
+    SELECT 1 FROM voucher_counter c WHERE c.company_id = NEW.company_id AND c.voucher_type_id = NEW.voucher_type_id AND c.series = NEW.series
+      AND c.last_number = NEW.number AND c.xmin = pg_current_xact_id()::xid) THEN
+    RAISE EXCEPTION 'voucher number was not issued by its counter' USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbered';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER voucher_guard BEFORE INSERT OR UPDATE ON voucher FOR EACH ROW EXECUTE FUNCTION voucher_guard();
+
+-- Lines of a cancelled or deleted voucher are part of its record and cannot be added, changed or removed.
+CREATE FUNCTION voucher_line_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE
+  v_row voucher_line;
+BEGIN
+  FOREACH v_row IN ARRAY CASE TG_OP WHEN 'INSERT' THEN ARRAY[NEW] WHEN 'DELETE' THEN ARRAY[OLD] ELSE ARRAY[OLD, NEW] END LOOP
+    PERFORM ledger_assert_scope(v_row.company_id);
+    -- A line removed with its whole company has no voucher record left to protect.
+    IF TG_OP = 'DELETE' AND NOT EXISTS (SELECT 1 FROM company WHERE company_id = v_row.company_id) THEN RETURN OLD; END IF;
+    IF EXISTS (SELECT 1 FROM voucher v WHERE v.company_id = v_row.company_id AND v.id = v_row.voucher_id AND (v.status = 'cancelled' OR v.deleted_at IS NOT NULL)) THEN
+      RAISE EXCEPTION 'lines of a cancelled or deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lines_frozen';
+    END IF;
+  END LOOP;
+  RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END;
+END $$;
+CREATE TRIGGER voucher_line_guard BEFORE INSERT OR UPDATE OR DELETE ON voucher_line FOR EACH ROW EXECUTE FUNCTION voucher_line_guard();
 
 -- Checked at commit for every voucher touched in the transaction, whatever its status: at least two lines, debits
 -- equal credits, and a number exactly when the voucher is not optional. Deferred, so a posting may insert the header,
--- the lines and the number in any order inside one transaction.
+-- the lines and the number in any order inside one transaction. The scope is checked first: a transaction that clears
+-- or changes app.company_ids before committing would otherwise hide the voucher from its own check.
 CREATE FUNCTION voucher_assert_balanced() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
   v_company text;
@@ -212,9 +321,10 @@ BEGIN
   ELSIF TG_OP = 'DELETE' THEN v_company := OLD.company_id; v_voucher := OLD.voucher_id;
   ELSE v_company := NEW.company_id; v_voucher := NEW.voucher_id;
   END IF;
+  PERFORM ledger_assert_scope(v_company);
   SELECT status, number INTO v_status, v_number FROM voucher WHERE company_id = v_company AND id = v_voucher;
   IF NOT FOUND THEN
-    -- Only a line removed together with its voucher (company removal) may find no voucher; never skip otherwise.
+    -- In scope, only a line removed together with its voucher (company removal) finds no voucher; never skip otherwise.
     IF TG_OP = 'DELETE' THEN RETURN NULL; END IF;
     RAISE EXCEPTION 'voucher % is not visible to its own check', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_balanced';
   END IF;

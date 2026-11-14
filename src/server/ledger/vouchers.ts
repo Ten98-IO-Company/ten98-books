@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { addMoney, assertMoneyInRange, compareMoney, formatMoney } from '@ten98/runtime';
+import { isCalendarDate } from '../../lib/company.ts';
 import {
-  revisionInput, voucherAlterInput, voucherCreateInput,
-  type Side, type Voucher, type VoucherKind, type VoucherLine, type VoucherSummary, type VoucherType,
+  revisionInput, voucherAlterInput, voucherCreateInput, voucherListQuery,
+  type Side, type Voucher, type VoucherKind, type VoucherLine, type VoucherPage, type VoucherSummary, type VoucherType,
 } from '../../lib/ledger.ts';
 import { FoundationError } from '../auth.ts';
 import { conflict, parseAmount, parseInput, type LedgerContext } from './context.ts';
@@ -45,11 +46,27 @@ export async function readVoucher(context: LedgerContext, voucherId: string, loc
   return { ...rows[0], lines: lines.rows };
 }
 
-/** Vouchers dated within the period that are not deleted, in date order and, within a day, in entry order. */
-export async function listVouchers(context: LedgerContext, from: string, to: string): Promise<VoucherSummary[]> {
+const cursorShape = /^(\d{4}-\d{2}-\d{2})~([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const encodeCursor = (voucher: VoucherSummary) => Buffer.from(`${voucher.date}~${voucher.id}`).toString('base64url');
+function decodeCursor(cursor: string): [date: string, id: string] {
+  const match = cursorShape.exec(Buffer.from(cursor, 'base64url').toString());
+  if (!match || !isCalendarDate(match[1])) throw new FoundationError(400, 'Check the page cursor and try again.');
+  return [match[1], match[2]];
+}
+
+/**
+ * One page of the undeleted vouchers dated within the period, in date order and, within a day, in entry order (ids are
+ * time-ordered UUIDv7). Keyset pagination on (date, id): `next` is the cursor for the following page, or null.
+ * Numbers are not the key: they are per voucher type and optional vouchers have none.
+ */
+export async function listVouchers(context: LedgerContext, value: unknown): Promise<VoucherPage> {
+  const query = parseInput(voucherListQuery, value, path => ({ from: 'the start date', to: 'the end date', limit: 'the page size', after: 'the page cursor' } as Record<string, string>)[String(path[0])] ?? 'the period');
+  const [afterDate, afterId] = query.after ? decodeCursor(query.after) : [null, null];
   const { rows } = await context.client.query<VoucherSummary>(
-    `${headerSelect} AND v.deleted_at IS NULL AND v.date BETWEEN $2 AND $3 ORDER BY v.date, v.created_at, v.id`, [context.company.companyId, from, to]);
-  return rows;
+    `${headerSelect} AND v.deleted_at IS NULL AND v.date BETWEEN $2 AND $3 AND ($4::date IS NULL OR (v.date, v.id) > ($4::date, $5::uuid))
+     ORDER BY v.date, v.id LIMIT $6`, [context.company.companyId, query.from, query.to, afterDate, afterId, query.limit + 1]);
+  const vouchers = rows.slice(0, query.limit);
+  return { vouchers, next: rows.length > query.limit ? encodeCursor(vouchers[vouchers.length - 1]) : null };
 }
 
 /** D-09: nothing is created, altered, cancelled or deleted before the books begin or on or before the locked-through date. */
@@ -122,19 +139,19 @@ async function insertLines(context: LedgerContext, voucherId: string, lines: Pre
 }
 
 /**
- * Issues the next number of the voucher's type and series from its counter row and stores it, in one statement. The
+ * Issues the next number of the voucher's type and series from its counter row, then stores it on the voucher. The
  * counter row stays locked until commit, so concurrent postings of the same series queue here, and only here; a rolled
- * back posting returns its number, so issued numbers have no gaps except those deleted vouchers leave on purpose.
+ * back posting returns its number, so issued numbers have no gaps except those deleted vouchers leave on purpose. Two
+ * statements, so the database's number check sees the counter row this transaction has just written.
  */
 async function issueNumber(context: LedgerContext, voucherId: string, voucherTypeId: string, series: string): Promise<number> {
-  const { rows } = await context.client.query<{ number: number }>(
-    `WITH issued AS (
-       INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, $3, 1)
-       ON CONFLICT (company_id, voucher_type_id, series) DO UPDATE SET last_number = voucher_counter.last_number + 1
-       RETURNING last_number)
-     UPDATE voucher SET number = (SELECT last_number FROM issued) WHERE company_id = $1 AND id = $4 RETURNING number`,
-    [context.company.companyId, voucherTypeId, series, voucherId]);
-  return rows[0].number;
+  const { client, company } = context;
+  const { rows } = await client.query<{ last_number: number }>(
+    `INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, $3, 1)
+     ON CONFLICT (company_id, voucher_type_id, series) DO UPDATE SET last_number = voucher_counter.last_number + 1
+     RETURNING last_number`, [company.companyId, voucherTypeId, series]);
+  await client.query('UPDATE voucher SET number = $3 WHERE company_id = $1 AND id = $2', [company.companyId, voucherId, rows[0].last_number]);
+  return rows[0].last_number;
 }
 
 const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');

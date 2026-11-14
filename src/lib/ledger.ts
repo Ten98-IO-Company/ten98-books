@@ -41,21 +41,38 @@ export const voucherTypeAlterInput = z.object({ name, secondLanguageName, revisi
 export const revisionInput = z.object({ revision }).strict();
 
 const voucherLine = z.object({ ledgerId: id, side: z.enum(sides), amount: moneyText }).strict();
-const voucherBody = {
-  date: calendarDate,
-  narration: z.string().max(2000).nullish().transform(value => value?.trim() || null),
-  status: z.enum(['regular', 'optional']).default('regular'),
-  postDated: z.boolean().default(false),
-  lines: z.array(voucherLine).max(500),
-};
+const narration = z.string().max(2000);
+const voucherStatus = z.enum(['regular', 'optional']);
+const lines = z.array(voucherLine).max(500);
 /** Creating a voucher. The idempotency key makes a retried request return the first result instead of posting twice. */
 export const voucherCreateInput = z.object({
   idempotencyKey: z.string().min(8).max(100).regex(/^[A-Za-z0-9._:-]+$/),
   voucherTypeId: id,
-  ...voucherBody,
+  date: calendarDate,
+  narration: narration.nullish().transform(value => value?.trim() || null),
+  status: voucherStatus.default('regular'),
+  postDated: z.boolean().default(false),
+  lines,
 }).strict();
-/** Altering keeps the voucher type and number; `revision` is the one the editor last read. */
-export const voucherAlterInput = z.object({ ...voucherBody, revision }).strict();
+/**
+ * Altering replaces the whole voucher body except its type and number, so every field is stated: an omitted status or
+ * post-dated flag must never fall back to a default (that would post an optional voucher). `revision` is the one the
+ * editor last read; `narration` may be null to clear it.
+ */
+export const voucherAlterInput = z.object({
+  date: calendarDate,
+  narration: narration.nullable().transform(value => value?.trim() || null),
+  status: voucherStatus,
+  postDated: z.boolean(),
+  lines,
+  revision,
+}).strict();
+/** A page of the voucher list: keyset cursor from the previous page's `next`. */
+export const voucherListQuery = z.object({
+  from: calendarDate, to: calendarDate,
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  after: z.string().max(200).optional(),
+}).strict().refine(query => query.from <= query.to, { message: 'The period must end on or after its start.' });
 export type VoucherCreateInput = z.input<typeof voucherCreateInput>;
 export type VoucherAlterInput = z.input<typeof voucherAlterInput>;
 
@@ -84,6 +101,7 @@ export type Voucher = {
   total: bigint; lines: VoucherLine[];
 };
 export type VoucherSummary = Omit<Voucher, 'lines'>;
+export type VoucherPage = { vouchers: VoucherSummary[]; next: string | null };
 
 /** One ledger in a trial balance for a period. Amounts are non-negative; each pair has at most one non-zero side. */
 export type TrialBalanceRow = {
