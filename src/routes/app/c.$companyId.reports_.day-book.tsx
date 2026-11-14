@@ -28,7 +28,7 @@ const columns: DataColumn<Row>[] = [
 
 function DayBookScreen() {
   const search = Route.useSearch()
-  const pages = useCursorPages(`${search.from}|${search.to}`)
+  const pages = useCursorPages(search)
   const screen = useReportScreen<Wire<DayBookReport>>(search, 'day', (period, companyId) => `/api/companies/${companyId}/reports/day-book?${query({ ...period, after: pages.after })}`)
   const data = screen.report.data
   return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}

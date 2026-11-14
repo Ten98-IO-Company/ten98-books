@@ -204,3 +204,11 @@ export function rememberedPeriod(memory: ReadonlyMap<string, ReportPeriod>, comp
  */
 export const pushCursor = (stack: readonly string[], cursor: string): readonly string[] => stack.at(-1) === cursor ? stack : [...stack, cursor];
 export const popCursor = (stack: readonly string[]): readonly string[] => stack.slice(0, -1);
+
+/**
+ * A register's cursor stack in the address (`pages`): the cursors joined by dots, which base64url cursors never contain.
+ * Text that is not such a list reads as no pages (the first page), so a hand-edited address cannot break the screen.
+ */
+const cursorList = /^[A-Za-z0-9_-]{1,120}(\.[A-Za-z0-9_-]{1,120}){0,199}$/;
+export const readCursorStack = (text: unknown): readonly string[] => typeof text === 'string' && cursorList.test(text) ? text.split('.') : [];
+export const writeCursorStack = (stack: readonly string[]): string | undefined => stack.length ? stack.join('.') : undefined;
