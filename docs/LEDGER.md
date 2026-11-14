@@ -139,7 +139,7 @@ Voucher creation requires an `idempotencyKey`, unique per company: the same key 
 
 `trialBalance(context, from, to)` returns one typed row per ledger (opening, period debits and credits, closing, each as non-negative debit and credit amounts), totals, and the opening-balance difference, which is shown rather than blocking while a company is being set up (D-10). `ledgerBalance(context, ledgerId, from, to)` returns that ledger's row from the same shared query with a single-ledger filter, so the two always agree. The report modules in `src/server/reports/` build on that query (see [REPORTS.md](REPORTS.md)). Only regular, undeleted vouchers count. Report queries run with a 30-second statement timeout.
 
-Opening balances are computed at report time (D-04): a balance-sheet ledger opens with its opening balance plus everything before the period; an income or expense ledger opens with what was posted earlier in the same financial year only, and what it gathered in earlier years is carried into the profit and loss ledger. Gross profit, net profit and the balance sheet are derived from the rows (nature, primary group and gross-profit flag); the golden fixture test shows how.
+Opening balances are computed at report time (D-04): a balance-sheet ledger opens with its opening balance plus everything before the period; an income or expense ledger opens at zero, and everything before the period (its opening too, once the period starts after the books begin) is closed into the profit and loss ledger. Gross profit, net profit and the balance sheet are derived from the rows (nature, primary group and gross-profit flag); the golden fixture test shows how.
 
 ## HTTP API
 

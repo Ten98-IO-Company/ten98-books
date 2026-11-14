@@ -83,8 +83,9 @@ export async function profitAndLossReport(context: LedgerContext, query: unknown
     throw new FoundationError(400, 'A profit and loss statement covers one financial year at most. Choose an end date in the same financial year.');
   }
   const { from, to, nodes, ledgers } = await hierarchy(context, period.from, period.to);
-  // Same rule as the read model, which keeps an income or expense opening in its ledger for every year starting on or
-  // before the books begin: so the balance sheet's current period and this statement agree for any date.
+  // Same rule as the read model, which keeps an income or expense opening in its ledger for a period starting on or
+  // before the books begin and closes it into the profit and loss ledger otherwise: so the balance sheet's current
+  // period and this statement agree for any date.
   const openingCounts = from <= context.company.booksBeginning;
   const movement = (row: LedgerRow) => addMoney(subtractMoney(row.debit, row.credit), openingCounts ? row.enteredOpening : 0n);
   const value = rollUp(nodes, node => node.nature === 'income' || node.nature === 'expense' ? movement(ledgers.get(node.id)!) : 0n);
