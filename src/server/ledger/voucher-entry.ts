@@ -82,9 +82,10 @@ export async function balancePreview(context: LedgerContext, value: unknown): Pr
 }
 
 /**
- * The counter ledger a new line proposes after `ledgerId` on `side` (observed: the ledger's previous voucher's counter
- * ledger is offered): from the most recently entered regular, undeleted voucher of the type with a line on that ledger and
- * side, its first line on the other side. Most recent rather than most frequent is a design choice awaiting observation.
+ * The counter ledger a new double-entry line proposes after `ledgerId` on `side`: from the most recently entered regular,
+ * undeleted voucher of the type with a line on that ledger and side, its first line on the other side. Observed: the
+ * most recent counter is proposed, not the most frequent, and single entry proposes nothing. Entry order and date order
+ * coincided in the observation; entry order is used.
  */
 export async function counterLedger(context: LedgerContext, ledgerId: string, query: unknown): Promise<CounterLedger> {
   const input = parseInput(counterLedgerQuery, query, path => path[0] === 'side' ? 'the side' : 'the voucher type');
