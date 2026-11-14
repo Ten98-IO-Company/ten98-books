@@ -60,6 +60,7 @@ Measured on a generated company of 52,784 voucher lines (12,600 four-line vouche
 - Comparative and additional columns (previous period, other periods, percentages), monthly views of a group, a cash-flow or funds-flow statement, ratio analysis.
 - Configurable layouts (vertical or horizontal statements, narrations in the day book, filters, saved views); the day book filter by voucher type.
 - Editing from a report: the voucher view is read-only.
-- Print styles: `@ten98/ui` 0.37.0 has none and apps may not add their own, so a printed report also shows the command bar and view switches above it (requested from the design system). Tables are not virtualized: very long statements render every line (requested with the print styles).
+- Print styles: Print calls the browser's print on the report page, which opens with the company, the report title and the period. `@ten98/ui` 0.37.0 has no print styles and apps may not add their own, so until the design system ships them a printout also shows the command bar, the view switches and a skip link; a clean printout without app chrome is not met yet.
+- Table paging keys and virtualization: `DataTable` handles Up, Down, Home, End and Enter on its focused row but not PageUp or PageDown, and it renders every row. The reports register PageUp and PageDown as report commands that move focus ten rows (or to the next or previous page of a register), and long registers are bounded by the API's 200-row pages; statements render every group and ledger. Both are requested from the design system.
 
 Requirement status follows D-01: none of this is described as equivalent to any other product.
