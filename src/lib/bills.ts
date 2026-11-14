@@ -88,3 +88,21 @@ export type AgeingReport = {
 };
 export type BillPickerRow = Omit<PendingBill, 'ledgerId' | 'ledgerName' | 'method'> & { side: Side | null };
 export type CreditCheck = { check: boolean; overdueBills: number };
+
+/**
+ * The characters a name ignores when the reference compares names (observed through import and its outstanding export;
+ * on screen for settlement by name): space, TAB and these. The database's `name_match_key` (migration 0009) removes
+ * the same list; a test requires both to give the same key for every character observed.
+ */
+export const ignoredInNames = ' \t-./,()+*;=~?{}&';
+const ignored = new Set(ignoredInNames);
+
+/**
+ * The key two bill names are compared by (one bill when equal), as `name_match_key` computes it: the name without the
+ * ignored characters, each remaining character in lower case by its simple mapping (accents and digits unchanged).
+ */
+export function nameMatchKey(name: string): string {
+  let key = '';
+  for (const character of name) if (!ignored.has(character)) key += [...character.toLowerCase()][0];
+  return key;
+}

@@ -85,7 +85,7 @@ test('the bill indexes are led by the line and the bill, bills are identified by
   const definition = (name: string) => indexes.find(row => row.name === name)?.definition ?? '';
   assert.match(definition('bill_allocation_line_idx'), /\(voucher_id, line_no\)$/);
   assert.match(definition('bill_allocation_bill_idx'), /\(bill_id\)$/);
-  assert.match(definition('bill_identity_idx'), /bill_key\(name\)/);
+  assert.match(definition('bill_identity_idx'), /name_match_key\(name\)/);
   assert.deepEqual(await snapshot(), before0009);
   assert.deepEqual((await admin.query('SELECT DISTINCT created_cancelled FROM voucher')).rows, [{ created_cancelled: false }], 'existing vouchers are not voids');
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);

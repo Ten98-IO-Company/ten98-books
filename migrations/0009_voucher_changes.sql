@@ -1,4 +1,4 @@
--- 0009: bill checks that read their own line or bill on any statistics; the bill key (identity and name order);
+-- 0009: bill checks that read their own line or bill on any statistics; the name match key (bill identity and order);
 -- vouchers created cancelled without lines; vouchers altered into another voucher type.
 
 -- ---- Bill checks without statistics ----
@@ -54,16 +54,21 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- ---- The bill key: when two names are the same bill ----
+-- ---- The name match key: when two bill names are the same bill ----
 
--- A bill is its party's name compared by this key (observed: ab1, AB-1, A-B1 and Ab-1 on one party are one bill), and
--- bills are listed in the order of the key (observed for ten bills of one debtor: 10, 9, A-020, A-100, a2, B-050, B1,
--- b3, B-300, C-200). The key is the name trimmed, in lower case, without the characters the reference ignores. Those
--- characters are this one constant (hyphens so far; the others are being observed). The bill keeps its first spelling
--- for display. Used by the identity index, find-or-create and settlement by name, and every list by name (ties: bill id).
-CREATE FUNCTION bill_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
-  RETURN lower(translate(btrim(p_name), '-', ''));
-GRANT EXECUTE ON FUNCTION bill_key(text) TO books_app;
+-- A bill is its party's name compared by this key, and bills are listed in the order of the key (ties: bill id). The key
+-- is the name in lower case without the characters the reference ignores when it compares names (observed through
+-- import and read back from its outstanding export; on screen for settlement by name): space and TAB anywhere, and
+-- - . / , ( ) + * ; = ~ ? { } &. Every other character counts: underscore, colon, hash, backslash, at sign, exclamation
+-- mark, apostrophe, vertical bar, percent, less-than, dollar, caret, square brackets, backtick, double quote, the
+-- non-breaking space, the en dash, leading zeros, accents, and Arabic-Indic digits against ASCII ones. Lower case is
+-- the built-in pg_c_utf8 mapping (simple Unicode case mapping, the same on every server): it folds no accents and no
+-- digits. The removed characters are this one list; src/lib/bills.ts holds its twin, and a test requires both to give
+-- the same key. The bill keeps its first spelling for display. The same rule merged ledger and cost-centre names on
+-- import, so the name is generic; masters keep their own uniqueness until the screens confirm it.
+CREATE FUNCTION name_match_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+  RETURN lower(translate(p_name, E' \t-./,()+*;=~?{}&', '') COLLATE pg_c_utf8);
+GRANT EXECUTE ON FUNCTION name_match_key(text) TO books_app;
 
 -- Two bills of one party that the key makes equal are not merged silently: the migration stops and names them (no
 -- released installation holds bills yet; an operator renames or merges them by hand first). The scope lists every
@@ -74,14 +79,14 @@ BEGIN
   PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
   SELECT string_agg(format('company %s, ledger %s: %s', company_id, ledger_id, names), '; ') INTO v_clash
   FROM (SELECT company_id, ledger_id, string_agg(name, ', ' ORDER BY name) AS names FROM bill
-        GROUP BY company_id, ledger_id, bill_key(name) HAVING count(*) > 1) clashes;
+        GROUP BY company_id, ledger_id, name_match_key(name) HAVING count(*) > 1) clashes;
   PERFORM set_config('app.company_ids', '', true);
   IF v_clash IS NOT NULL THEN
-    RAISE EXCEPTION 'these bills become one bill under the new bill key; rename or merge them first: %', v_clash;
+    RAISE EXCEPTION 'these bills become one bill under the new name match key; rename or merge them first: %', v_clash;
   END IF;
 END $$;
 DROP INDEX bill_identity_idx;
-CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, bill_key(name));
+CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name));
 
 -- ---- Vouchers created cancelled, without lines ----
 

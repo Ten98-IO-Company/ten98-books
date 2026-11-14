@@ -62,7 +62,7 @@ test('two bills of one party that the new key makes one stop the migration, whic
   try {
     await migrator.query("BEGIN");
     await assert.rejects(migrator.query(readFileSync(join(process.cwd(), "migrations", "0009_voucher_changes.sql"), "utf8")),
-      /become one bill under the new bill key; rename or merge them first: company [^,]+, ledger [^:]+: A-B1, AB1/);
+      /become one bill under the new name match key; rename or merge them first: company [^,]+, ledger [^:]+: A-B1, AB1/);
   } finally { await migrator.query("ROLLBACK").catch(() => undefined); await migrator.end(); }
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), earlier.length, '0009 was not applied');
   assert.equal(Number((await admin.query('SELECT count(*) FROM bill')).rows[0].count), 2, 'nothing was merged');
