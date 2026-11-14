@@ -34,7 +34,8 @@ export const ledgerErrorCodes = [
   'unbalanced', // fewer than two lines, or debits differ from credits
   'posting_rule', // the voucher type's rule for cash and bank ledgers is broken
   'voucher_state', // the voucher's status does not allow this change (cancelled, optional, numbered)
-  'idempotency_mismatch', // the idempotency key was used for a different voucher body
+  'idempotency_mismatch', // the idempotency key was used for a different voucher body (or company, on company creation)
+  'not_set_up', // the company has no books settings yet; members get this, non-members get not_found
 ] as const;
 export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
 

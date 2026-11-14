@@ -116,8 +116,8 @@ function OwnerForm({ onSetup, onSignInInstead }: { onSetup: (v: SetupValues) => 
   const [form, setForm] = useState({ generation: 0, name: '', email: '' })
 
   async function submit(v: FirstUserSetupValues) {
-    // The company (workspace) gets a placeholder name here; the next step asks for its real name and books settings.
-    const values = { name: v.name.trim(), email: v.email.trim(), password: v.password, workspaceName: 'My company' }
+    // The company is named by the next step, with its books settings; the server gives it a placeholder name until then.
+    const values = { name: v.name.trim(), email: v.email.trim(), password: v.password, workspaceName: '' }
     setBusy(true); setOutcome(noOutcome); setOwnerExists(false)
     setForm(f => ({ ...f, name: values.name, email: values.email }))
     try {

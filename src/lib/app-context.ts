@@ -11,6 +11,7 @@ export type AppState = {
   companies: CompanySummary[] | null
   /** The company in the address, else the last one used in this browser that the user still belongs to, else the first. */
   current: CompanySummary | undefined
+  /** Reads the companies and roles again; call it when a write the shell offered is refused as not found. */
   reloadCompanies: () => Promise<void>
   /** A request found the session gone. */
   unauthorized: () => void

@@ -61,7 +61,15 @@ function AppLayout() {
       if (error instanceof ApiError && error.status === 401) unauthorized(); else setCompaniesError(errMsg(error))
     }
   }, [unauthorized])
-  useEffect(() => { void reloadCompanies() }, [reloadCompanies])
+  // Roles change from other sessions (a promotion, a demotion, a removal). The list, with each role, is read again on
+  // every page change and when the window regains focus, so menus and switcher follow without a reload; a screen whose
+  // write is refused as not found calls reloadCompanies too.
+  useEffect(() => { void reloadCompanies() }, [reloadCompanies, pathname])
+  useEffect(() => {
+    const refresh = () => void reloadCompanies()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [reloadCompanies])
   useEffect(() => setMenuOpen(false), [pathname])
   useEffect(() => { if (me) setLastUsed(readLastCompany(me.user.id)) }, [me?.user.id])
 

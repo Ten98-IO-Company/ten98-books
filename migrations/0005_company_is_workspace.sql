@@ -10,8 +10,9 @@
 -- Project rows meant companies under the old model, so none of them is an accounting project: they are removed with
 -- the company-project link. The project table stays, dormant, for accounting projects (M2). The migration also adds
 -- company_creation, the idempotency keys of "create company" requests.
--- Row-level security policies, FORCE, ownership and grants are untouched. Safe on an empty database: every step is
--- set-based or loops over catalog rows that exist either way.
+-- Row-level security policies, FORCE, ownership and the grants on accounting tables are untouched; the application role
+-- loses its privileges on project and gets SELECT and INSERT on company_creation. Safe on an empty database: every step
+-- is set-based or loops over catalog rows that exist either way.
 
 -- The migrator owns the accounting tables, but FORCE applies their policy to it as well, so this transaction lists
 -- every project and workspace id. Transaction-local; cleared again at the end.

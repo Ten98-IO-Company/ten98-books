@@ -25,7 +25,7 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
     [companyId]);
   const row = rows[0];
   // withCompany already admitted a member, so a missing row is a company (workspace) without books settings yet.
-  if (!row) throw new FoundationError(409, companyNotSetUp, 'not_set_up');
+  if (!row) throw ledgerError(409, companyNotSetUp, 'not_set_up');
   return {
     client, userId,
     company: {
