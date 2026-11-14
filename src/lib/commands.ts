@@ -132,43 +132,72 @@ export function barCommands<T extends { id: string; enabled: boolean; keys: read
 }
 
 /**
- * One go-to still open: the screen it opened (`to`, a path, compared without the search, which the period fill-in
- * rewrites on arrival), the address it was opened from (`from`) and the report trail's mark when it was opened (`mark`:
- * only drill-downs taken after it lead back towards it). `pending` while its navigation is under way.
+ * One go-to still open, tied to the history entry of the screen it opened:
+ * - `to` and `level` are that screen's path and report level (`reportLevel`: the highlight, page, period and view do
+ *   not count, so the period fill-in on arrival changes neither);
+ * - `index` is that history entry's position, and `fromIndex` the position of the entry it was opened from, which
+ *   Escape goes back to (pushes above it never move it);
+ * - `mark` is the report trail's mark when it opened: only drill-downs taken after it lead back towards it;
+ * - `pending` holds while its navigation is under way (`index` and `level` are not known yet).
  */
-export type GoToReturn = { readonly from: string; readonly to: string; readonly mark: number; readonly pending?: boolean }
+export type GoToReturn = {
+  readonly from: string; readonly to: string; readonly level: string
+  readonly index: number; readonly fromIndex: number; readonly mark: number; readonly pending?: boolean
+}
+
+/** A history change as the router's history reports it, with the new location's position, path and report level. */
+export type HistoryMove = {
+  readonly type: 'PUSH' | 'REPLACE' | 'BACK' | 'FORWARD' | 'GO'
+  readonly index: number; readonly path: string; readonly level: string
+  /** A push that goes back up the report trail from a level drilled into after the innermost go-to. */
+  readonly trailBack?: boolean
+}
 
 const samePath = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 /** Whether the trail step of this level (its number, or null) was taken after the go-to's mark. */
-const drilledFrom = (step: number | null, goTo: GoToReturn | undefined) => step !== null && (!goTo || step > goTo.mark)
+export const drilledFrom = (step: number | null, goTo: GoToReturn | undefined): boolean => step !== null && (!goTo || step > goTo.mark)
 
 /**
- * The go-to returns still open at `path`, innermost last; `step` is the number of the report trail step going back
- * from this level, or null. A return is spent once its screen is left, except into a drill-down taken from it after it
- * opened, which comes back to it; so the innermost returns are dropped while their screen is neither here nor drilled
- * into. A pending return is kept: its screen has not opened yet. Returns the same array when nothing is dropped.
+ * The go-to returns after a history change, innermost last, following what the browser keeps:
+ * - A push drops the returns whose entry it overwrote (at or above the new position), since forward history is gone.
+ *   A push up the report trail that lands on the innermost return's level moves the return onto the new entry, so a
+ *   drill-down and back keeps it.
+ * - A replace drops a return whose entry now holds another screen. The period fill-in and view switches keep the
+ *   path, so they keep it.
+ * - Back, forward and go keep every return: their entries are still there, and a return applies again on its own entry.
+ *
+ * Pending returns are kept. The same array comes back when nothing changes.
  */
-export function settleGoTos(stack: readonly GoToReturn[], path: string, step: number | null): readonly GoToReturn[] {
-  let open = stack.length
-  while (open > 0) {
-    const goTo = stack[open - 1]
-    if (goTo.pending || samePath(goTo.to, path) || drilledFrom(step, goTo)) break
-    open--
+export function afterHistory(stack: readonly GoToReturn[], move: HistoryMove): readonly GoToReturn[] {
+  if (move.type === 'PUSH') {
+    const kept = stack.filter(goTo => goTo.pending || goTo.index < move.index)
+    const innermost = kept[kept.length - 1]
+    if (move.trailBack && innermost && !innermost.pending && innermost.level === move.level)
+      return [...kept.slice(0, -1), { ...innermost, index: move.index }]
+    return kept.length === stack.length ? stack : kept
   }
-  return open === stack.length ? stack : stack.slice(0, open)
+  if (move.type === 'REPLACE') {
+    const kept = stack.filter(goTo => goTo.pending || goTo.index !== move.index || samePath(goTo.to, move.path))
+    return kept.length === stack.length ? stack : kept
+  }
+  return stack
 }
 
 /**
- * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take, given the settled returns: a level drilled into after the
- * innermost go-to goes up to the level it came from (the screen's own back); on the screen the innermost go-to opened,
- * back to where that go-to was opened from (go-to stacks, so the next one out applies there); otherwise the screen's own
- * back, else the shell's (the company menu). A switch-to leaves no return and puts the company menu under the screen it
- * opens, so its screen goes back the usual way, and that ends at the menu.
+ * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take at a location (its path, history position and report trail
+ * step number), in this order:
+ * 1. A level drilled into after the innermost go-to takes the screen's own back, one level up.
+ * 2. The very entry the innermost go-to opened returns to where that go-to was opened from. Go-to stacks, so the next
+ *    one out applies there. A form opened from it and closed again is back on that entry.
+ * 3. Otherwise the screen's own back, else the shell's (the company menu).
+ *
+ * A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes back the usual
+ * way, and that ends at the menu.
  */
-export function backSource(path: string, stack: readonly GoToReturn[], { step, screen, shell }: { step: number | null; screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell }: { screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
   const innermost = stack[stack.length - 1]
-  if (screen && drilledFrom(step, innermost)) return 'screen'
-  if (innermost && samePath(innermost.to, path)) return 'go-to'
+  if (screen && drilledFrom(at.step, innermost)) return 'screen'
+  if (innermost && !innermost.pending && innermost.index === at.index && samePath(innermost.to, at.path)) return 'go-to'
   return screen ? 'screen' : shell ? 'shell' : 'none'
 }
 

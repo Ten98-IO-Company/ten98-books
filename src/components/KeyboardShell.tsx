@@ -2,7 +2,8 @@ import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } f
 import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, keepsEscape, settleGoTos, type CommandContext, type CommandId, type GoToReturn } from '../lib/commands'
+import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
+import { reportLevel } from '../lib/reports'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
@@ -11,6 +12,9 @@ import { reportMenuGroups, useFocusOnOpen } from './reports/ReportScreen'
 import { reportRoutes, trailMark, trailStepOf } from './reports/navigation'
 
 type KeymapSetting = { keymap: KeymapName; chosen: boolean }
+
+/** The position of a history entry (TanStack history keeps it through replaces; 0 for an entry it did not write). */
+const historyIndex = (state: unknown): number => (state as { __TSR_index?: number } | undefined)?.__TSR_index ?? 0
 
 export type KeyboardState = {
   /** The active keymap: the saved choice, or the default until it loads or while none is saved. */
@@ -120,23 +124,36 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const navigate = useNavigate()
   const path = useRouterState({ select: state => state.location.pathname })
   const href = useRouterState({ select: state => state.location.href })
+  const index = useRouterState({ select: state => historyIndex(state.location.state) })
   const step = trailStepOf(href)
-  // A go-to return is spent once its screen is left (settleGoTos); the render reads the settled list at once.
-  const openGoTos = settleGoTos(goTos, path, step)
-  useEffect(() => { setGoTos(stack => settleGoTos(stack, path, step)) }, [path, step])
+  const innermost = goTos[goTos.length - 1]
+  // Set while Escape goes up the report trail from a level drilled into after the innermost go-to, so the push that
+  // lands back on the go-to's screen carries its return onto the new entry (afterHistory).
+  const trailBack = useRef(false)
+  useEffect(() => router.history.subscribe(({ location, action }) => {
+    const move: HistoryMove = { type: action.type, index: historyIndex(location.state), path: location.pathname, level: reportLevel(location.href), trailBack: trailBack.current }
+    trailBack.current = false
+    setGoTos(stack => afterHistory(stack, move))
+  }), [router])
 
-  // Go-to pushes the screen and remembers where it came from (its return is recorded before the navigation, so that
-  // leaving this screen does not drop the returns under it); switch-to puts the company menu in place of this screen
-  // and pushes the new one on top, so the ordinary back from there (history, a report's fallback, the shell's) ends at
-  // the menu. A navigation the leave guard keeps from happening leaves everything as it was.
+  // Go-to pushes the screen and remembers the entry it came from; its return is recorded before the navigation
+  // (pending), so the push does not drop it. A go-to to the screen already shown records nothing. Switch-to puts the
+  // company menu in place of this screen and pushes the new one on top, so the ordinary back from there (history, a
+  // report's fallback, the shell's) ends at the menu. A navigation the leave guard keeps from happening leaves
+  // everything as it was.
   const openScreen = useCallback<OpenScreen>(async (mode, to, params, search) => {
     const from = router.state.location.href
     if (mode === 'go-to') {
-      const entry: GoToReturn = { from, to: router.buildLocation({ to, params, search } as never).pathname, mark: trailMark(), pending: true }
-      setGoTos(stack => [...stack, entry])
+      const target = router.buildLocation({ to, params, search } as never).pathname
+      if (target.toLowerCase() === router.state.location.pathname.toLowerCase()) { await navigate({ to, params, search } as never); return }
+      const entry: GoToReturn = { from, to: target, level: '', index: -1, fromIndex: historyIndex(router.history.location.state), mark: trailMark(), pending: true }
+      // A go-to the leave guard held back never arrives: the router settles its navigation only with a later one, so
+      // a pending return is dropped by the next go-to, and counts as arrived only on the screen it was opened for.
+      setGoTos(stack => [...stack.filter(item => !item.pending), entry])
       await navigate({ to, params, search } as never)
-      const arrived = router.state.location.href !== from
-      const opened: GoToReturn = { from, to: router.state.location.pathname, mark: entry.mark }
+      const here = router.history.location
+      const arrived = router.state.location.href !== from && here.pathname.toLowerCase() === target.toLowerCase()
+      const opened: GoToReturn = { ...entry, to: here.pathname, level: reportLevel(here.href), index: historyIndex(here.state), pending: undefined }
       setGoTos(stack => arrived ? stack.map(item => item === entry ? opened : item) : stack.filter(item => item !== entry))
       return
     }
@@ -146,11 +163,11 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
     setGoTos([])
     await navigate({ to, params, search } as never)
   }, [router, navigate])
-  const source = backSource(path, openGoTos, { step, screen: backOverride !== null, shell: back !== undefined })
-  const innermost = openGoTos[openGoTos.length - 1]
-  // Using a return spends it; leaving its screen would drop it too (settleGoTos), this makes it immediate.
-  const backNow = source === 'go-to' ? () => { setGoTos(stack => stack.filter(item => item !== innermost)); void navigate({ href: innermost.from }) }
-    : source === 'screen' ? backOverride!.run : source === 'shell' ? back : undefined
+  const source = backSource({ path, index, step }, goTos, { screen: backOverride !== null, shell: back !== undefined })
+  // Using a return spends it and goes back in history to the very entry the go-to was opened from.
+  const backNow = source === 'go-to' ? () => { setGoTos(stack => stack.filter(item => item !== innermost)); router.history.go(innermost.fromIndex - index) }
+    : source === 'screen' ? () => { trailBack.current = drilledFrom(step, innermost); backOverride!.run() }
+    : source === 'shell' ? back : undefined
 
   useEffect(() => {
     const controller = new AbortController()
