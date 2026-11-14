@@ -22,6 +22,10 @@ The main session coordinates (D-08): it decides, owns shared contracts and merge
 
 A worker decides anything inside its brief that is reversible within a day. Everything else goes to the coordinator, who records it in docs/DECISIONS.md with evidence. Irreversible or outward actions belong to the owner.
 
+## Documentation
+
+One canonical document per topic, linked from [docs/ROADMAP.md](docs/ROADMAP.md). A change to behaviour, setup, configuration, an HTTP route or a keyboard command updates its document in the same branch; a reviewer treats a stale document as a defect. Documents state what was verified and what was not, and never describe unfinished behaviour as working. The coordinator updates the roadmap's status table with each merge into `dev`. Progress diaries, plans that were superseded and review transcripts stay out of the repository.
+
 ## Engineering
 
 - Ponytail: smallest complete change, reuse first, no speculative abstraction; non-trivial logic leaves a meaningful test that fails without it.
