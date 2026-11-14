@@ -2,13 +2,13 @@ import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } f
 import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, keepsEscape, type CommandContext, type CommandId, type GoToReturn } from '../lib/commands'
+import { ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, keepsEscape, settleGoTos, type CommandContext, type CommandId, type GoToReturn } from '../lib/commands'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
 import { useCanWrite } from './masters/useCanWrite'
 import { reportMenuGroups, useFocusOnOpen } from './reports/ReportScreen'
-import { reportRoutes } from './reports/navigation'
+import { reportRoutes, trailMark, trailStepOf } from './reports/navigation'
 
 type KeymapSetting = { keymap: KeymapName; chosen: boolean }
 
@@ -115,29 +115,42 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const [helpOpen, setHelpOpen] = useState(false)
   const [goToMode, setGoToMode] = useState<ScreenMode | null>(null)
   const [backOverride, setBackOverride] = useState<{ run: () => void } | null>(null)
-  const [goToReturn, setGoToReturn] = useState<GoToReturn | null>(null)
+  const [goTos, setGoTos] = useState<readonly GoToReturn[]>([])
   const router = useRouter()
   const navigate = useNavigate()
   const path = useRouterState({ select: state => state.location.pathname })
+  const href = useRouterState({ select: state => state.location.href })
+  const step = trailStepOf(href)
+  // A go-to return is spent once its screen is left (settleGoTos); the render reads the settled list at once.
+  const openGoTos = settleGoTos(goTos, path, step)
+  useEffect(() => { setGoTos(stack => settleGoTos(stack, path, step)) }, [path, step])
 
-  // Go-to pushes the screen and remembers where it came from; switch-to puts the company menu in place of this screen
+  // Go-to pushes the screen and remembers where it came from (its return is recorded before the navigation, so that
+  // leaving this screen does not drop the returns under it); switch-to puts the company menu in place of this screen
   // and pushes the new one on top, so the ordinary back from there (history, a report's fallback, the shell's) ends at
   // the menu. A navigation the leave guard keeps from happening leaves everything as it was.
   const openScreen = useCallback<OpenScreen>(async (mode, to, params, search) => {
     const from = router.state.location.href
     if (mode === 'go-to') {
+      const entry: GoToReturn = { from, to: router.buildLocation({ to, params, search } as never).pathname, mark: trailMark(), pending: true }
+      setGoTos(stack => [...stack, entry])
       await navigate({ to, params, search } as never)
-      if (router.state.location.href !== from) setGoToReturn({ from, to: router.state.location.pathname })
+      const arrived = router.state.location.href !== from
+      const opened: GoToReturn = { from, to: router.state.location.pathname, mark: entry.mark }
+      setGoTos(stack => arrived ? stack.map(item => item === entry ? opened : item) : stack.filter(item => item !== entry))
       return
     }
     const home = `/app/c/${params.companyId}`
     await navigate({ to: '/app/c/$companyId', params, replace: true } as never)
     if (router.state.location.pathname.toLowerCase().replace(/\/$/, '') !== home) return
-    setGoToReturn(null)
+    setGoTos([])
     await navigate({ to, params, search } as never)
   }, [router, navigate])
-  const source = backSource(path, goToReturn, backOverride !== null, back !== undefined)
-  const backNow = source === 'go-to' ? () => void navigate({ href: goToReturn!.from }) : source === 'screen' ? backOverride!.run : source === 'shell' ? back : undefined
+  const source = backSource(path, openGoTos, { step, screen: backOverride !== null, shell: back !== undefined })
+  const innermost = openGoTos[openGoTos.length - 1]
+  // Using a return spends it; leaving its screen would drop it too (settleGoTos), this makes it immediate.
+  const backNow = source === 'go-to' ? () => { setGoTos(stack => stack.filter(item => item !== innermost)); void navigate({ href: innermost.from }) }
+    : source === 'screen' ? backOverride!.run : source === 'shell' ? back : undefined
 
   useEffect(() => {
     const controller = new AbortController()
