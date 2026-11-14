@@ -164,6 +164,18 @@ test('a sales voucher moved to journal takes the next journal number, keeps its 
   assert.deepEqual([alter.before.kind, alter.before.number, alter.after.kind, alter.after.number], ['sales', 1, 'journal', 2]);
 });
 
+test('a type change and a move into the next financial year in one alter take the new type\'s first number of that year', async () => {
+  const b = await books('Type And Year');
+  const sales = await b.ledger('Sales', 'sales'), party = await b.ledger('Party', 'receivables');
+  await b.post('journal', '2026-12-01', [line(party, 'Dr', '1'), line(sales, 'Cr', '1')]);
+  const sale = (await b.post('sales', '2026-12-20', [line(party, 'Dr', '100'), line(sales, 'Cr', '100')])).voucher;
+  const moved = await b.call(`/vouchers/${sale.id}`, asRead(sale, { voucherTypeId: b.accounts.type('journal'), date: '2027-01-05' }));
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.deepEqual([moved.body.voucher.kind, moved.body.voucher.date, moved.body.voucher.number], ['journal', '2027-01-05', 1]);
+  assert.equal((await b.post('sales', '2026-12-21', [line(party, 'Dr', '5'), line(sales, 'Cr', '5')])).voucher.number, 2, 'sales 1 of 2026 stays a gap');
+  assert.equal((await b.post('journal', '2027-01-06', [line(party, 'Dr', '5'), line(sales, 'Cr', '5')])).voucher.number, 2);
+});
+
 test('the new type\'s posting rules apply; an optional voucher changes type unnumbered; another company\'s type is not found', async () => {
   const b = await books('Type Rules'), other = await books('Type Other');
   const cash = b.accounts.ledger('Cash'), rent = await b.ledger('Rent', 'indirect_expenses'), party = await b.ledger('Party', 'payables');
@@ -191,6 +203,10 @@ test('raw SQL cannot change a numbered voucher\'s type or number without the new
     ['the type changed, the number kept', client => client.query('UPDATE voucher SET voucher_type_id = $3, series = $4 WHERE company_id = $1 AND id = $2', [b.companyId, journal.id, typeId, series]), code('23514', 'voucher_numbered')],
     ['the type and number changed without the counter', client => client.query('UPDATE voucher SET voucher_type_id = $3, series = $4, number = 7 WHERE company_id = $1 AND id = $2', [b.companyId, journal.id, typeId, series]), code('23514', 'voucher_numbered')],
     ['the number changed within its period, same type', client => client.query('UPDATE voucher SET number = number + 1 WHERE company_id = $1 AND id = $2', [b.companyId, journal.id]), code('23514', 'voucher_lifecycle')],
+    ['a cancelled voucher moved to another type', async client => {
+      await client.query(`UPDATE voucher SET status = 'cancelled' WHERE company_id = $1 AND id = $2`, [b.companyId, journal.id]);
+      await client.query('UPDATE voucher SET voucher_type_id = $3, series = $4 WHERE company_id = $1 AND id = $2', [b.companyId, journal.id, typeId, series]);
+    }, code('23514', 'voucher_lifecycle')],
     ['another company\'s type', client => client.query('UPDATE voucher SET voucher_type_id = $3 WHERE company_id = $1 AND id = $2', [b.companyId, journal.id, other.accounts.type('payment')]), code('23514', 'voucher_numbered')],
   ];
   for (const [name, run, expected] of cases) await assert.rejects(asApp(b.companyId, run), expected, name);
@@ -225,4 +241,17 @@ test('a type change and a posting into the new type serialise on its counter; tw
   const outcomes = await Promise.all(['journal', 'purchase'].map(kind => b.call(`/vouchers/${journal.id}`, asRead(current, { voucherTypeId: b.accounts.type(kind), narration: kind }))
     .then(answer => answer.body.code ?? answer.status)));
   assert.deepEqual(outcomes.map(String).sort(), ['200', 'stale_revision'], 'one alter wins; the other read a revision that has moved on');
+});
+
+test('a bill name of ignored characters only is refused, typed or taken from the supplier reference', async () => {
+  const b = await books('Empty Keys');
+  const sales = await b.ledger('Sales', 'sales'), costs = await b.ledger('Costs', 'purchases'), party = await b.ledger('Party', 'receivables'), supplier = await b.ledger('Supplier', 'payables');
+  for (const name of ['-', '.()', ' & ']) {
+    const answer = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('sales'), date: '2026-03-01',
+      lines: [line(party, 'Dr', '10', [{ kind: 'new_ref', name, amount: '10' }]), line(sales, 'Cr', '10')] });
+    assert.deepEqual([answer.status, answer.body.code], [400, 'validation'], JSON.stringify(name));
+  }
+  const fromReference = await b.call('/vouchers', { idempotencyKey: `empty-${randomUUID()}`, voucherTypeId: b.accounts.type('purchase'), date: '2026-03-01', reference: '--',
+    lines: [line(costs, 'Dr', '10'), line(supplier, 'Cr', '10', [{ kind: 'new_ref', amount: '10' }])] });
+  assert.deepEqual([fromReference.status, fromReference.body.code], [400, 'validation'], 'the database refuses it and the answer names the rule');
 });

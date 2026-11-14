@@ -70,23 +70,26 @@ CREATE FUNCTION name_match_key(p_name text) RETURNS text LANGUAGE sql IMMUTABLE 
   RETURN lower(translate(p_name, E' \t-./,()+*;=~?{}&', '') COLLATE pg_c_utf8);
 GRANT EXECUTE ON FUNCTION name_match_key(text) TO books_app;
 
--- Two bills of one party that the key makes equal are not merged silently: the migration stops and names them (no
--- released installation holds bills yet; an operator renames or merges them by hand first). The scope lists every
--- workspace for this transaction only, as in 0008.
+-- Two bills of one party that the key makes equal are not merged silently, and a name of ignored characters only (an
+-- empty key: the reference's behaviour is unobserved) is not accepted: the migration stops and names them (no released
+-- installation holds bills yet; an operator renames or merges them by hand first, LEDGER.md "Known limits" has the
+-- query). The scope lists every workspace for this transaction only, as in 0008.
 DO $$
 DECLARE v_clash text;
 BEGIN
   PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
   SELECT string_agg(format('company %s, ledger %s: %s', company_id, ledger_id, names), '; ') INTO v_clash
   FROM (SELECT company_id, ledger_id, string_agg(name, ', ' ORDER BY name) AS names FROM bill
-        GROUP BY company_id, ledger_id, name_match_key(name) HAVING count(*) > 1) clashes;
+        GROUP BY company_id, ledger_id, name_match_key(name) HAVING count(*) > 1 OR name_match_key(name) = '') clashes;
   PERFORM set_config('app.company_ids', '', true);
   IF v_clash IS NOT NULL THEN
-    RAISE EXCEPTION 'these bills become one bill under the new name match key; rename or merge them first: %', v_clash;
+    RAISE EXCEPTION 'these bills become one bill under the new name match key, or have no key; rename or merge them first: %', v_clash;
   END IF;
 END $$;
 DROP INDEX bill_identity_idx;
-CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name));
+-- In plain-text order (COLLATE "C"), the order the lists read a party's bills in, so a page reads only its own bills.
+CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name) COLLATE "C");
+ALTER TABLE bill ADD CONSTRAINT bill_name_key CHECK (name_match_key(name) <> '');
 
 -- ---- Vouchers created cancelled, without lines ----
 
@@ -113,6 +116,9 @@ BEGIN
     END IF;
     IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
       RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF OLD.status = 'cancelled' AND (NEW.voucher_type_id <> OLD.voucher_type_id OR NEW.series <> OLD.series) THEN
+      RAISE EXCEPTION 'a cancelled voucher keeps its type' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
   END IF;
   IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period

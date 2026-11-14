@@ -19,7 +19,7 @@ const counts = (row: Row) => row.status === 'regular'
 const columns: DataColumn<Row>[] = [
   { key: 'date', header: 'Date', render: row => <Text as='span' numeric>{row.date}</Text> },
   { key: 'particulars', header: 'Particulars', rowHeader: true, wrap: true, minWidth: 'md',
-    render: row => <Particulars label={row.particulars ?? ''} muted={!counts(row)} extra={<VoucherMarks status={row.status} postDated={row.postDated} />} /> },
+    render: row => <Particulars label={row.particulars ?? `${row.voucherTypeName} (cancelled, no lines)`} muted={!counts(row)} extra={<VoucherMarks status={row.status} postDated={row.postDated} />} /> },
   { key: 'type', header: 'Voucher type', render: row => row.voucherTypeName },
   { key: 'number', header: 'Number', numeric: true, render: row => row.number ?? <Blank /> },
   { key: 'debit', header: 'Debit', numeric: true, render: row => row.side === 'Dr' ? <Amount value={row.amount} /> : <Blank /> },

@@ -54,7 +54,9 @@ async function billStates(context: LedgerContext, ledgerIds: string[], asOf: str
      SELECT b.id AS "billId", b.name, b.ledger_id AS "ledgerId", led.name AS "ledgerName", to_char(ch.row_date, 'YYYY-MM-DD') AS "billDate",
        to_char(ch.due_date, 'YYYY-MM-DD') AS "dueDate", CASE ch.kind WHEN 'advance' THEN 'advance' ELSE 'new_ref' END AS method,
        w.pending, w.final_pending AS "finalPending", greatest(0, $3::date - ch.due_date)::int AS "overdueDays"
-     FROM wanted w JOIN bill b ON b.company_id = $1 AND b.ledger_id = ANY($2::uuid[]) AND b.id = w.bill_id
+     FROM wanted w
+       -- Each wanted bill by its key (a join could read every bill of the company while the table has no statistics).
+       CROSS JOIN LATERAL (SELECT x.id, x.name, x.ledger_id FROM bill x WHERE x.company_id = $1 AND x.id = w.bill_id AND x.ledger_id = ANY($2::uuid[]) LIMIT 1) b
        JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
        JOIN chosen ch ON ch.bill_id = w.bill_id
      WHERE $6::date IS NULL OR ch.row_date <= $6
@@ -151,7 +153,8 @@ async function scope(context: LedgerContext, groupId: string | undefined): Promi
   const { rows } = await context.client.query<{ id: string }>(
     `WITH RECURSIVE below(id) AS (SELECT unnest($2::uuid[]) UNION SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
      SELECT l.id FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM below)
-       AND EXISTS (SELECT 1 FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id)`, [context.company.companyId, groups.map(group => group.id)]);
+       -- One probe of the identity index per ledger (a semi-join would read every bill of the company on every page).
+       AND (SELECT true FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
   return { groups, ledgerIds: rows.map(row => row.id) };
 }
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { nameMatchKey } from './names.ts';
 import { isCalendarDate } from './company.ts';
 import { moneyText } from './money.ts';
 
@@ -74,7 +75,8 @@ export type CreditPeriod = { count: number; unit: CreditUnit } | { dueDate: stri
  */
 export const billKinds = ['new_ref', 'advance', 'against_ref', 'on_account'] as const;
 export type BillKind = (typeof billKinds)[number];
-const billName = z.string().trim().min(1).max(100).refine(clean);
+/** A bill name: its match key (src/lib/names.ts) may not be empty, as the database checks (`bill_name_key`). */
+const billName = z.string().trim().min(1).max(100).refine(clean).refine(name => nameMatchKey(name) !== '', 'A bill name needs a character other than spaces and - . / , ( ) + * ; = ~ ? { } &.');
 const billRowShape = {
   kind: z.enum(billKinds), name: billName.optional(), billId: id.optional(), creditPeriod: creditPeriod.optional(),
   amount: moneyText, side: z.enum(sides).optional(),
