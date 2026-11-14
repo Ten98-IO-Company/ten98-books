@@ -238,21 +238,45 @@ test('an invoice with a credit-period bill moved into the next year takes that y
   assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 1 }, { period: '2027-01-01', last: 2 }], 'number 1 of 2026 is left as a gap');
 });
 
-test('an automatically named bill keeps its name when its voucher moves to another year and takes a new number', async () => {
+test('an unnamed new reference stays on the bill its line created, through later alters and further period moves', async () => {
   const books = await company('Bill Keeps Name');
   const call = (path: string, body?: unknown) => owner.browser.call(`/api/companies/${books.id}${path}`, body);
   const party = await addLedger(owner.browser, books.id, 'Named Customer', books.books.group('receivables'));
   const other = await addLedger(owner.browser, books.id, 'Other Customer', books.books.group('receivables'));
   const sales = await addLedger(owner.browser, books.id, 'Sales', books.books.group('sales'));
-  const lines = (ledgerId: string) => [{ ledgerId, side: 'Dr', amount: '100', bills: [{ kind: 'new_ref', amount: '100' }] }, { ledgerId: sales, side: 'Cr', amount: '100' }];
-  const december = (await call('/vouchers', { ...voucherBody(books.books.type('sales'), '2026-12-10', []), lines: lines(party) })).body.voucher;
-  assert.deepEqual([december.number, december.lines[0].bills[0].billName], [1, '1']);
-  assert.equal((await call('/vouchers', { ...voucherBody(books.books.type('sales'), '2027-01-05', []), lines: lines(other) })).body.voucher.number, 1);
-  const moved = await call(`/vouchers/${december.id}`, { date: '2027-01-20', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: december.revision, lines: lines(party) });
-  assert.equal(moved.status, 200, JSON.stringify(moved.body));
-  assert.deepEqual([moved.body.voucher.number, moved.body.voucher.lines[0].bills[0].billName, moved.body.voucher.lines[0].bills[0].billId],
-    [2, '1', december.lines[0].bills[0].billId], 'the number changes, the bill and its name stay');
-  assert.deepEqual(moved.body.warnings.map((item: any) => item.code), [], 'no bill_split');
-  const bills = (await call(`/reports/party-bills/${party}?asOf=2027-01-31`)).body.report.bills;
-  assert.deepEqual(bills.map((bill: any) => [bill.name, bill.pending]), [['1', '100.00']]);
+  const partyLine = (ledgerId: string, bills: unknown[] = [{ kind: 'new_ref', amount: '100' }]) => ({ ledgerId, side: 'Dr', amount: '100', bills });
+  const salesLine = { ledgerId: sales, side: 'Cr', amount: '100' };
+  const post = (date: string, ledgerId: string) => call('/vouchers', { ...voucherBody(books.books.type('sales'), date, []), lines: [partyLine(ledgerId), salesLine] }).then(response => response.body.voucher);
+  const alter = async (voucher: any, changes: Record<string, unknown>) => {
+    const response = await call(`/vouchers/${voucher.id}`, { date: voucher.date, narration: voucher.narration, status: 'regular', postDated: false, reference: null, referenceDate: null,
+      revision: voucher.revision, lines: [partyLine(voucher.lines.find((line: any) => line.side === 'Dr').ledgerId), salesLine], ...changes });
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    return { voucher: response.body.voucher, warnings: response.body.warnings.map((item: any) => item.code) };
+  };
+  const bill = (voucher: any) => { const row = voucher.lines.find((line: any) => line.side === 'Dr').bills[0]; return [voucher.number, row?.billName, row?.billId]; };
+  const december = await post('2026-12-10', party);
+  const billId = december.lines[0].bills[0].billId;
+  assert.deepEqual(bill(december), [1, '1', billId]);
+  assert.equal((await post('2027-01-05', other)).number, 1);
+  assert.equal((await post('2028-01-05', other)).number, 1);
+
+  const moved = await alter(december, { date: '2027-01-20' });
+  assert.deepEqual([bill(moved.voucher), moved.warnings], [[2, '1', billId], []], 'the move gives number 2 and keeps bill "1"');
+  const narrated = await alter(moved.voucher, { narration: 'Checked' });
+  assert.deepEqual([bill(narrated.voucher), narrated.warnings], [[2, '1', billId], []], 'a later alter inside the year keeps bill "1"');
+  const again = await alter(narrated.voucher, { date: '2028-02-01' });
+  assert.deepEqual([bill(again.voucher), again.warnings], [[2, '1', billId], []], 'a second move into 2028 keeps bill "1"');
+  const reordered = await alter(again.voucher, { lines: [salesLine, partyLine(party)] });
+  assert.deepEqual([bill(reordered.voucher), reordered.warnings], [[2, '1', billId], []], 'reordered lines match the bill by ledger');
+  const typed = await alter(reordered.voucher, { lines: [partyLine(party, [{ kind: 'new_ref', name: 'X-9', amount: '100' }]), salesLine] });
+  assert.deepEqual([bill(typed.voucher).slice(0, 2), typed.voucher.lines[0].bills[0].billId === billId], [[2, 'X-9'], false], 'a name the client sends wins');
+
+  // A changed party falls back to the number, and so does a line that never had a bill.
+  const plain = await post('2028-03-01', other);
+  const switched = await alter(plain, { lines: [partyLine(party), salesLine] });
+  assert.deepEqual(bill(switched.voucher).slice(0, 2), [3, '3'], 'another ledger names its bill by the number');
+  const onAccount = (await call('/vouchers', { ...voucherBody(books.books.type('sales'), '2028-03-02', []), lines: [partyLine(other, []), salesLine] })).body.voucher;
+  assert.equal(onAccount.lines[0].bills.length, 0);
+  const firstBill = await alter(onAccount, {});
+  assert.deepEqual(bill(firstBill.voucher).slice(0, 2), [4, '4'], 'a line without a bill before names it by the number');
 });

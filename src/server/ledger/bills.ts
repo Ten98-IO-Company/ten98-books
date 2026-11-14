@@ -42,7 +42,7 @@ export type BillLine = {
 };
 /** A bill row as stored, for keeping it through an alter. */
 export type StoredBillRow = {
-  lineNo: number; ledgerId: string; kind: BillKind; billId: string | null; billName: string | null; side: Side; amount: bigint;
+  lineNo: number; ledgerId: string; kind: BillKind; billId: string | null; side: Side; amount: bigint;
   dueDate: string | null; creditCount: number | null; creditUnit: CreditUnit | null;
 };
 /** A row ready to write. `name` is set for rows that find or make their bill by name; `auto` waits for the number. */
@@ -91,11 +91,17 @@ async function billsByName(context: LedgerContext, keys: { ledgerId: string; nam
  * without rows, and whatever its rows leave, is on account. Refusals: rows netting beyond the line, a settlement naming
  * no bill of the party, a bill of another ledger, and a new reference with no name to default to.
  */
-export async function planBills(context: LedgerContext, voucher: { kind: VoucherKind; reference: string | null; optional: boolean; number?: number | null },
+export async function planBills(context: LedgerContext, voucher: { kind: VoucherKind; reference: string | null; optional: boolean },
   lines: BillLine[], kept: StoredBillRow[] = []): Promise<BillPlan> {
   const { exponent } = context.company;
   const rows: PlannedRow[] = [];
   const warnings: BillWarning[] = [];
+  // Decided, awaiting observation: on alter, an unnamed new reference or advance stays on the bill its line already
+  // created, whatever that bill's name and whatever the voucher's number is now (a date moved into another period gives
+  // a new number). Lines match by number and ledger; reordered lines match by ledger when the voucher has exactly one
+  // line and one stored creating row for it. A name the client sends, or a changed ledger, decides the bill instead.
+  const creating = (kind: BillKind) => kind === 'new_ref' || kind === 'advance';
+  const storedCreating = kept.filter(row => creating(row.kind) && row.billId !== null);
   for (const line of lines) {
     const sent = line.bills ?? [];
     if (!line.billWise) {
@@ -114,28 +120,27 @@ export async function planBills(context: LedgerContext, voucher: { kind: Voucher
       return { ...row, amount, side: row.side ?? line.side };
     });
     assertBillRowsFit(parsed, line.side, line.amount, exponent, `line ${line.lineNo}`);
+    const own = storedCreating.filter(stored => stored.lineNo === line.lineNo && stored.ledgerId === line.ledgerId);
+    const byLedger = storedCreating.filter(stored => stored.ledgerId === line.ledgerId);
+    const reusable = own.length ? own : byLedger.length === 1 && lines.filter(other => other.ledgerId === line.ledgerId).length === 1 ? byLedger : [];
     for (const row of parsed) {
       let name = row.name ?? null;
+      let billId = row.billId ?? null;
       let auto = false;
-      if (row.kind === 'new_ref' && name === null && row.billId === undefined) {
+      if (creating(row.kind) && name === null && billId === null && reusable.length) billId = reusable.shift()!.billId;
+      if (row.kind === 'new_ref' && name === null && billId === null) {
         // Observed defaults: a purchase's bill takes the supplier's invoice number, a sales bill the voucher number.
         if (voucher.kind === 'purchase' || voucher.kind === 'debit_note') {
           name = voucher.reference;
           if (name === null) throw ledgerError(400, `Enter the supplier's invoice number as the reference, or name the bill on line ${line.lineNo}.`, 'validation');
         } else if (voucher.optional) {
           throw ledgerError(400, `An optional voucher has no number to name its bill by. Name the bill on line ${line.lineNo}.`, 'validation');
-        } else {
-          // Decided, awaiting observation: an alter keeps the bill the line's automatic name made, so a date moved into
-          // another period (which gives the voucher a new number) never renames or splits that bill.
-          const named = voucher.number == null ? undefined : kept.find(stored => stored.lineNo === line.lineNo && stored.ledgerId === line.ledgerId
-            && stored.kind === 'new_ref' && stored.billName !== null && stored.billName.toLowerCase() === String(voucher.number));
-          if (named) name = named.billName; else auto = true;
-        }
+        } else auto = true;
       }
-      if (row.kind === 'advance' && name === null && row.billId === undefined) throw ledgerError(400, `Name the advance on line ${line.lineNo}.`, 'validation');
+      if (row.kind === 'advance' && name === null && billId === null) throw ledgerError(400, `Name the advance on line ${line.lineNo}.`, 'validation');
       const period = row.kind === 'new_ref' || row.kind === 'advance' ? row.creditPeriod ?? line.credit : null;
       rows.push({ lineNo: line.lineNo, ledgerId: line.ledgerId, kind: row.kind, side: row.side, amount: row.amount,
-        billId: row.billId ?? null, name, auto, period, kept: null, billDate: null });
+        billId, name, auto, period, kept: null, billDate: null });
     }
   }
   await resolveBills(context, rows);
@@ -329,9 +334,8 @@ export async function billWarnings(context: LedgerContext, voucherId: string, pl
 /** The rows a voucher holds now, by line, to keep through an alter on lines whose ledger is no longer bill-wise. */
 export async function storedBillRows(context: LedgerContext, voucherId: string): Promise<StoredBillRow[]> {
   const { rows } = await context.client.query<StoredBillRow>(
-    `SELECT a.line_no AS "lineNo", a.ledger_id AS "ledgerId", a.kind, a.bill_id AS "billId", b.name AS "billName", a.side, a.amount,
-       a.due_date AS "dueDate", a.credit_count AS "creditCount", a.credit_unit AS "creditUnit"
-     FROM bill_allocation a LEFT JOIN bill b ON b.company_id = a.company_id AND b.id = a.bill_id
-     WHERE a.company_id = $1 AND a.voucher_id = $2 ORDER BY a.line_no, a.id`, [context.company.companyId, voucherId]);
+    `SELECT line_no AS "lineNo", ledger_id AS "ledgerId", kind, bill_id AS "billId", side, amount, due_date AS "dueDate",
+       credit_count AS "creditCount", credit_unit AS "creditUnit"
+     FROM bill_allocation WHERE company_id = $1 AND voucher_id = $2 ORDER BY line_no, id`, [context.company.companyId, voucherId]);
   return rows;
 }

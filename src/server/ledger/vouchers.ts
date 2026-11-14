@@ -270,7 +270,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   const crossing = await movesPeriod(context, before, input.date);
   const lines = await prepareLines(context, before.kind, input);
   const stored = await storedBillRows(context, voucherId);
-  const plan = await planBills(context, { kind: before.kind, reference: input.reference, optional: input.status === 'optional', number: before.number }, lines, stored);
+  const plan = await planBills(context, { kind: before.kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
   const created = await billsCreatedBy(context, voucherId);
   await client.query(
     `UPDATE voucher SET date = $3, narration = $4, status = $5, post_dated = $6, reference = $7, reference_date = $8, revision = revision + 1, updated_at = now()
