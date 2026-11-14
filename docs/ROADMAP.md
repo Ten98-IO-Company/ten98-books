@@ -30,10 +30,10 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md) |
 | Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
-| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Three companies; the starter company matches the reference installation on every line |
-| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release; design in progress from observed entry flows |
+| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies. No compared line differs from the reference installation in any of them; lines that need features not built yet (foreign currency, vouchers cancelled without lines, bill and stock figures) are reported as not yet comparable |
+| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | merged | Parity table and reserved keys in [KEYBOARD.md](KEYBOARD.md) |
-| Voucher numbers per voucher type and financial year of the voucher's date | in progress | Found by the like-for-like comparison; rules observed; counters being changed |
+| Voucher numbers per voucher type and financial year of the voucher's date; posting rules per voucher type as observed | merged | [LEDGER.md](LEDGER.md), migration 0007, [D-04](DECISIONS.md) as amended. Prefix, suffix, manual numbering and other restart periods are not built |
 
 Open items inside merged pieces:
 
@@ -52,7 +52,7 @@ Delivered in slices, each from a design reviewed against observed behaviour.
 | Piece | Status | Notes |
 |---|---|---|
 | Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0006. No screen yet: the bill panel comes with the voucher entry screen |
-| Cost centres and accounting projects | designed | Design awaits review and one owner decision on how a project is modelled |
+| Cost categories and cost centres | designed | Design reviewed independently and revised; build follows the numbering change. Accounting projects ride on cost centres; how they are marked awaits an owner decision |
 | Currencies, rates and foreign-currency lines | not started | |
 | Exchange differences | not started | |
 
