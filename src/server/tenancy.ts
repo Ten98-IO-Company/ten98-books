@@ -9,7 +9,7 @@ import { getDatabase } from './db.ts';
  * forced row-level security on `current_setting('app.company_ids', true)` and is read and written only inside
  * `withCompany`. Better Auth, team and pg-boss tables stay outside row-level security.
  */
-export const accountingTables = ['company'] as const;
+export const accountingTables = ['company', 'account_group', 'ledger', 'voucher_type', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log'] as const;
 
 export type CompanyMode = 'read' | 'write';
 export type CompanyAccess = { companyId: string; workspaceId: string; name: string; role: WorkspaceRole };
