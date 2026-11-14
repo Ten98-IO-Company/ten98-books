@@ -237,17 +237,34 @@ export const costBreakupKey = (row: { kind: 'centre' | 'ledger'; id: string }) =
 export const reportSubject = (search: { group?: string; ledger?: string; voucher?: string; centre?: string }) =>
   [search.group, search.ledger, search.voucher, search.centre].map(value => value ?? '').join('|');
 
-/** A screen's highlighted line and the level (subject and the address's `hl`) it was taken from. */
-export type HighlightState = { level: string; highlight: string | undefined };
+/** A screen's highlighted line, with the subject and the address's `hl` it was last synced with. */
+export type HighlightState = { subject: string; hl: string | undefined; highlight: string | undefined };
 
 /**
- * The highlight after the address changed: when the level differs (another subject, or back to a level whose `hl` the
- * drill-down trail wrote), the address's `hl`; otherwise the line the user moved to. Returns `state` itself when nothing
- * changed, so a screen can compare by identity.
+ * The highlight after the address changed. Another subject (a drill on the same route) takes the address's `hl`; so does
+ * a new `hl` on the same subject (back to a level whose highlight the drill-down trail wrote). An `hl` that only went
+ * away (a period change clears it) keeps the line the user moved to. Returns `state` itself when nothing changed, so a
+ * screen can compare by identity.
  */
 export function syncHighlight(state: HighlightState, subject: string, hl: string | undefined): HighlightState {
-  const level = `${subject}#${hl ?? ''}`;
-  return level === state.level ? state : { level, highlight: hl };
+  if (subject === state.subject && hl === state.hl) return state;
+  if (subject === state.subject && hl === undefined) return { subject, hl, highlight: state.highlight };
+  return { subject, hl, highlight: hl };
+}
+
+/** Search parameters that change how a level is shown, not which level it is: a drill-down trail ignores them. */
+const transientParameters = ['hl', 'pages', 'from', 'to', 'detail', 'zeros'];
+
+/**
+ * A report address as a drill-down level: the path (any case) and its subject parameters in a stable order, without the
+ * highlight, the register page, the period or the view, so a level whose period or page changed after the drill is
+ * still found in the trail.
+ */
+export function reportLevel(href: string): string {
+  const url = new URL(href, 'http://report.invalid');
+  for (const name of transientParameters) url.searchParams.delete(name);
+  url.searchParams.sort();
+  return `${url.pathname.toLowerCase()}?${url.searchParams}`;
 }
 
 /** Loaded report data, shown only for the subject it was read for (a period change keeps it on screen while it reloads). */
@@ -284,6 +301,14 @@ export function matchingCentres<T extends { name: string; secondLanguageName: st
 export const centreOriginNotice = (search: { fromCentre?: string }): string | null => search.fromCentre
   ? 'Opened from a cost centre break-up. These are all of the ledger’s vouchers for the period, for every cost centre and those without one, so the totals are the ledger’s, not the centre’s.'
   : null;
+
+/** Where the voucher view goes back to without a drill-down trail: the ledger's vouchers it came from (keeping the break-up it was reached from), else its day in the day book. */
+export function voucherParent(search: { from?: string; to?: string; ledger?: string; fromCentre?: string }, date: string):
+  { report: 'ledger-vouchers'; search: { from?: string; to?: string; ledger: string; fromCentre?: string } } | { report: 'day-book'; search: { from: string; to: string } } {
+  return search.ledger
+    ? { report: 'ledger-vouchers', search: { from: search.from, to: search.to, ledger: search.ledger, ...search.fromCentre ? { fromCentre: search.fromCentre } : {} } }
+    : { report: 'day-book', search: { from: date, to: date } };
+}
 
 /** Where a ledger's vouchers go back to without a drill-down trail: the break-up they came from, else the ledger's monthly summary. */
 export function ledgerVouchersParent(search: { from?: string; to?: string; ledger?: string; fromCentre?: string }):

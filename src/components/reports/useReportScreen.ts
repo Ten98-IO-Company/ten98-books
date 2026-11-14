@@ -18,7 +18,7 @@ export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path:
   const subject = reportSubject(search)
   const report = useReport<T>(period ? path(period, company.id) : null, 'report', subject)
   const navigation = useReportNavigation(company.id)
-  const [tracked, setTracked] = useState<HighlightState>(() => syncHighlight({ level: '', highlight: undefined }, subject, search.hl))
+  const [tracked, setTracked] = useState<HighlightState>(() => ({ subject, hl: search.hl, highlight: search.hl }))
   const synced = syncHighlight(tracked, subject, search.hl)
   if (synced !== tracked) setTracked(synced)
   const highlight = synced.highlight

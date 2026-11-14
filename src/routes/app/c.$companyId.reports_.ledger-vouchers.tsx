@@ -43,7 +43,7 @@ function LedgerVouchersScreen() {
     {centreOriginNotice(search) && <Alert tone='info' title='Not filtered by cost centre'>{centreOriginNotice(search)}</Alert>}
     {data && <ReportTable caption={`Vouchers of ${data.ledger.name}`} columns={columns} rows={rows} rowKey={row => row.key}
       highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={row => row.entry !== null}
-      onOpen={row => { if (row.entry) screen.open({ report: 'voucher', search: { voucher: row.entry.voucherId, ledger: data.ledger.id } }) }}
+      onOpen={row => { if (row.entry) screen.open({ report: 'voucher', search: { voucher: row.entry.voucherId, ledger: data.ledger.id, fromCentre: search.fromCentre } }) }}
       page={{ cursor: { hasPrevious: pages.hasPrevious, hasNext: data.next !== null } }}
       pageBusy={screen.report.status === 'loading'} onPage={direction => { if (direction === 'next' && data.next) pages.next(data.next); else if (direction === 'previous') pages.previous() }}
       footerCells={['', 'Total for the period', '', '', <Amount key='debit' value={data.totals.debit} strong />, <Amount key='credit' value={data.totals.credit} strong />,

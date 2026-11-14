@@ -4,7 +4,7 @@ import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { isCalendarDate } from '../../lib/company'
 import type { Wire } from '../../lib/money'
-import { dataForSubject, readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
+import { dataForSubject, readCursorStack, reportLevel, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
 
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
@@ -133,13 +133,8 @@ export type ReportLink = { report: ReportRoute; search: ReportSearch }
 type Step = { child: string; parent: string }
 const trail: Step[] = []
 
-/** An address with its search parameters in a stable order and without the highlight, for comparing levels. */
-function levelOf(href: string): string {
-  const url = new URL(href, 'http://report.invalid')
-  url.searchParams.delete('hl')
-  url.searchParams.sort()
-  return `${url.pathname.toLowerCase()}?${url.searchParams}`
-}
+/** A level of the trail: see reportLevel (the period, page, view and highlight do not make another level). */
+const levelOf = reportLevel
 
 /**
  * Drill-down and back for report screens. `open` goes down one level, recording where it came from and the line that
