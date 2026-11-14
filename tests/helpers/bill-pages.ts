@@ -10,11 +10,13 @@ import { asAdmin, chart, createCompany, inCompany, type Member } from './ledger.
 
 /**
  * The bill-page fixture: another company with 1,500 bills (15 parties of 100), then a company whose party "M Many Bills"
- * holds 300 bills between two parties with two each. Autovacuum is off on bill and bill_allocation in this database, so
- * the statistics are exactly the ones a test sets (`afterNeighbour` runs once the other company's bills are posted).
+ * holds 300 bills between two parties with two each (304 in the company). Autovacuum is off on bill, bill_allocation and
+ * the tables the report joins (voucher, voucher_line, ledger, account_group) in this database, so the statistics are
+ * exactly the ones a test sets (`afterNeighbour` runs once the other company's bills are posted).
  */
 export async function billPagesFixture(owner: Member, database: TestDatabase, afterNeighbour?: string): Promise<string> {
-  await asAdmin(database.adminUrl, admin => admin.query('ALTER TABLE bill SET (autovacuum_enabled = false); ALTER TABLE bill_allocation SET (autovacuum_enabled = false)'));
+  await asAdmin(database.adminUrl, admin => admin.query(['bill', 'bill_allocation', 'voucher', 'voucher_line', 'ledger', 'account_group']
+    .map(table => `ALTER TABLE ${table} SET (autovacuum_enabled = false);`).join(' ')));
   const post = async (companyId: string, type: string, sales: string, parties: { id: string; prefix: string }[], perLine: number) => {
     const lines = parties.flatMap(party => [
       { ledgerId: party.id, side: 'Dr', amount: String(perLine), bills: Array.from({ length: perLine }, (_, index) => ({ kind: 'new_ref', name: `${party.prefix}-${String(index).padStart(3, '0')}`, amount: '1.00' })) },
