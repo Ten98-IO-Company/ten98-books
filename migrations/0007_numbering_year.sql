@@ -123,7 +123,7 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- Voucher lifecycle (0006's rules, plus the period): a number is set together with the period of the voucher's date, to
+-- Voucher lifecycle (M1's rules from 0004, plus the period): a number is set together with the period of the voucher's date, to
 -- the value that period's counter issued in this same transaction. Inside its period a numbered voucher keeps its
 -- number; a date moved into another period takes that period's next number in the same statement, and the old number
 -- stays a gap. A number is never removed.
@@ -144,7 +144,6 @@ BEGIN
     IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
       RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
-    PERFORM ledger_voucher_mark(NEW.id, false);
   END IF;
   IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period) AND (
     NEW.number_period IS DISTINCT FROM ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) OR NOT EXISTS (
