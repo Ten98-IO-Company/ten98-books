@@ -19,16 +19,16 @@ export type VoucherStatus = 'regular' | 'cancelled' | 'optional';
  * the sentence. Statuses stay as they were; a code never changes meaning once published.
  */
 export const ledgerErrorCodes = [
-  'validation', // a field is missing, malformed, out of range or contradicts another field
+  'validation', // a field is missing, malformed, out of range or contradicts another field (also: a cost centre twice in one category on a line, a stored category the voucher does not hold)
   'not_found', // the company, master or voucher (or one it refers to) is not there or not reachable
   'stale_revision', // someone changed the row since the client read it
   'retry', // a deadlock or serialization failure; nothing was saved
-  'duplicate_name', // another group, ledger or voucher type of the company has the name
-  'in_use', // a group holds sub-groups or ledgers, or a ledger has voucher lines
-  'seeded_row', // a built-in row cannot be deleted
+  'duplicate_name', // another group, ledger, voucher type, cost category or cost centre (across categories) has the name
+  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference)
+  'seeded_row', // a built-in row (also the seeded cost category) cannot be deleted
   'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
   'family_rule', // a built-in ledger would leave its behaviour family
-  'cycle', // a group would sit under its own sub-group
+  'cycle', // a group or cost centre would sit under its own sub-group or sub-centre
   'locked_period', // the date or the opening balances are inside the locked period
   'before_books_beginning', // the date is before the company's books begin
   'unbalanced', // fewer than two lines, or debits differ from credits
@@ -36,7 +36,7 @@ export const ledgerErrorCodes = [
   'voucher_state', // the voucher's status does not allow this change (cancelled, optional, numbered)
   'idempotency_mismatch', // the idempotency key was used for a different voucher body (or company, on company creation)
   'not_set_up', // the company has no books settings yet; members get this, non-members get not_found
-  'allocation_total', // a line's (or an opening balance's) bill rows net to more than it, or to its other side
+  'allocation_total', // a line's (or an opening balance's) bill rows net to more than it, or to its other side; or a line's cost rows of one category do not add up to it
   'bill_inactive', // a settlement names a bill whose vouchers were all deleted or cancelled
 ] as const;
 export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
@@ -106,13 +106,24 @@ export const ledgerCreateInput = z.object({
   billWise: z.boolean().optional(),
   creditPeriod: creditPeriod.nullable().optional(),
   creditDaysCheck: z.boolean().optional(),
+  /** Whether the ledger's lines take cost centres; new income and expense ledgers do by default. */
+  costCentres: z.boolean().optional(),
 }).strict();
 export const ledgerAlterInput = ledgerCreateInput.extend({ revision }).strict();
 
 export const voucherTypeAlterInput = z.object({ name, secondLanguageName, revision }).strict();
 export const revisionInput = z.object({ revision }).strict();
 
-const voucherLine = z.object({ ledgerId: id, side: z.enum(sides), amount: moneyText, bills: z.array(billRowInput).max(100).optional() }).strict();
+/**
+ * A cost allocation row of a voucher line (M2a slice 2): a centre, its category as saved (default: the centre's current
+ * one), a base amount and a side (default the line's). Each category used nets to the line amount.
+ */
+export const costAllocationInput = z.object({ costCentreId: id, categoryId: id.optional(), amount: moneyText, side: z.enum(sides).optional() }).strict();
+export type CostAllocationInput = z.output<typeof costAllocationInput>;
+const voucherLine = z.object({
+  ledgerId: id, side: z.enum(sides), amount: moneyText, bills: z.array(billRowInput).max(100).optional(),
+  costAllocations: z.array(costAllocationInput).max(200).optional(),
+}).strict();
 const reference = z.string().trim().max(100).refine(clean);
 const narration = z.string().max(2000);
 const voucherStatus = z.enum(['regular', 'optional']);
@@ -170,6 +181,8 @@ export type Ledger = {
   opening: { amount: bigint; side: Side }; revision: number;
   /** Bill-wise settings (M2a): the default credit period and whether sales entry warns about overdue bills. */
   billWise: boolean; creditPeriod: CreditPeriod | null; creditDaysCheck: boolean; openingBills: OpeningBill[];
+  /** Whether the ledger's lines take cost centres (M2a slice 2). */
+  costCentres: boolean;
 };
 /**
  * A group or ledger as the list and read routes return it: plus `inUse`, true when a delete would be refused because
@@ -188,9 +201,13 @@ export type BillRow = {
   kind: BillKind; billId: string | null; billName: string | null; side: Side; amount: bigint;
   dueDate: string | null; creditPeriod: CreditPeriod | null;
 };
+/** A stored cost allocation row of a line: the category it was saved with (not necessarily the centre's category now). */
+export type CostAllocationRow = {
+  costCentreId: string; costCentreName: string; categoryId: string; categoryName: string; side: Side; amount: bigint;
+};
 export type VoucherLine = {
   lineNo: number; ledgerId: string; ledgerName: string; side: Side; amount: bigint;
-  currency: string; currencyAmount: bigint; fxRate: string; bills: BillRow[];
+  currency: string; currencyAmount: bigint; fxRate: string; bills: BillRow[]; costAllocations: CostAllocationRow[];
 };
 export type Voucher = {
   id: string; voucherTypeId: string; voucherTypeName: string; kind: VoucherKind; series: string; number: number | null;
@@ -203,7 +220,11 @@ export type Voucher = {
  * joins another voucher's bill, a settlement beyond the pending amount, one line on both sides of one bill, and rows of
  * other vouchers left on a bill this voucher no longer creates.
  */
-export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached', 'bill_over_settled', 'bill_both_sides', 'bill_split'] as const;
+export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached', 'bill_over_settled', 'bill_both_sides', 'bill_split',
+  // Cost allocations (M2a slice 2): rows dropped on a line that takes no cost centres; a line's earlier rows kept, or
+  // rows sent accepted, after its ledger or the company stopped taking cost centres; kept rows rebalanced on their last
+  // row to a new line amount; kept rows dropped because the body sent an empty list for them.
+  'cost_ignored', 'cost_kept', 'cost_rebalanced', 'cost_dropped'] as const;
 export type BillWarningCode = (typeof billWarningCodes)[number];
 export type BillWarning = { code: BillWarningCode; line: number | null; billId: string | null; billName: string | null; amount: bigint | null };
 export type VoucherSummary = Omit<Voucher, 'lines'>;
@@ -223,7 +244,7 @@ export type TrialBalance = {
 };
 
 export type Revision = {
-  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher'; entityId: string;
+  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher' | 'cost_category' | 'cost_centre'; entityId: string;
   /** `actorName` is the user's display name, or null once that user no longer exists; never an email. */
   action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; actorName: string | null; at: string; before: unknown; after: unknown;
 };

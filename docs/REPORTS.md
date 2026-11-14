@@ -47,6 +47,17 @@ Amounts in JSON are decimal strings; a signed balance is positive on the debit s
 
 A bill's date and due date are those of the row that dates it: its earliest-dated live new reference or advance, else its earliest-dated live settlement. The pending list for entry (`ledgers/<id>/bills`) offers only bills dated on or before the voucher date. Each report has `/export` with the same rules as the M1 exports. Bill lists have the statements' 30-second budget, one party's reports the ledger screens' 20 seconds.
 
+### Cost centres (M2a slice 2)
+
+| Report | API (`GET /api/companies/<id>/reports/...`) | What it shows |
+|---|---|---|
+| Cost category summary | `cost-category-summary?from=&to=[&categoryId=]` | Per category (by name), its top-level centres (no parent) with opening, debit, credit and closing; each top-level centre's figures include all its sub-centres at any depth, whatever their own categories, and sub-centres have no row of their own (observed, also after a parent moved to another category: its child, left in the old category, counts in the parent's row and the parent's new category, and the old category shows nothing for it). A top-level centre, or a category, without figures for the period (no opening, debit or credit) has no row (observed). No figure for line amounts left without centres (observed) |
+| Cost centre break-up | `cost-centre-breakup/<centre id>?from=&to=` | One centre: its direct sub-centres, whatever their categories (each with its own sub-centres; observed), and the ledgers of its own rows, with opening, debit, credit and closing; the total equals the centre's figures in the summary |
+
+Rows count when their voucher does (regular and undeleted; a post-dated voucher from its own date). Reports group rows by each centre's category as it is now, not the category a row was saved with (observed: a centre moved to another category is regrouped, while its vouchers keep the old one). Every row counts once. The category figures and the break-up total are our own additions: the reference's cost reports have no total row and no unallocated row. Opening (the observed default): rows dated before the period on balance-sheet ledgers carry forward; rows on income and expense ledgers show the period movement only. Each report has `/export` with the same rules as the M1 exports; the summary has the statements' 30-second budget, one centre the ledger screens' 20 seconds. `tests/cost-centres-golden.integration.ts` reproduces the harbourview company's expected summary for 2026 and at its two checkpoints.
+
+Not built yet, all observed: the centre summary under a category (which lists only the sub-centres in that category, so a parent shows its own amount there) and its monthly summary; the break-up's group-wise view (this one lists ledgers); the cost break-up of a ledger and of a group; the "show opening balance" report option (off by default in the reference; with it on, revenue centres have no opening and non-revenue ones carry theirs). There is no cost-centre profit and loss in the reference.
+
 ## Drill-down and screens
 
 Enter goes down one level and Escape goes back one level, to the line it left from (D-05, D-09: drill-down is by route):
@@ -71,7 +82,7 @@ Measured on a generated company of 52,784 voucher lines (12,600 four-line vouche
 ## Not in M1
 
 - Stock: no opening or closing stock and no stock valuation in profit and loss or the balance sheet; no inventory columns in the day book.
-- Cost centres, foreign-currency bills, interest on bills, multi-currency columns, tax reports, budgets; bill reports have no screens yet.
+- Cost centre reports beyond the two above, foreign-currency bills, interest on bills, multi-currency columns, tax reports, budgets; bill and cost centre reports have no screens yet.
 - Comparative and additional columns (previous period, other periods, percentages), monthly views of a group, a cash-flow or funds-flow statement, ratio analysis.
 - Configurable layouts (vertical or horizontal statements, narrations in the day book, filters, saved views); the day book filter by voucher type.
 - Editing from a report: the voucher view is read-only.
