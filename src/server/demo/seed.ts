@@ -257,7 +257,7 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         let { voucher: posted, replayed } = await createVoucher(context, body);
         let cancelled = false;
         if (voucher.status === 'cancelled' && posted.status === 'regular') {
-          posted = await cancelVoucher(context, posted.id, { revision: posted.revision });
+          posted = (await cancelVoucher(context, posted.id, { revision: posted.revision })).voucher;
           cancelled = true;
         }
         return { number: posted.number, replayed, cancelled };
