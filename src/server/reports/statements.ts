@@ -73,8 +73,9 @@ const primariesOf = (nodes: readonly StatementNode[], nature: Nature, grossProfi
 /**
  * Profit and loss for a period inside one financial year: the trading section (groups that count towards gross profit)
  * gives gross profit or loss, then the other income and expenses give the net result. A ledger's figure is its
- * movement in the period, plus its opening balance when the books begin inside the period (that opening belongs to
- * this year's result). Stock is not valued in M1, so there is no opening or closing stock line.
+ * movement in the period, plus its opening balance when the books begin on or after the period's start (that opening
+ * belongs to this year's result, and a period before the books begin shows the opening balances, as the balance sheet
+ * and the trial balance do). Stock is not valued in M1, so there is no opening or closing stock line.
  */
 export async function profitAndLossReport(context: LedgerContext, query: unknown): Promise<ProfitAndLossReport> {
   const period = parsePeriod(query);
@@ -82,8 +83,10 @@ export async function profitAndLossReport(context: LedgerContext, query: unknown
     throw new FoundationError(400, 'A profit and loss statement covers one financial year at most. Choose an end date in the same financial year.');
   }
   const { from, to, nodes, ledgers } = await hierarchy(context, period.from, period.to);
-  const booksBeginInPeriod = from <= context.company.booksBeginning && context.company.booksBeginning <= to;
-  const movement = (row: LedgerRow) => addMoney(subtractMoney(row.debit, row.credit), booksBeginInPeriod ? row.enteredOpening : 0n);
+  // Same rule as the read model, which keeps an income or expense opening in its ledger for every year starting on or
+  // before the books begin: so the balance sheet's current period and this statement agree for any date.
+  const openingCounts = from <= context.company.booksBeginning;
+  const movement = (row: LedgerRow) => addMoney(subtractMoney(row.debit, row.credit), openingCounts ? row.enteredOpening : 0n);
   const value = rollUp(nodes, node => node.nature === 'income' || node.nature === 'expense' ? movement(ledgers.get(node.id)!) : 0n);
 
   const tradingIncome = sectionLines(nodes, primariesOf(nodes, 'income', true), value, true);

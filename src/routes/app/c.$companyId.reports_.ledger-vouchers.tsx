@@ -26,7 +26,7 @@ const columns: DataColumn<Row>[] = [
 
 function LedgerVouchersScreen() {
   const search = Route.useSearch()
-  const pages = useCursorPages(`${search.ledger}|${search.from}|${search.to}`)
+  const pages = useCursorPages(search)
   const screen = useReportScreen<Wire<LedgerVouchersReport>>(search, 'statement', (period, companyId) => search.ledger
     ? `/api/companies/${companyId}/reports/ledger-vouchers/${search.ledger}?${query({ ...period, after: pages.after })}` : null)
   const data = screen.report.data
