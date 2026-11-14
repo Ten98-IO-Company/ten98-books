@@ -1,15 +1,15 @@
 import { Alert, Button, ShortcutScope } from '@ten98/ui'
-import { useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
+import { useBlocker, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
-import { useAppCommand } from '../KeyboardShell'
+import { ReservedKeys, useAppCommand } from '../KeyboardShell'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
 export function EntryScope({ children }: { children: ReactNode }) {
-  return <ShortcutScope name={contextTitles.entry}>{children}</ShortcutScope>
+  return <ShortcutScope name={contextTitles.entry}><ReservedKeys context='entry' />{children}</ShortcutScope>
 }
 
 // An open dialog or expanded popup (a lookup's list) owns Enter and Escape even when focus has moved outside it.
@@ -90,6 +90,35 @@ export function useLeave(fallback: { to: string; params: Record<string, string> 
     if (canGoBack) router.history.back()
     else void navigate({ to: fallback.to, params: fallback.params } as never)
   }, [canGoBack, router, navigate, fallback.to, JSON.stringify(fallback.params)])
+}
+
+/**
+ * Keeps typed work from being lost: while `dirty`, any route change away from the screen (go-to, the company switcher,
+ * a link, the browser's back) waits for `ask` and goes ahead only on a yes, and closing or reloading the tab gets the
+ * browser's own warning. `pass` runs an exit the screen has already settled (after a save or a delete) without asking;
+ * `leave` asks first (when dirty) and then leaves, for the screen's own exits.
+ * Every entry screen guards itself with this; tests/keyboard.test.ts checks that each one rendering `EntryScope` does.
+ */
+export function useLeaveGuard(dirty: boolean, ask: () => Promise<boolean>) {
+  const latest = useRef({ dirty, ask })
+  latest.current = { dirty, ask }
+  // One settled exit may pass unasked, for a moment: a history step lands asynchronously.
+  const passUntil = useRef(0)
+  useBlocker({
+    shouldBlockFn: async () => {
+      if (passUntil.current > Date.now()) { passUntil.current = 0; return false }
+      return latest.current.dirty && !await latest.current.ask()
+    },
+    enableBeforeUnload: () => latest.current.dirty && passUntil.current <= Date.now(),
+  })
+  const pass = useCallback((exit: () => void) => { passUntil.current = Date.now() + 2000; exit() }, [])
+  // The screen's own exits (Escape, Ctrl+Q, the Leave button) ask before navigating, so the address does not change
+  // while the question is open; only the browser's back moves the address first.
+  const leave = useCallback(async (exit: () => void) => {
+    if (latest.current.dirty && !await latest.current.ask()) return
+    pass(exit)
+  }, [pass])
+  return { pass, leave }
 }
 
 export type Failure = ReturnType<typeof describeFailure>

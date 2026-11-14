@@ -4,7 +4,8 @@ import { calendarDate, type BillKind, type Side } from './ledger.ts';
 /**
  * The bill reports' shared vocabulary (M2a slice 1): query schemas (zod at the API boundary) and the shapes the server
  * returns. Amounts are `bigint` minor units on the server and decimal strings on the wire; a signed amount is positive
- * on the debit side. A bill's date and due date come from its creating row, its first live row in storage order.
+ * on the debit side. A bill's date and due date come from the row that dates it: its earliest-dated live new reference
+ * or advance, else its earliest-dated live settlement.
  */
 
 const id = z.uuid().transform(value => value.toLowerCase());
@@ -51,8 +52,10 @@ export type PendingBill = {
 export type BillsOutstandingReport = {
   asOf: string; side: BillSide; group: { id: string; name: string };
   /** `amount` is the pending amount on the side's natural side (positive). */
-  bills: (PendingBill & { amount: bigint })[]; total: bigint;
-  /** The cursor of the next page (`after`), or null on the last one; `total` covers every page. */
+  bills: (PendingBill & { amount: bigint })[];
+  /** The total of every page, given with the first page (no `after`) and null on later ones. */
+  total: bigint | null;
+  /** The cursor of the next page (`after`), or null on the last one. */
   next: string | null;
 };
 export type PartyBillsReport = {

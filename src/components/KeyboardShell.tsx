@@ -1,9 +1,14 @@
-import { ShortcutProvider, useCommand } from '@ten98/ui'
+import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } from '@ten98/ui'
+import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { commandOf, contextTitles, keepsEscape, type CommandId } from '../lib/commands'
-import { defaultKeymap, keymaps, type KeymapName } from '../lib/keymaps'
+import { ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, keepsEscape, type CommandContext, type CommandId, type GoToReturn } from '../lib/commands'
+import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
+import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
+import { useCanWrite } from './masters/useCanWrite'
+import { reportMenuGroups, useFocusOnOpen } from './reports/ReportScreen'
+import { reportRoutes } from './reports/navigation'
 
 type KeymapSetting = { keymap: KeymapName; chosen: boolean }
 
@@ -20,6 +25,18 @@ export type KeyboardState = {
 }
 
 const KeyboardContext = createContext<KeyboardState | null>(null)
+/** How a screen is opened from the go-to list: stacked over this one (go-to) or in its place (switch-to). */
+export type ScreenMode = 'go-to' | 'switch-to'
+type OpenScreen = (mode: ScreenMode, to: string, params: { companyId: string }, search?: Record<string, unknown>) => Promise<void>
+const OpenScreenContext = createContext<OpenScreen | null>(null)
+
+/** Opens a screen as go-to or switch-to, so that Escape there leads where that mode says (backSource in commands.ts). */
+export function useOpenScreen(): OpenScreen {
+  const open = useContext(OpenScreenContext)
+  if (!open) throw new Error('useOpenScreen is only available inside KeyboardShell.')
+  return open
+}
+
 /** Sets or clears the page's own target for nav.back (useBackOverride). */
 const BackOverrideContext = createContext<((target: { run: () => void } | null) => void) | null>(null)
 
@@ -36,7 +53,31 @@ export function useKeyboard(): KeyboardState {
  */
 export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false, label }: { enabled?: boolean; repeat?: boolean; allowInTextInput?: boolean; /** Wording for this screen when the registry title does not fit it. */ label?: string } = {}) {
   const command = commandOf(id)
-  useCommand({ id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+  // In classic a switched-off command still keeps its keys from the browser: it registers as a do-nothing claim under an
+  // id outside the registry, which the action bar and the help leave out (the registry runs nothing for a disabled one).
+  const keymap = useContext(KeyboardContext)?.keymap ?? defaultKeymap
+  const claim = enabled ? [] : disabledClaims(keymap, id)
+  useCommand(claim.length ? { id: `claim.${id}`, label: command.title, run: nothing, keys: claim }
+    : { id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+}
+
+const nothing = () => undefined
+
+/** Registers a claim (keys taken from the browser, nothing run) under an id outside the registry; `claimable` decides the keys. */
+function useClaim(id: string, label: string, keys: readonly string[]) {
+  useCommand({ id, label, run: nothing, keys })
+}
+
+/** A command's current keys as an `aria-keyshortcuts` value, for the button that runs it. */
+export const useAriaKeys = (id: CommandId) => ariaKeyShortcuts(useCommandKeys(id))
+
+/**
+ * Claims the reserved keys of a context (src/lib/keymaps.ts `classicReserved`) in classic, so a key an accountant
+ * expects never triggers a browser action before its feature exists. Mount it inside the context's ShortcutScope.
+ */
+export function ReservedKeys({ context }: { context: CommandContext }) {
+  useClaim(`reserved.${context}`, 'Reserved for a later feature', reservedClaims(useContext(KeyboardContext)?.keymap ?? defaultKeymap, context))
+  return null
 }
 
 /**
@@ -72,7 +113,31 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [goToMode, setGoToMode] = useState<ScreenMode | null>(null)
   const [backOverride, setBackOverride] = useState<{ run: () => void } | null>(null)
+  const [goToReturn, setGoToReturn] = useState<GoToReturn | null>(null)
+  const router = useRouter()
+  const navigate = useNavigate()
+  const path = useRouterState({ select: state => state.location.pathname })
+
+  // Go-to pushes the screen and remembers where it came from; switch-to puts the company menu in place of this screen
+  // and pushes the new one on top, so the ordinary back from there (history, a report's fallback, the shell's) ends at
+  // the menu. A navigation the leave guard keeps from happening leaves everything as it was.
+  const openScreen = useCallback<OpenScreen>(async (mode, to, params, search) => {
+    const from = router.state.location.href
+    if (mode === 'go-to') {
+      await navigate({ to, params, search } as never)
+      if (router.state.location.href !== from) setGoToReturn({ from, to: router.state.location.pathname })
+      return
+    }
+    const home = `/app/c/${params.companyId}`
+    await navigate({ to: '/app/c/$companyId', params, replace: true } as never)
+    if (router.state.location.pathname.toLowerCase().replace(/\/$/, '') !== home) return
+    setGoToReturn(null)
+    await navigate({ to, params, search } as never)
+  }, [router, navigate])
+  const source = backSource(path, goToReturn, backOverride !== null, back !== undefined)
+  const backNow = source === 'go-to' ? () => void navigate({ href: goToReturn!.from }) : source === 'screen' ? backOverride!.run : source === 'shell' ? back : undefined
 
   useEffect(() => {
     const controller = new AbortController()
@@ -96,13 +161,15 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
   const keymap = setting?.keymap ?? defaultKeymap
   const state = useMemo<KeyboardState>(() => ({ keymap, chosen: setting?.chosen ?? null, saving, error, choose, openHelp }), [keymap, setting, saving, error, choose, openHelp])
 
-  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}>
+  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
-      <GlobalCommands back={backOverride?.run ?? back} onSwitchCompany={onSwitchCompany} onHelp={openHelp} />
+      <GlobalCommands back={backNow} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
+      <ReservedKeys context='global' />
       {children}
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
+      <GoToDialog mode={goToMode} onClose={() => setGoToMode(null)} />
     </ShortcutProvider>
-  </BackOverrideContext></KeyboardContext>
+  </OpenScreenContext></BackOverrideContext></KeyboardContext>
 }
 
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
@@ -121,12 +188,93 @@ function useFocusKeepsEscape() {
   return keeps
 }
 
-function GlobalCommands({ back, onSwitchCompany, onHelp }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void }) {
+/** The company open in the address, or undefined outside a company. */
+const useOpenCompanyId = () => (useParams({ strict: false }) as { companyId?: string }).companyId?.toLowerCase()
+
+function GlobalCommands({ back, onSwitchCompany, onHelp, onOpenList }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void; onOpenList: (mode: ScreenMode) => void }) {
+  const inCompany = useOpenCompanyId() !== undefined
   // A disabled command leaves the key to the browser, so a text field keeps its own Escape; the run-time check covers a
   // key pressed before the focus change has re-rendered, and popups that do not move focus.
   const fieldKeepsEscape = useFocusKeepsEscape()
   useAppCommand('help.keyboard', onHelp)
   useAppCommand('nav.back', () => { if (!keepsEscape(document.activeElement) && !popupOpen()) back?.() }, { enabled: back !== undefined && !fieldKeepsEscape })
+  // Ctrl+Q: the same target as Escape, but a text field does not keep it, so it leaves from inside a field too.
+  useAppCommand('nav.quit', () => { if (!popupOpen()) back?.() }, { enabled: back !== undefined })
   useAppCommand('company.switch', () => onSwitchCompany?.(), { enabled: onSwitchCompany !== undefined })
+  // A report registers its own go-to and switch-to in its scope, which win there (the period carries over).
+  useAppCommand('nav.go-to', () => onOpenList('go-to'), { enabled: inCompany })
+  useAppCommand('nav.switch-to', () => onOpenList('switch-to'), { enabled: inCompany })
   return null
+}
+
+/**
+ * Gives a dialog the pop-up keys of desktop accounting software: Ctrl+Q (nav.quit) closes it as Escape does, F1 opens
+ * the keyboard help, and with `onAccept` the accept keys (entry.accept, Ctrl+A in classic) apply it from anywhere in it,
+ * fields included. A dialog's modal scope cuts off every outer scope, so in classic it also claims every other classic
+ * key (`dialogClaims`) and the browser never acts on one there. Wrap the Dialog: the scope owns the keys while focus is
+ * inside it. Every dialog of the application, the stock confirmations included, is wrapped this way.
+ */
+export function DialogKeys({ name, open, onAccept, children }: { name: string; open: boolean; onAccept?: () => void; children: ReactNode }) {
+  // Registered only while open: the action bar lists every registered command, and a closed dialog offers nothing.
+  return <ShortcutScope name={name} modal>{open && <DialogCommands onAccept={onAccept} />}{children}</ShortcutScope>
+}
+
+/** Closes the dialog that has focus through its own cancel handling, as Escape does (a busy or dirty dialog may ask first). */
+const closeFocusedDialog = () => { document.activeElement?.closest('dialog')?.dispatchEvent(new Event('cancel', { cancelable: true })) }
+
+function DialogCommands({ onAccept }: { onAccept?: () => void }) {
+  const { keymap, openHelp } = useKeyboard()
+  useAppCommand('nav.quit', closeFocusedDialog)
+  useAppCommand('help.keyboard', openHelp)
+  return <>
+    {onAccept && <DialogAccept onAccept={onAccept} />}
+    <DialogClaims keys={dialogClaims(keymap, onAccept ? ['nav.quit', 'help.keyboard', 'entry.accept'] : ['nav.quit', 'help.keyboard'])} />
+  </>
+}
+
+function DialogAccept({ onAccept }: { onAccept: () => void }) {
+  useAppCommand('entry.accept', onAccept, { allowInTextInput: true })
+  return null
+}
+
+function DialogClaims({ keys }: { keys: readonly string[] }) {
+  useClaim('claim.dialog', 'Kept from the browser in a dialog', keys)
+  return null
+}
+
+/** What the go-to list says about where Escape will lead, in each mode. */
+export const screenModeText: Record<ScreenMode, { title: string; description: string }> = {
+  'go-to': { title: 'Go to', description: 'Opens over this screen: Escape there brings you back here.' },
+  'switch-to': { title: 'Switch to', description: 'Opens in place of this screen: Escape there goes to the company menu.' },
+}
+
+/** The go-to list from any company screen: the masters, vouchers and reports, each opened by its menu letter or Enter. */
+function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () => void }) {
+  const companyId = useOpenCompanyId()
+  const openScreen = useOpenScreen()
+  const canWrite = useCanWrite()
+  const open = mode !== null
+  // The mode stays readable after the dialog closes, for the navigation it starts.
+  const shown = useRef<ScreenMode>('go-to')
+  if (mode) shown.current = mode
+  const [active, setActive] = useState<CommandId>('home.chart-of-accounts')
+  const [focusRequest, setFocusRequest] = useState<number>()
+  useFocusOnOpen(open, () => setFocusRequest(value => (value ?? 0) + 1))
+  if (!companyId) return null
+  const go = (to: string) => { const how = shown.current; onClose(); void openScreen(how, to, { companyId }) }
+  const item = (command: CommandId, to: string) => ({ command, label: commands[command].title, open: () => go(to) })
+  const groups: KeyboardMenuGroup[] = [
+    { id: 'masters', label: 'Masters', items: [
+      ...canWrite ? [item('home.new-master', '/app/c/$companyId/masters/new'), item('home.edit-master', '/app/c/$companyId/masters/edit')] : [],
+      item('home.chart-of-accounts', '/app/c/$companyId/masters/chart-of-accounts'),
+    ] },
+    { id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] },
+    ...reportMenuGroups(report => go(reportRoutes[report])),
+  ]
+  const text = screenModeText[shown.current]
+  return <DialogKeys name={text.title} open={open}>
+    <Dialog open={open} onOpenChange={next => { if (!next) onClose() }} title={text.title} description={`${text.description} Use the arrow keys and Enter, or press a letter.`}>
+      {open && <KeyboardMenu label={text.title} groups={groups} active={active} onActiveChange={setActive} focusRequest={focusRequest} />}
+    </Dialog>
+  </DialogKeys>
 }

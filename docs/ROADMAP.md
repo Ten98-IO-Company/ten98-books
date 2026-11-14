@@ -31,8 +31,8 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Three companies; the starter company matches the reference installation on every line |
-| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release |
-| `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | in progress | |
+| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release; design in progress from observed entry flows |
+| `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | merged | Parity table and reserved keys in [KEYBOARD.md](KEYBOARD.md) |
 | Voucher numbers per voucher type and financial year of the voucher's date | in progress | Found by the like-for-like comparison; rules observed; counters being changed |
 
 Open items inside merged pieces:
@@ -47,7 +47,20 @@ M1 is accepted when, on a fresh installation and by keyboard only in both keymap
 
 ## M2 Inventory, receivables and banking: in progress
 
-Delivered in slices. Bill-wise receivables and payables (base currency) is being built first, from a design that was reviewed twice against observed behaviour; then cost centres and accounting projects, currencies and rates, and exchange differences.
+Delivered in slices, each from a design reviewed against observed behaviour.
+
+| Piece | Status | Notes |
+|---|---|---|
+| Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0006. No screen yet: the bill panel comes with the voucher entry screen |
+| Cost centres and accounting projects | designed | Design awaits review and one owner decision on how a project is modelled |
+| Currencies, rates and foreign-currency lines | not started | |
+| Exchange differences | not started | |
+
+Open items inside merged pieces:
+
+- Bills are base-currency only; interest on bills and credit limits are not built.
+- The voucher check and the opening-bill check re-read their voucher or ledger for every row (measured in [LEDGER.md](LEDGER.md)); not optimised.
+- The demo comparison does not yet compare bill figures with the reference installation.
 
 Stock masters, units and locations; inventory vouchers and valuation (weighted average and FIFO first); orders and their tracking; bill-wise receivables and payables with credit periods and ageing; cost centres and accounting projects (the project dimension of D-03); multi-currency with exchange differences; banking with cheque details and reconciliation; interest; budgets.
 

@@ -346,8 +346,9 @@ BEGIN
   END LOOP;
 END $$;
 
--- Column grants extend M1's: the new ledger settings and the voucher reference are editable; bills are never updated or
--- deleted; bill rows are written and removed with their line or the opening balance, never updated.
+-- Column grants extend M1's: the new ledger settings and the voucher reference are editable; bills are never updated,
+-- and are deleted only with their ledger (a bill that still has rows cannot be deleted: its rows reference it); bill rows
+-- are written and removed with their line or the opening balance, never updated.
 GRANT UPDATE (bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check) ON ledger TO books_app;
 GRANT UPDATE (reference, reference_date) ON voucher TO books_app;
 GRANT SELECT, INSERT, DELETE ON bill TO books_app;

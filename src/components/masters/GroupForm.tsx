@@ -1,4 +1,5 @@
 import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { api } from '../../lib/api'
@@ -8,7 +9,7 @@ import {
   emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, isolate, natureLockReason, natureSingular,
   parentReason, primaryChoice, resolveLookup, validateGroupForm, type Choice, type GroupField, type GroupFormAction, type GroupFormValues, type GroupRow, type LedgerRow,
 } from '../../lib/masters'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import { LookupField } from './LookupField'
 import { useCanWrite } from './useCanWrite'
@@ -66,6 +67,8 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const fields = groupFields(values)
   // A new entry is dirty once something is typed (the kept parent after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
 
@@ -130,7 +133,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
     const done = result.group
     const where = done.parentId ? `under ${groupPath([...groups, done], done.parentId).join(' › ')}` : `as a primary ${natureSingular[done.nature].toLowerCase()} group`
     const message = `Saved group “${done.name}” ${where}.`
-    if (existing) { setFlash(message); leave(); return }
+    if (existing) { setFlash(message); guard.pass(leave); return }
     if (ready.parentId !== primaryChoice) rememberGroup(company.id, ready.parentId)
     setSaved(message)
     dispatch({ type: 'saved' })
@@ -142,7 +145,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
     if (!existing || readOnly || deleteReason) return
     if (!await confirm({ title: `Delete the group “${existing.name}”?`, description: 'The group is removed from the chart. Its history stays available.', confirmLabel: 'Delete group', danger: true })) return
     const done = await run(() => api(`/api/companies/${company.id}/groups/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
-    if (done) { setFlash(`Deleted group “${existing.name}”.`); leave() }
+    if (done) { setFlash(`Deleted group “${existing.name}”.`); guard.pass(leave) }
   }
 
   function askToSave() {
@@ -157,8 +160,8 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
 
   async function cancel() {
     if (confirming) { keepEditing(); return }
-    if (dirty && !readOnly && !await confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' })) return
-    leave()
+    // Asks first when something was typed, before the address changes.
+    await guard.leave(leave)
   }
 
   useEntryCommands({
@@ -204,11 +207,11 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
       </Stack>}
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
-        {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
+        {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy} aria-keyshortcuts={acceptKeys}>Save <KeyHint command='entry.accept' /></Button>}
         <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
-        {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy}>Delete <KeyHint command='entry.delete' /></Button>}
+        {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy} aria-keyshortcuts={deleteKeys}>Delete <KeyHint command='entry.delete' /></Button>}
       </FormActions>
     </Form>
-    {dialog}
+    <DialogKeys name='Confirm' open={!!dialog}>{dialog}</DialogKeys>
   </Stack>
 }

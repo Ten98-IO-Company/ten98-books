@@ -84,7 +84,7 @@ export function billsOutstandingCsv(report: BillsOutstandingReport, exponent: Mo
   return [
     ['Bill date', 'Bill', 'Party', 'Pending', 'Due date', 'Days overdue'],
     ...report.bills.map(bill => [bill.billDate ?? '', bill.name, bill.ledgerName, money(bill.amount), bill.dueDate ?? '', String(bill.overdueDays)]),
-    ['', 'Total', '', money(report.total), '', ''],
+    ['', 'Total', '', money(report.total ?? 0n), '', ''],
   ];
 }
 

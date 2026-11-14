@@ -131,7 +131,16 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
   const first = await g.report('bills-outstanding?side=receivable&asOf=2026-02-28&limit=2');
   assert.deepEqual([first.bills.map((bill: any) => bill.name), first.total], [['OB-2', 'S-1'], '13925.00']);
   const second = await g.report(`bills-outstanding?side=receivable&asOf=2026-02-28&limit=2&after=${first.next}`);
-  assert.deepEqual([second.bills.map((bill: any) => bill.name), second.total, second.next], [['S-2'], '13925.00', null]);
+  assert.deepEqual([second.bills.map((bill: any) => bill.name), second.total, second.next], [['S-2'], null, null], 'the total comes with the first page');
+  // One bill a page, through a party's settled bills (OB-1, ADV-B): the walk returns exactly the full list, in order.
+  const walked: string[] = [];
+  for (let next: string | null = null, guard = 0; guard < 10; guard += 1) {
+    const page: any = await g.report(`bills-outstanding?side=receivable&asOf=2026-02-28&limit=1${next ? `&after=${next}` : ''}`);
+    walked.push(...page.bills.map((bill: any) => `${bill.ledgerName}/${bill.name}`));
+    next = page.next;
+    if (!next) break;
+  }
+  assert.deepEqual(walked, ['Debtor A/OB-2', 'Debtor A/S-1', 'Debtor B/S-2']);
   const saved = await g.call('/ageing-buckets', { buckets: [{ fromDays: 0, toDays: 30 }, { fromDays: 30, toDays: 60 }, { fromDays: 60, toDays: 90 }, { fromDays: 90, toDays: null }] });
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   const ageing = await g.report('ageing?side=receivable&asOf=2026-03-20&basis=bill');
