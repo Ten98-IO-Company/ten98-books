@@ -175,7 +175,7 @@ test('another workspace\'s user gets "not found" from every handler module and w
   for (const [path, body] of attempts) {
     const response = await intruder.browser.call(path, body);
     assert.equal(response.status, 404, path);
-    assert.deepEqual(response.body, { error: companyNotFound }, path);
+    assert.deepEqual(response.body, { error: companyNotFound, code: 'not_found' }, path);
   }
   assert.deepEqual(await Promise.all(ledgerTables.map(table => rowCount(database.adminUrl, table, companyId))), before, 'nothing was written');
 });
@@ -188,7 +188,7 @@ test('a viewer reads the books but cannot write; a cross-origin post is refused 
   const body = voucherBody(books.type('receipt'), '2026-02-05', [[L('Trade Sales'), 'Cr', '1'], [L('Cash'), 'Dr', '1']]);
   for (const [path, payload] of [[`/api/companies/${companyId}/vouchers`, body], [`/api/companies/${companyId}/ledgers`, { name: 'Viewer Ledger', groupId: books.group('capital') }],
     [`/api/companies/${companyId}/groups/${books.group('capital')}`, { name: 'Viewer Capital', revision: 1 }]] as const) {
-    assert.deepEqual(await viewer.browser.call(path, payload), { status: 404, body: { error: companyNotFound } }, path);
+    assert.deepEqual(await viewer.browser.call(path, payload), { status: 404, body: { error: companyNotFound, code: 'not_found' } }, path);
   }
   for (const origin of ['https://elsewhere.example', null]) {
     const forged = await owner.browser.call(`/api/companies/${companyId}/vouchers`, { ...body, idempotencyKey: `forged-${randomUUID()}` }, origin);

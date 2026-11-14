@@ -1,11 +1,10 @@
 import type { Revision } from '../../lib/ledger.ts';
-import { runLedger, type LedgerContext } from '../ledger/context.ts';
+import { readLedgerBody, runLedger, type LedgerContext } from '../ledger/context.ts';
 import {
   alterGroup, alterLedger, alterVoucherType, createGroup, createLedger, deleteGroup, deleteLedger,
-  listGroups, listLedgers, listVoucherTypes, readGroup, readLedger, readVoucherType,
+  getGroup, getLedger, listGroups, listLedgers, listVoucherTypes, readVoucherType,
 } from '../ledger/masters.ts';
 import { listRevisions } from '../ledger/revisions.ts';
-import { readJson } from '../validation.ts';
 import { json, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -22,8 +21,8 @@ type Handler = {
   entity: Revision['entity']; key: string;
 };
 const handlers: Record<Kind, Handler> = {
-  groups: { list: listGroups, read: readGroup, create: createGroup, alter: alterGroup, remove: deleteGroup, entity: 'group', key: 'group' },
-  ledgers: { list: listLedgers, read: readLedger, create: createLedger, alter: alterLedger, remove: deleteLedger, entity: 'ledger', key: 'ledger' },
+  groups: { list: listGroups, read: getGroup, create: createGroup, alter: alterGroup, remove: deleteGroup, entity: 'group', key: 'group' },
+  ledgers: { list: listLedgers, read: getLedger, create: createLedger, alter: alterLedger, remove: deleteLedger, entity: 'ledger', key: 'ledger' },
   // M1 voucher types are the eight seeded ones: renamed, never created or deleted.
   'voucher-types': { list: listVoucherTypes, read: readVoucherType, alter: alterVoucherType, entity: 'voucher_type', key: 'voucherType' },
 };
@@ -42,7 +41,7 @@ export const mastersApi: SignedInArea = async ({ request, path, user }) => {
   const itemId = rawId?.toLowerCase();
   const write = async (run: (context: LedgerContext, body: unknown) => Promise<unknown>) => {
     await limit(`masters:${user.id}`, 120);
-    const body = await readJson(request);
+    const body = await readLedgerBody(request);
     return runLedger(user.id, companyId, 'write', context => run(context, body));
   };
 

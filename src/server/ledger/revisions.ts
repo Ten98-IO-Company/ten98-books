@@ -16,8 +16,10 @@ export async function logRevision(context: LedgerContext, entity: Revision['enti
 /** The history of one master or voucher, oldest first. */
 export async function listRevisions(context: LedgerContext, entity: Revision['entity'], entityId: string): Promise<Revision[]> {
   const { rows } = await context.client.query<Revision>(
-    `SELECT id, entity, entity_id AS "entityId", action, actor_id AS "actorId", to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at, before, after
-     FROM revision_log WHERE company_id = $1 AND entity = $2 AND entity_id = $3 ORDER BY id`,
+    `SELECT r.id, r.entity, r.entity_id AS "entityId", r.action, r.actor_id AS "actorId", u.name AS "actorName",
+       to_char(r.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at, r.before, r.after
+     FROM revision_log r LEFT JOIN "user" u ON u.id = r.actor_id
+     WHERE r.company_id = $1 AND r.entity = $2 AND r.entity_id = $3 ORDER BY r.id`,
     [context.company.companyId, entity, entityId]);
   return rows;
 }

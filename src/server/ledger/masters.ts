@@ -1,9 +1,9 @@
 import {
   groupAlterInput, groupCreateInput, ledgerAlterInput, ledgerCreateInput, revisionInput, voucherTypeAlterInput,
-  type AccountGroup, type Ledger, type Nature, type Side, type VoucherType,
+  type AccountGroup, type GroupListItem, type Ledger, type LedgerListItem, type Nature, type Side, type VoucherType,
 } from '../../lib/ledger.ts';
 import { FoundationError } from '../auth.ts';
-import { conflict, parseAmount, parseInput, refusal, type LedgerContext } from './context.ts';
+import { conflict, ledgerError, parseAmount, parseInput, refusal, type LedgerContext } from './context.ts';
 import { logRevision } from './revisions.ts';
 
 /**
@@ -26,7 +26,7 @@ export const groupTreeSql = `tree AS (
   SELECT g.id, t.primary_id, t.primary_name, t.cash_bank OR coalesce(g.system_key = ANY('{${cashBankGroupKeys.join(',')}}'::text[]), false)
   FROM account_group g JOIN tree t ON g.parent_id = t.id WHERE g.company_id = $1)`;
 
-const notFound = (what: string) => new FoundationError(404, `${what} not found.`);
+const notFound = (what: string) => ledgerError(404, `${what} not found.`, 'not_found');
 /** Rethrows a not-found refusal as `replacement` (a reference inside the request, not the addressed resource). */
 export const missingAs = (replacement: FoundationError) => (error: unknown): never => {
   throw error instanceof FoundationError && error.status === 404 ? replacement : error;
@@ -37,28 +37,47 @@ const ledgerFields = field({ name: 'the ledger name', secondLanguageName: 'the s
 const typeFields = field({ name: 'the voucher type name', secondLanguageName: 'the second-language name', revision: 'the revision' }, 'the voucher type details');
 
 const groupRefusals = {
-  account_group_name_idx: new FoundationError(409, 'A group with this name already exists.'),
-  account_group_cycle: new FoundationError(400, 'A group cannot be placed under one of its own sub-groups.'),
-  account_group_builtin: new FoundationError(400, 'A built-in group keeps its nature. Choose a parent group of the same nature.'),
-  ledger_cash_family: new FoundationError(400, 'The cash ledger must stay under a cash or bank group, so this group cannot move there.'),
+  account_group_name_idx: ledgerError(409, 'A group with this name already exists.', 'duplicate_name'),
+  account_group_cycle: ledgerError(400, 'A group cannot be placed under one of its own sub-groups.', 'cycle'),
+  account_group_builtin: ledgerError(400, 'A built-in group keeps its nature. Choose a parent group of the same nature.', 'nature_fixed'),
+  ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group, so this group cannot move there.', 'family_rule'),
 };
-const groupInUse = { ...groupRefusals, '23503': new FoundationError(409, 'This group still holds sub-groups or ledgers. Move or delete them first.') };
+const groupInUse = { ...groupRefusals, '23503': ledgerError(409, 'This group still holds sub-groups or ledgers. Move or delete them first.', 'in_use') };
 const ledgerRefusals = {
-  ledger_name_idx: new FoundationError(409, 'A ledger with this name already exists.'),
-  ledger_builtin: new FoundationError(400, 'A built-in ledger keeps its nature. Choose a group of the same nature.'),
-  ledger_cash_family: new FoundationError(400, 'The cash ledger must stay under a cash or bank group.'),
+  ledger_name_idx: ledgerError(409, 'A ledger with this name already exists.', 'duplicate_name'),
+  ledger_builtin: ledgerError(400, 'A built-in ledger keeps its nature. Choose a group of the same nature.', 'nature_fixed'),
+  ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group.', 'family_rule'),
 };
-const ledgerInUse = { ...ledgerRefusals, '23503': new FoundationError(409, 'This ledger is used in vouchers and cannot be deleted.') };
-const typeRefusals = { voucher_type_name_idx: new FoundationError(409, 'A voucher type with this name already exists.') };
+const ledgerInUse = { ...ledgerRefusals, '23503': ledgerError(409, 'This ledger is used in vouchers and cannot be deleted.', 'in_use') };
+const typeRefusals = { voucher_type_name_idx: ledgerError(409, 'A voucher type with this name already exists.', 'duplicate_name') };
 
 // ---- Groups ----
 
 const groupColumns = `id, parent_id AS "parentId", nature, gross_profit AS "grossProfit", system_key AS "systemKey", name,
   second_language_name AS "secondLanguageName", revision`;
 
-export async function listGroups(context: LedgerContext): Promise<AccountGroup[]> {
-  const { rows } = await context.client.query<AccountGroup>(`SELECT ${groupColumns} FROM account_group WHERE company_id = $1 ORDER BY lower(name), id`, [context.company.companyId]);
+/**
+ * The "in use" tests that refuse a delete, as SQL over a row aliased `g` (group) or `l` (ledger). deleteGroup and
+ * deleteLedger use them, and list and read rows report them as `inUse`, so a screen knows in advance what a delete
+ * will refuse. A ledger is in use when any voucher line names it, including lines of cancelled and deleted vouchers.
+ * Built-in rows are refused on another ground (`systemKey`), not counted here.
+ */
+const groupInUseSql = `(EXISTS (SELECT 1 FROM account_group c WHERE c.company_id = g.company_id AND c.parent_id = g.id)
+  OR EXISTS (SELECT 1 FROM ledger x WHERE x.company_id = g.company_id AND x.group_id = g.id))`;
+const ledgerInUseSql = `EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = l.company_id AND x.ledger_id = l.id)`;
+
+/** Groups as the list and read routes answer them: the group plus whether a delete would be refused for use. */
+export async function listGroups(context: LedgerContext): Promise<GroupListItem[]> {
+  const { rows } = await context.client.query<GroupListItem>(
+    `SELECT ${groupColumns}, ${groupInUseSql} AS "inUse" FROM account_group g WHERE g.company_id = $1 ORDER BY lower(g.name), g.id`, [context.company.companyId]);
   return rows;
+}
+
+export async function getGroup(context: LedgerContext, groupId: string): Promise<GroupListItem> {
+  const { rows } = await context.client.query<GroupListItem>(
+    `SELECT ${groupColumns}, ${groupInUseSql} AS "inUse" FROM account_group g WHERE g.company_id = $1 AND g.id = $2`, [context.company.companyId, groupId]);
+  if (!rows[0]) throw notFound('Group');
+  return rows[0];
 }
 
 /** Reads one group; `lock` takes its row for the rest of the transaction before reading. */
@@ -73,14 +92,14 @@ type Placement = { parentId: string | null; nature: Nature; grossProfit: boolean
 /** A sub-group takes its parent's nature and gross-profit flag; a primary group states its own. */
 async function placeGroup(context: LedgerContext, input: { parentId: string | null; nature?: Nature; grossProfit?: boolean }, current?: AccountGroup): Promise<Placement> {
   if (input.parentId) {
-    const parent = await readGroup(context, input.parentId).catch(missingAs(new FoundationError(400, 'The parent group was not found.')));
-    if (input.nature && input.nature !== parent.nature) throw new FoundationError(400, 'A sub-group takes the nature of its parent group.');
+    const parent = await readGroup(context, input.parentId).catch(missingAs(ledgerError(400, 'The parent group was not found.', 'not_found')));
+    if (input.nature && input.nature !== parent.nature) throw ledgerError(400, 'A sub-group takes the nature of its parent group.', 'validation');
     return { parentId: parent.id, nature: parent.nature, grossProfit: parent.grossProfit };
   }
   const nature = input.nature ?? current?.nature;
-  if (!nature) throw new FoundationError(400, 'Choose the nature of a primary group: asset, liability, income or expense.');
+  if (!nature) throw ledgerError(400, 'Choose the nature of a primary group: asset, liability, income or expense.', 'validation');
   const grossProfit = input.grossProfit ?? (current?.nature === nature ? current.grossProfit : false);
-  if (grossProfit && nature !== 'income' && nature !== 'expense') throw new FoundationError(400, 'Only income and expense groups can count towards gross profit.');
+  if (grossProfit && nature !== 'income' && nature !== 'expense') throw ledgerError(400, 'Only income and expense groups can count towards gross profit.', 'validation');
   return { parentId: null, nature, grossProfit };
 }
 
@@ -128,7 +147,7 @@ async function assertNatureChangeable(context: LedgerContext, groupId: string): 
      SELECT EXISTS (SELECT 1 FROM account_group g JOIN tree t ON t.id = g.id WHERE g.company_id = $1 AND g.system_key IS NOT NULL)
        OR EXISTS (SELECT 1 FROM ledger l JOIN tree t ON t.id = l.group_id WHERE l.company_id = $1 AND (l.system_key IS NOT NULL OR l.opening_amount <> 0
          OR EXISTS (SELECT 1 FROM voucher_line x WHERE x.company_id = $1 AND x.ledger_id = l.id))) AS held`, [context.company.companyId, groupId]);
-  if (rows[0].held) throw new FoundationError(409, 'This group cannot change its nature while it holds built-in groups or ledgers, or ledgers with postings or opening balances. Move those ledgers to another group first.');
+  if (rows[0].held) throw ledgerError(409, 'This group cannot change its nature while it holds built-in groups or ledgers, or ledgers with postings or opening balances. Move those ledgers to another group first.', 'nature_fixed');
 }
 
 export async function alterGroup(context: LedgerContext, groupId: string, value: unknown): Promise<AccountGroup> {
@@ -162,10 +181,8 @@ export async function deleteGroup(context: LedgerContext, groupId: string, value
   const input = parseInput(revisionInput, value, groupFields);
   const before = await readGroup(context, groupId, true);
   if (before.revision !== input.revision) throw conflict('group');
-  if (before.systemKey) throw new FoundationError(409, 'Built-in groups can be renamed but not deleted.');
-  const { rows } = await context.client.query<{ used: boolean }>(
-    `SELECT EXISTS (SELECT 1 FROM account_group WHERE company_id = $1 AND parent_id = $2) OR EXISTS (SELECT 1 FROM ledger WHERE company_id = $1 AND group_id = $2) AS used`,
-    [context.company.companyId, groupId]);
+  if (before.systemKey) throw ledgerError(409, 'Built-in groups can be renamed but not deleted.', 'seeded_row');
+  const { rows } = await context.client.query<{ used: boolean }>(`SELECT ${groupInUseSql} AS used FROM account_group g WHERE g.company_id = $1 AND g.id = $2`, [context.company.companyId, groupId]);
   if (rows[0].used) throw groupInUse['23503'];
   await context.client.query('DELETE FROM account_group WHERE company_id = $1 AND id = $2', [context.company.companyId, groupId]).catch(error => refusal(error, groupInUse));
   await logRevision(context, 'group', groupId, 'delete', before, null);
@@ -173,23 +190,30 @@ export async function deleteGroup(context: LedgerContext, groupId: string, value
 
 // ---- Ledgers ----
 
-type LedgerRow = Omit<Ledger, 'opening'> & { openingAmount: bigint; openingSide: Side };
-const ledgerSelect = `WITH RECURSIVE ${groupTreeSql}
+type LedgerRow<T extends object = object> = Omit<Ledger, 'opening'> & { openingAmount: bigint; openingSide: Side } & T;
+/** The ledger columns; `inUse` adds the delete test for the list and read routes (snapshots and write answers omit it). */
+const ledgerSelect = (inUse: boolean) => `WITH RECURSIVE ${groupTreeSql}
   SELECT l.id, l.group_id AS "groupId", g.name AS "groupName", g.nature, l.system_key AS "systemKey", l.name,
     l.second_language_name AS "secondLanguageName", coalesce(t.cash_bank, false) AS "cashOrBank",
-    l.opening_amount AS "openingAmount", l.opening_side AS "openingSide", l.revision
+    l.opening_amount AS "openingAmount", l.opening_side AS "openingSide", l.revision${inUse ? `, ${ledgerInUseSql} AS "inUse"` : ''}
   FROM ledger l LEFT JOIN account_group g ON g.company_id = l.company_id AND g.id = l.group_id LEFT JOIN tree t ON t.id = l.group_id
   WHERE l.company_id = $1`;
-const toLedger = ({ openingAmount, openingSide, ...row }: LedgerRow): Ledger => ({ ...row, opening: { amount: openingAmount, side: openingSide } });
+const toLedger = <T extends object>({ openingAmount, openingSide, ...row }: LedgerRow<T>) => ({ ...row, opening: { amount: openingAmount, side: openingSide } });
 
-export async function listLedgers(context: LedgerContext): Promise<Ledger[]> {
-  const { rows } = await context.client.query<LedgerRow>(`${ledgerSelect} ORDER BY lower(l.name), l.id`, [context.company.companyId]);
+export async function listLedgers(context: LedgerContext): Promise<LedgerListItem[]> {
+  const { rows } = await context.client.query<LedgerRow<{ inUse: boolean }>>(`${ledgerSelect(true)} ORDER BY lower(l.name), l.id`, [context.company.companyId]);
   return rows.map(toLedger);
+}
+
+export async function getLedger(context: LedgerContext, ledgerId: string): Promise<LedgerListItem> {
+  const { rows } = await context.client.query<LedgerRow<{ inUse: boolean }>>(`${ledgerSelect(true)} AND l.id = $2`, [context.company.companyId, ledgerId]);
+  if (!rows[0]) throw notFound('Ledger');
+  return toLedger(rows[0]);
 }
 
 export async function readLedger(context: LedgerContext, ledgerId: string, lock = false): Promise<Ledger> {
   if (lock) await context.client.query('SELECT 1 FROM ledger WHERE company_id = $1 AND id = $2 FOR UPDATE', [context.company.companyId, ledgerId]);
-  const { rows } = await context.client.query<LedgerRow>(`${ledgerSelect} AND l.id = $2`, [context.company.companyId, ledgerId]);
+  const { rows } = await context.client.query<LedgerRow>(`${ledgerSelect(false)} AND l.id = $2`, [context.company.companyId, ledgerId]);
   if (!rows[0]) throw notFound('Ledger');
   return toLedger(rows[0]);
 }
@@ -197,19 +221,19 @@ export async function readLedger(context: LedgerContext, ledgerId: string, lock 
 /** Opening balances are as of books beginning, so a lock through that date freezes them too (D-09). */
 function assertOpeningOpen(context: LedgerContext): void {
   const { lockedThrough, booksBeginning } = context.company;
-  if (lockedThrough !== null && lockedThrough >= booksBeginning) throw new FoundationError(409, `Opening balances are locked: the books are locked through ${lockedThrough}.`);
+  if (lockedThrough !== null && lockedThrough >= booksBeginning) throw ledgerError(409, `Opening balances are locked: the books are locked through ${lockedThrough}.`, 'locked_period');
 }
 
 function parseOpening(context: LedgerContext, opening: { amount: string; side: Side } | undefined): { amount: bigint; side: Side } {
   if (!opening) return { amount: 0n, side: 'Dr' };
   const amount = parseAmount(opening.amount, context.company.exponent, 'The opening balance');
-  if (amount < 0n) throw new FoundationError(400, 'Enter the opening balance as a positive amount and choose Dr or Cr.');
+  if (amount < 0n) throw ledgerError(400, 'Enter the opening balance as a positive amount and choose Dr or Cr.', 'validation');
   return { amount, side: opening.side };
 }
 
 async function ledgerGroup(context: LedgerContext, groupId: string | null): Promise<AccountGroup> {
-  if (!groupId) throw new FoundationError(400, 'Choose the group this ledger belongs to.');
-  return readGroup(context, groupId).catch(missingAs(new FoundationError(400, 'The group was not found.')));
+  if (!groupId) throw ledgerError(400, 'Choose the group this ledger belongs to.', 'validation');
+  return readGroup(context, groupId).catch(missingAs(ledgerError(400, 'The group was not found.', 'not_found')));
 }
 
 export async function createLedger(context: LedgerContext, value: unknown): Promise<Ledger> {
@@ -233,7 +257,7 @@ export async function alterLedger(context: LedgerContext, ledgerId: string, valu
   if (before.revision !== input.revision) throw conflict('ledger');
   let groupId: string | null = null;
   if (before.systemKey === 'profit_and_loss') {
-    if (input.groupId) throw new FoundationError(400, 'The profit and loss ledger stays outside every group.');
+    if (input.groupId) throw ledgerError(400, 'The profit and loss ledger stays outside every group.', 'family_rule');
   } else {
     const group = await ledgerGroup(context, input.groupId);
     if (before.systemKey && group.nature !== before.nature) throw ledgerRefusals.ledger_builtin;
@@ -259,10 +283,10 @@ export async function deleteLedger(context: LedgerContext, ledgerId: string, val
   const input = parseInput(revisionInput, value, ledgerFields);
   const before = await readLedger(context, ledgerId, true);
   if (before.revision !== input.revision) throw conflict('ledger');
-  if (before.systemKey) throw new FoundationError(409, 'Built-in ledgers can be renamed but not deleted.');
+  if (before.systemKey) throw ledgerError(409, 'Built-in ledgers can be renamed but not deleted.', 'seeded_row');
   // Soft-deleted and cancelled vouchers still reference the ledger: their history must stay readable.
-  const used = await context.client.query('SELECT 1 FROM voucher_line WHERE company_id = $1 AND ledger_id = $2 LIMIT 1', [context.company.companyId, ledgerId]);
-  if (used.rowCount) throw ledgerInUse['23503'];
+  const { rows: [use] } = await context.client.query<{ used: boolean }>(`SELECT ${ledgerInUseSql} AS used FROM ledger l WHERE l.company_id = $1 AND l.id = $2`, [context.company.companyId, ledgerId]);
+  if (use.used) throw ledgerInUse['23503'];
   await context.client.query('DELETE FROM ledger WHERE company_id = $1 AND id = $2', [context.company.companyId, ledgerId]).catch(error => refusal(error, ledgerInUse));
   await logRevision(context, 'ledger', ledgerId, 'delete', before, null);
 }

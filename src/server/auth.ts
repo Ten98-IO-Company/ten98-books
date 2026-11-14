@@ -37,11 +37,14 @@ export function getAuth(client?: PoolClient, captureReset?: (message: ResetPassw
 
 export class FoundationError extends Error {
   readonly status: number
+  /** Optional stable machine-readable reason, sent as `code` beside `error`; feature areas define their own values. */
+  readonly code?: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.name = 'FoundationError'
     this.status = status
+    if (code !== undefined) this.code = code
   }
 }
 

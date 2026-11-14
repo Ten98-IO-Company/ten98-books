@@ -1,9 +1,11 @@
 import { assertMoneyInRange, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import type { PoolClient } from 'pg';
 import type { z } from 'zod';
+import type { LedgerErrorCode } from '../../lib/ledger.ts';
 import { moneyToWire, type Wire } from '../../lib/money.ts';
 import { FoundationError } from '../auth.ts';
 import { withCompany, type CompanyMode } from '../tenancy.ts';
+import { InputError, readJson } from '../validation.ts';
 
 /** The company settings every posting rule needs, read inside the company transaction. */
 export type LedgerCompany = {
@@ -22,7 +24,7 @@ export async function ledgerContext(client: PoolClient, companyId: string, userI
     `SELECT base_currency, currency_minor_units, books_beginning, locked_through, fy_start_month, fy_start_day FROM company WHERE company_id = $1${mode === 'write' ? ' FOR SHARE' : ''}`,
     [companyId]);
   const row = rows[0];
-  if (!row) throw new FoundationError(404, 'Company not found or unavailable.');
+  if (!row) throw ledgerError(404, 'Company not found or unavailable.', 'not_found');
   return {
     client, userId,
     company: {
@@ -45,16 +47,28 @@ export async function runLedger<T>(userId: string, companyId: string, mode: Comp
     });
   } catch (error) {
     // Deadlock or serialization failure: another change to the same rows won; nothing was committed.
-    if (['40P01', '40001'].includes((error as { code?: string })?.code ?? '')) throw new FoundationError(409, 'This change collided with another one made at the same moment. Nothing was saved; try again.');
+    if (['40P01', '40001'].includes((error as { code?: string })?.code ?? '')) throw ledgerError(409, 'This change collided with another one made at the same moment. Nothing was saved; try again.', 'retry');
+    // withCompany's refusal (a missing or unreachable company: one answer for both) is shared with non-ledger areas, so
+    // it carries no code there; ledger answers add `not_found` and keep the status and message.
+    if (error instanceof FoundationError && error.status === 404 && error.code === undefined) throw ledgerError(404, error.message, 'not_found');
     throw error;
   }
+}
+
+/** A refusal from the ledger API: plain-language message plus a stable code from the shared list. */
+export const ledgerError = (status: number, message: string, code: LedgerErrorCode) => new FoundationError(status, message, code);
+
+/** Transport refusals of the request body (content type, size, JSON) answer with the ledger's `validation` code. */
+export async function readLedgerBody(request: Request, maxBytes?: number): Promise<unknown> {
+  try { return await readJson(request, maxBytes); }
+  catch (error) { throw error instanceof InputError ? ledgerError(error.status, error.message, 'validation') : error; }
 }
 
 /** Parses `value` with `schema`, refusing with a plain-language message that names the first field at fault. */
 export function parseInput<S extends z.ZodType>(schema: S, value: unknown, describe: (path: readonly PropertyKey[]) => string): z.output<S> {
   const parsed = schema.safeParse(value);
   if (parsed.success) return parsed.data;
-  throw new FoundationError(400, `Check ${describe(parsed.error.issues[0]?.path ?? [])} and try again.`);
+  throw ledgerError(400, `Check ${describe(parsed.error.issues[0]?.path ?? [])} and try again.`, 'validation');
 }
 
 /** Maps a PostgreSQL refusal named by constraint (or by SQLSTATE) to a plain-language error; rethrows anything else. */
@@ -64,17 +78,17 @@ export function refusal(error: unknown, messages: Record<string, FoundationError
   throw mapped || error;
 }
 
-export const conflict = (what: string) => new FoundationError(409, `This ${what} was changed by someone else. Reload it and try again.`);
+export const conflict = (what: string) => ledgerError(409, `This ${what} was changed by someone else. Reload it and try again.`, 'stale_revision');
 
 /**
  * Minor units from a wire amount for the company's currency. `parseMoney` refuses extra decimal places and amounts beyond
  * the `bigint` range rather than rounding; both become plain-language refusals naming `what`.
  */
 export function parseAmount(text: string, exponent: MoneyExponent, what: string): bigint {
-  if ((text.split('.')[1] ?? '').length > exponent) throw new FoundationError(400, `Enter ${what.toLowerCase()} with at most ${exponent} decimal places.`);
+  if ((text.split('.')[1] ?? '').length > exponent) throw ledgerError(400, `Enter ${what.toLowerCase()} with at most ${exponent} decimal places.`, 'validation');
   let amount: bigint;
   try { amount = parseMoney(text, exponent); }
-  catch (error) { throw error instanceof RangeError ? new FoundationError(400, `${what} is too large.`) : new FoundationError(400, `Check ${what.toLowerCase()} and try again.`); }
+  catch (error) { throw error instanceof RangeError ? ledgerError(400, `${what} is too large.`, 'validation') : ledgerError(400, `Check ${what.toLowerCase()} and try again.`, 'validation'); }
   assertMoneyInRange(amount);
   return amount;
 }
