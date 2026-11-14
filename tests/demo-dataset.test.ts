@@ -325,6 +325,19 @@ test('items.json is checked for shape and references only, and everything else i
   mentions(problems(notAFile), 'items.json', 'items');
 });
 
+test('a unit may carry decimals (a whole number from 0 to 4), which is kept; anything else is refused', () => {
+  const raw = good();
+  const items = stock();
+  items.units = [{ key: 'nos', name: 'Nos' }, { key: 'kg', name: 'Kg', decimals: 1 } as never, { key: 'ltr', name: 'Ltr', decimals: 4 } as never];
+  raw.extraFiles = { 'items.json': items };
+  assert.deepEqual(parseDataset(raw, 'demo/sample-shop').extraFiles['items.json'], items);
+  for (const decimals of [-1, 5, 1.5, '1']) {
+    const bad = good();
+    bad.extraFiles = { 'items.json': { ...stock(), units: [{ key: 'kg', name: 'Kg', decimals }] } };
+    mentions(problems(bad), 'items.json', 'units[0].decimals');
+  }
+});
+
 test('inventory lines name items and locations that items.json has, once the file is present', () => {
   const raw = good();
   raw.extraFiles = { 'items.json': stock() };

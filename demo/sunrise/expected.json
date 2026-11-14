@@ -112,12 +112,12 @@
         "closing": "150000.00",
         "side": "Cr"
       },
-      "hueworks-paints": {
-        "closing": "4662.00",
-        "side": "Cr"
-      },
       "fastener-house": {
         "closing": "2079.00",
+        "side": "Cr"
+      },
+      "hueworks-paints": {
+        "closing": "4662.00",
         "side": "Cr"
       },
       "ironvale-trading": {
@@ -148,14 +148,14 @@
   },
   "profitAndLoss": {
     "report": "Profit and loss, 2026-01-01 to 2026-12-31, including opening and closing stock and direct expenses in the cost of sales; net profit from the balance sheet line",
-    "grossProfit": "-39380.26",
-    "netProfit": "-288021.26",
+    "grossProfit": "-39298.55",
+    "netProfit": "-287939.55",
     "grossProfitExcludingStock": "-92681.50",
     "netProfitExcludingStock": "-341322.50"
   },
   "stockSummary": {
     "report": "Stock summary by item, 2026-01-01 to 2026-12-31",
-    "closingValue": "90571.24",
+    "closingValue": "90652.95",
     "items": {
       "metal-gate": {
         "quantity": "10",
@@ -178,9 +178,9 @@
         "value": "7104.00"
       },
       "paint-grey": {
-        "quantity": "302",
+        "quantity": "306",
         "unit": "Ltr",
-        "value": "5489.29"
+        "value": "5562.00"
       },
       "steel-rod-12mm": {
         "quantity": "3740",
@@ -193,16 +193,17 @@
         "value": "43790.85"
       },
       "welding-wire": {
-        "quantity": "185",
+        "quantity": "186",
         "unit": "Kg",
-        "value": "1665.00"
+        "value": "1674.00"
       }
-    }
+    },
+    "note": "quantities of items measured in the units Kg and Ltr carry one decimal place (the \"decimals\" field of those units in items.json)"
   },
   "balanceSheet": {
     "report": "Balance sheet as at 2026-12-31",
-    "total": "233275.99",
-    "closingStockInAssets": "90571.24",
+    "total": "233357.70",
+    "closingStockInAssets": "90652.95",
     "note": "liabilities side total (capital, loans, current liabilities and the profit line, which is negative for a loss)"
   },
   "outstanding": {

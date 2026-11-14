@@ -6,7 +6,8 @@
     },
     {
       "key": "kg",
-      "name": "Kg"
+      "name": "Kg",
+      "decimals": 1
     },
     {
       "key": "mtr",
@@ -14,7 +15,8 @@
     },
     {
       "key": "ltr",
-      "name": "Ltr"
+      "name": "Ltr",
+      "decimals": 1
     }
   ],
   "locations": [

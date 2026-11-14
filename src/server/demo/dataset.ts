@@ -91,7 +91,7 @@ const expectedFile = z.looseObject({
  * yet, so only its shape and references are checked; every other field is kept as it is.
  */
 const itemsFile = z.looseObject({
-  units: z.array(z.looseObject({ key: slug, name: text })).optional(),
+  units: z.array(z.looseObject({ key: slug, name: text, decimals: z.number().int().min(0).max(4).optional() })).optional(),
   locations: z.array(z.looseObject({ key: slug, name: text })).optional(),
   stockGroups: z.array(z.looseObject({ key: slug, name: text })).optional(),
   items: z.array(z.looseObject({
