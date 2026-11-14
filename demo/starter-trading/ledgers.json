@@ -1,0 +1,16 @@
+[
+  { "key": "cash", "name": "Cash", "group": "cash_in_hand", "standard": "cash" },
+  { "key": "profit-and-loss", "name": "Profit and Loss", "standard": "profit_and_loss" },
+  { "key": "harbour-bank", "name": "Harbour Bank", "group": "bank_accounts", "opening": { "amount": "10000.00", "side": "Dr" } },
+  { "key": "customer-north", "name": "Customer North", "group": "receivables", "opening": { "amount": "2000.00", "side": "Dr" } },
+  { "key": "supplier-south", "name": "Supplier South", "group": "payables" },
+  { "key": "owners-capital", "name": "Owners' Capital", "group": "capital", "opening": { "amount": "12000.00", "side": "Cr" } },
+  { "key": "equipment", "name": "Equipment", "group": "fixed_assets" },
+  { "key": "output-tax", "name": "Output Tax", "group": "duties_taxes" },
+  { "key": "input-tax", "name": "Input Tax", "group": "duties_taxes" },
+  { "key": "trade-sales", "name": "Trade Sales", "group": "sales" },
+  { "key": "trade-purchases", "name": "Trade Purchases", "group": "purchases" },
+  { "key": "premises-rent", "name": "Premises Rent", "group": "indirect_expenses" },
+  { "key": "wages", "name": "Wages", "group": "indirect_expenses" },
+  { "key": "promotion", "name": "Promotion", "group": "promotion-costs" }
+]
