@@ -1,4 +1,6 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { NotBuilt } from '../../components/NotBuilt'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-export const Route = createFileRoute('/app/c/$companyId/masters')({ component: () => <NotBuilt icon='book' section='Masters' /> })
+/** The Masters section opens on the chart of accounts. */
+export const Route = createFileRoute('/app/c/$companyId/masters')({
+  beforeLoad: ({ params }) => { throw redirect({ to: '/app/c/$companyId/masters/chart-of-accounts', params, replace: true }) },
+})

@@ -78,6 +78,15 @@ export const commands = {
   'report.print': { title: 'Print', context: 'report' },
   'report.go-to': { title: 'Open another report', context: 'report' },
   'report.open.group-summary': { title: 'Group summary', context: 'company-home', bar: false },
+
+  // Masters screens: moving through and opening a list, and the history of one master.
+  'list.next': { title: 'Highlight the next row', context: 'list', bar: false },
+  'list.previous': { title: 'Highlight the previous row', context: 'list', bar: false },
+  'list.first': { title: 'Highlight the first row', context: 'list', bar: false },
+  'list.last': { title: 'Highlight the last row', context: 'list', bar: false },
+  'list.open': { title: 'Open the highlighted row', context: 'list', bar: false },
+  'list.history': { title: 'Show the history of the selected item', context: 'list' },
+  'entry.history': { title: 'Show the history of this entry', context: 'entry' },
 } as const satisfies Record<string, CommandDefinition>
 
 export type CommandId = keyof typeof commands

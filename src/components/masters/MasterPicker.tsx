@@ -1,0 +1,88 @@
+import { Alert, Badge, Button, Inline, PageHeader, Stack, Text } from '@ten98/ui'
+import { useNavigate } from '@tanstack/react-router'
+import { useMemo, useState } from 'react'
+import { useApp, useCompany } from '../../lib/app-context'
+import { groupPath, type GroupRow, type LedgerRow, isolate } from '../../lib/masters'
+import { ListScope, MasterList, type ListEntry } from './MasterList'
+import { useMasterData } from './useMasterData'
+
+/** `/masters/new`: choose what to create. */
+export function NewMasterChoice({ under }: { under?: string }) {
+  return <ListScope><NewMasterBody under={under} /></ListScope>
+}
+
+const choices = [
+  { key: 'group', title: 'Group', note: 'A heading in the chart that holds sub-groups and ledgers.' },
+  { key: 'ledger', title: 'Ledger', note: 'An account that vouchers post to, with an optional opening balance.' },
+] as const
+
+function NewMasterBody({ under }: { under?: string }) {
+  const company = useCompany()
+  const { workspace } = useApp()
+  const navigate = useNavigate()
+  const [active, setActive] = useState<string>('group')
+  const entries = useMemo<ListEntry[]>(() => choices.map(choice => ({
+    key: choice.key, cursor: true, depth: 1, label: choice.title,
+    content: <Inline as='div' gap={2} align='baseline'><Text weight='semibold'>{choice.title}</Text><Text tone='muted' size='sm'>{choice.note}</Text></Inline>,
+  })), [])
+  const open = (key: string) => void navigate(key === 'group'
+    ? { to: '/app/c/$companyId/masters/new/group', params: { companyId: company.id }, search: under ? { under } : {} }
+    : { to: '/app/c/$companyId/masters/new/ledger', params: { companyId: company.id }, search: under ? { under } : {} })
+  if (workspace.role === 'viewer') return <Alert tone='info'>Viewers cannot create masters. Ask a workspace owner, admin or editor.</Alert>
+  return <Stack gap={4}>
+    <PageHeader eyebrow='Masters' title='Create a master' description='Choose what to create with the arrow keys, then press Enter.' />
+    <MasterList label='What to create' entries={entries} active={active} onActiveChange={setActive} onOpen={open} focusList />
+  </Stack>
+}
+
+/** `/masters/edit`: a list of every group and ledger that filters as you type; Enter opens the highlighted one. */
+export function EditMasterPicker() {
+  return <ListScope><PickerBody /></ListScope>
+}
+
+type Candidate = { key: string; kind: 'group' | 'ledger'; id: string; name: string; second: string | null; where: string; builtIn: boolean }
+
+const normalise = (text: string) => text.toLocaleLowerCase()
+
+function PickerBody() {
+  const company = useCompany()
+  const navigate = useNavigate()
+  const { groups, ledgers, error, reload } = useMasterData(company.id)
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState<string | null>(null)
+  const candidates = useMemo<Candidate[]>(() => groups && ledgers ? [
+    ...groups.map((group: GroupRow) => ({ key: `group:${group.id}`, kind: 'group' as const, id: group.id, name: group.name, second: group.secondLanguageName, builtIn: group.systemKey !== null,
+      where: group.parentId === null ? 'Primary group' : `In ${groupPath(groups, group.parentId).join(' › ')}` })),
+    ...ledgers.map((ledger: LedgerRow) => ({ key: `ledger:${ledger.id}`, kind: 'ledger' as const, id: ledger.id, name: ledger.name, second: ledger.secondLanguageName, builtIn: ledger.systemKey !== null,
+      where: ledger.groupId === null ? 'Outside every group' : `In ${groupPath(groups, ledger.groupId).join(' › ')}` })),
+  ].sort((left, right) => left.name.localeCompare(right.name, 'en', { sensitivity: 'base', numeric: true }) || left.key.localeCompare(right.key)) : [], [groups, ledgers])
+  const shown = useMemo(() => {
+    const needle = normalise(query.trim())
+    return needle ? candidates.filter(item => normalise(`${item.name} ${item.second ?? ''} ${item.where}`).includes(needle)) : candidates
+  }, [candidates, query])
+  const entries = useMemo<ListEntry[]>(() => shown.map(item => ({
+    key: item.key, cursor: true, depth: 1, label: `${item.kind === 'group' ? 'Group' : 'Ledger'} ${item.name}`,
+    content: <Inline as='div' gap={2} align='center'>
+      <Text weight='semibold'>{isolate(item.name)}</Text>
+      {item.second && <Text tone='muted' size='sm'>{isolate(item.second)}</Text>}
+      <Badge tone={item.kind === 'group' ? 'accent' : 'neutral'}>{item.kind === 'group' ? 'Group' : 'Ledger'}</Badge>
+      {item.builtIn && <Badge>Built-in</Badge>}
+      <Text tone='muted' size='sm'>{item.where}</Text>
+    </Inline>,
+  })), [shown])
+  const current = shown.find(item => item.key === active) ?? shown[0]
+  const open = (key: string) => {
+    const item = shown.find(candidate => candidate.key === key)
+    if (!item) return
+    void navigate(item.kind === 'group'
+      ? { to: '/app/c/$companyId/masters/edit/group/$groupId', params: { companyId: company.id, groupId: item.id } }
+      : { to: '/app/c/$companyId/masters/edit/ledger/$ledgerId', params: { companyId: company.id, ledgerId: item.id } })
+  }
+  return <Stack gap={4}>
+    <PageHeader eyebrow='Masters' title='Alter a master' description='Type to filter by name, move with the arrow keys, then press Enter to open the highlighted group or ledger.' />
+    {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
+    <Text aria-live='polite'>{query ? `Filter: ${query} · ${shown.length} ${shown.length === 1 ? 'match' : 'matches'}` : 'Type to filter. Backspace edits the filter and Escape clears it.'}</Text>
+    {groups && ledgers && <MasterList label='Groups and ledgers' entries={entries} active={current?.key ?? null} onActiveChange={setActive} onOpen={open}
+      query={query} onQueryChange={setQuery} focusList emptyMessage='No group or ledger matches the filter.' />}
+  </Stack>
+}

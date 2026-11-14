@@ -59,6 +59,15 @@ const shared = {
   'report.zero-lines': 'Alt+N',
   'report.go-to': 'Alt+G',
   'report.open.group-summary': 'G',
+
+  // Masters screens.
+  'list.next': 'ArrowDown',
+  'list.previous': 'ArrowUp',
+  'list.first': 'Home',
+  'list.last': 'End',
+  'list.open': 'Enter',
+  'list.history': 'Alt+Y',
+  'entry.history': 'Alt+Y',
 } as const
 
 export const keymaps: Record<KeymapName, AppKeymap> = {
