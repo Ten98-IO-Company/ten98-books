@@ -32,14 +32,9 @@ type AppKeymap = Readonly<Record<CommandId, string | readonly string[]>> & Keyma
 export const classicOnly: readonly CommandId[] = [
   // Ctrl+Q quits Firefox on Linux before a page sees it, and web-safe already goes back with Escape.
   'nav.quit',
+  // Ctrl+G is the browser's find-next; web-safe users open screens with go-to (Alt+G).
+  'nav.switch-to',
 ]
-
-/**
- * The classic create and delete keys of a masters list, awaiting the analyst: the catalogue's list bar may mean Ctrl+D
- * and C (or Ctrl+C) instead. Changing either is this one line; the parity rows say "unconfirmed" until then, and the
- * candidates are reserved in the list context meanwhile.
- */
-const unconfirmedListKeys = { create: 'Alt+C', delete: 'Alt+D' } as const
 
 /** Keys both keymaps share: movement, opening, the menu letters, Enter and Escape. */
 const shared = {
@@ -66,6 +61,7 @@ const shared = {
   'list.first': 'Home',
   'list.last': 'End',
   'list.open': 'Enter',
+  'list.create': 'Alt+C',
   'list.cancel': 'Escape',
   'entry.cancel': 'Escape',
   'entry.next-field': 'Enter',
@@ -85,14 +81,13 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     ...shared,
     'help.keyboard': ['F1', 'Ctrl+/'],
     'nav.quit': 'Ctrl+Q',
-    'nav.go-to': ['Alt+G', 'Ctrl+G'],
+    'nav.switch-to': 'Ctrl+G',
     'company.switch': 'F3',
-    'list.create': unconfirmedListKeys.create,
-    'list.delete': unconfirmedListKeys.delete,
+    'list.delete': 'Alt+D',
     'list.history': 'Alt+H',
     'entry.accept': ['Ctrl+A', 'Ctrl+Enter'],
     'entry.cancel': ['Escape', 'Ctrl+Q'],
-    'entry.delete': 'Ctrl+D',
+    'entry.delete': 'Alt+D',
     'entry.history': 'Alt+H',
     'entry.voucher.contra': 'F4',
     'entry.voucher.payment': 'F5',
@@ -109,8 +104,8 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     ...shared,
     'help.keyboard': 'Ctrl+/',
     'nav.quit': [],
+    'nav.switch-to': [],
     'company.switch': 'Alt+K',
-    'list.create': 'Alt+C',
     'list.delete': 'Alt+X',
     'list.history': 'Alt+Y',
     'entry.accept': 'Ctrl+Enter',
@@ -136,13 +131,14 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
  * key for the same action in the same context, `alternate` differs for a stated browser reason, `ours` has no
  * counterpart there. The notes are our own words; docs/KEYBOARD.md shows this table and a test keeps the two in step.
  */
-export type Parity = { readonly status: 'same' | 'alternate' | 'ours' | 'unconfirmed'; readonly note?: string }
+export type Parity = { readonly status: 'same' | 'alternate' | 'ours'; readonly note?: string }
 export const classicParity: Record<CommandId, Parity> = {
   'help.keyboard': { status: 'same', note: 'F1 opens help; Ctrl+/ is an extra key of ours.' },
   'nav.back': { status: 'same', note: 'A text field keeps Escape for itself, and a dialog closes on it.' },
   'nav.quit': { status: 'same', note: 'Leaves one level without asking, also from inside a text field. At the company menu it does nothing, as there is nothing above it. Firefox on Linux quits on Ctrl+Q before the page sees it.' },
   'company.switch': { status: 'same' },
-  'nav.go-to': { status: 'same', note: 'Alt+G and Ctrl+G open the same go-to list here.' },
+  'nav.go-to': { status: 'same', note: 'Opens a screen on top of this one: Escape there comes back here.' },
+  'nav.switch-to': { status: 'same', note: 'Opens a screen in place of this one: Escape there goes to the company menu.' },
   'menu.next': { status: 'same' },
   'menu.previous': { status: 'same' },
   'menu.first': { status: 'same' },
@@ -158,20 +154,20 @@ export const classicParity: Record<CommandId, Parity> = {
   'home.trial-balance': { status: 'ours', note: 'One menu deeper in the catalogue, with no letter recorded.' },
   'home.ledger': { status: 'ours', note: 'One menu deeper in the catalogue, with no letter recorded.' },
   'report.open.group-summary': { status: 'ours' },
-  'list.next': { status: 'same' },
+  'list.next': { status: 'same', note: 'The catalogue\'s lists also jump to the next row starting with a typed letter; that is not built here.' },
   'list.previous': { status: 'same' },
   'list.first': { status: 'same' },
   'list.last': { status: 'ours' },
   'list.open': { status: 'same', note: 'Opens the highlighted row for alteration.' },
-  'list.create': { status: 'unconfirmed', note: 'Alt+C is the catalogue\'s create-from-a-lookup key during entry; on a masters list the catalogue may mean C or Ctrl+C. Awaiting the analyst; C and Ctrl+C are reserved meanwhile.' },
-  'list.delete': { status: 'unconfirmed', note: 'Alt+D deletes a day book row in the catalogue; on a masters list it may mean Ctrl+D. Awaiting the analyst; Ctrl+D is reserved meanwhile.' },
+  'list.create': { status: 'same', note: 'Creates a master of the highlighted row\'s kind, under its group.' },
+  'list.delete': { status: 'same', note: 'Asks first; a built-in row has no delete.' },
   'list.history': { status: 'ours', note: 'No history view in the catalogue. Alt+H, because Alt+Y is reserved for the data menu.' },
   'list.cancel': { status: 'same', note: 'Escape only: Ctrl+Q leaves the list at once through nav.quit.' },
   'entry.accept': { status: 'same', note: 'Accepts the whole screen from anywhere, including inside a field; Ctrl+Enter is an extra key of ours.' },
   'entry.cancel': { status: 'same', note: 'Unlike the catalogue, both keys ask first when something was typed.' },
   'entry.next-field': { status: 'same' },
   'entry.create-master': { status: 'same' },
-  'entry.delete': { status: 'same' },
+  'entry.delete': { status: 'same', note: 'Alt, like every key on the bottom bar that acts on the record.' },
   'entry.history': { status: 'ours', note: 'As the list history.' },
   'entry.voucher.contra': { status: 'same' },
   'entry.voucher.payment': { status: 'same' },
@@ -212,20 +208,19 @@ export const classicReserved: readonly ReservedKey[] = [
   { context: 'global', purpose: 'E-mail what is on the screen', keys: ['Ctrl+M'] },
   { context: 'global', purpose: 'Send what is on the screen through a chat service', keys: ['Alt+W'], catalogueKey: 'Ctrl+Alt+W', reason: 'Windows reports Ctrl+Alt as AltGr, which types characters, so the registry does not run commands on it there.' },
   { context: 'company-home', purpose: 'Menu letters for banking tools, a stock overview, ratio analysis, the full list of reports, an overview page and signing out', keys: ['N', 'S', 'R', 'D', 'O', 'Q'] },
-  { context: 'list', purpose: 'Mark a row; hide a row from the view and bring it back', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
-  { context: 'list', purpose: 'Candidate create and delete keys, until the analyst confirms which the list uses', keys: ['C', 'Ctrl+C', 'Ctrl+D'] },
+  { context: 'list', purpose: 'Mark a row; hide a row from the view and bring it back', keys: ['Space', 'Alt+R', 'Alt+U'] },
   { context: 'list', purpose: 'List views and settings: another grouping, other kinds of master, valuation settings, other layouts, exception lists, saved layouts and filters', keys: ['F5', 'F10', 'Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
   { context: 'entry', purpose: 'Pick another voucher type from the full list', keys: ['F10'] },
   { context: 'entry', purpose: 'Switch to the voucher types for returns, stock moves, stock counts and customer orders', keys: ['Alt+F5', 'Alt+F6', 'Alt+F7', 'Ctrl+F7', 'Ctrl+F8'] },
   { context: 'entry', purpose: 'Change the entry layout, add details, mark the entry provisional, reuse a skipped number, fill from an earlier entry, open reports about it', keys: ['Ctrl+H', 'Ctrl+I', 'Ctrl+L', 'Ctrl+U', 'Ctrl+F', 'Ctrl+O'] },
-  { context: 'entry', purpose: 'Take a line out of the entry', keys: ['Ctrl+R'] },
+  { context: 'entry', purpose: 'Take a line out of the entry and put it back', keys: ['Alt+R', 'Alt+U'] },
   { context: 'entry', purpose: 'Mark the entry as dated in the future', keys: ['Alt+T'], catalogueKey: 'Ctrl+T', reason: 'Ctrl+T opens a new browser tab; a page never receives it.' },
   { context: 'entry', purpose: 'Close an order before everything on it has been delivered', keys: ['Alt+L'], catalogueKey: 'Ctrl+W', reason: 'Ctrl+W closes the browser tab; a page never receives it.' },
   { context: 'report', purpose: 'Other ways to see the report: by group, by month, at another valuation, by stock group, with profit, with orders', keys: ['F4', 'F5', 'F6', 'F7', 'F8', 'F9'] },
   { context: 'report', purpose: 'Valuation settings, other layouts, exception lists, saved layouts and filters', keys: ['Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
   { context: 'report', purpose: 'Add, change and remove comparison columns', keys: ['Ctrl+C', 'Ctrl+A', 'Ctrl+D'] },
-  { context: 'report', purpose: 'Add comparison columns automatically', keys: ['Alt+U'], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
-  { context: 'report', purpose: 'Mark a line; hide a line from the view and bring it back', keys: ['Space', 'Ctrl+R', 'Ctrl+U'] },
+  { context: 'report', purpose: 'Add comparison columns automatically', keys: ['Alt+J'], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
+  { context: 'report', purpose: 'Mark a line; hide a line from the view and bring it back', keys: ['Space', 'Alt+R', 'Alt+U'] },
   { context: 'report', purpose: 'On a day book row: void it, delete it, copy it, insert an entry before it, add one after it', keys: ['Alt+X', 'Alt+D', 'Alt+2', 'Alt+I', 'Alt+A'] },
   { context: 'report', purpose: 'Save a tax return', keys: ['Alt+B'] },
 ]

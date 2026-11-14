@@ -29,7 +29,8 @@ Intended overlaps: Escape and (classic) Ctrl+Q on entry and list screens are the
 | `nav.back` | Go back one level | Everywhere | `Escape` | `Escape` |
 | `nav.quit` | Leave this screen | Everywhere | (none) | `Ctrl+Q` |
 | `company.switch` | Change company | Everywhere | `Alt+K` | `F3` |
-| `nav.go-to` | Go to another screen or report | Everywhere | `Alt+G` | `Alt+G`, `Ctrl+G` |
+| `nav.go-to` | Go to a screen (Escape comes back) | Everywhere | `Alt+G` | `Alt+G` |
+| `nav.switch-to` | Switch to a screen (Escape goes to the menu) | Everywhere | (none) | `Ctrl+G` |
 | `menu.next` | Highlight the next item | Company menu | `ArrowDown` | `ArrowDown` |
 | `menu.previous` | Highlight the previous item | Company menu | `ArrowUp` | `ArrowUp` |
 | `menu.first` | Highlight the first item | Company menu | `Home` | `Home` |
@@ -58,7 +59,7 @@ Intended overlaps: Escape and (classic) Ctrl+Q on entry and list screens are the
 | `entry.cancel` | Leave without saving | Entry screens | `Escape` | `Escape`, `Ctrl+Q` |
 | `entry.next-field` | Next field | Entry screens | `Enter` | `Enter` |
 | `entry.create-master` | Create a master here | Entry screens | `Alt+C` | `Alt+C` |
-| `entry.delete` | Delete this entry | Entry screens | `Alt+X` | `Ctrl+D` |
+| `entry.delete` | Delete this entry | Entry screens | `Alt+X` | `Alt+D` |
 | `entry.history` | Show the history of this entry | Entry screens | `Alt+Y` | `Alt+H` |
 | `entry.voucher.contra` | Switch to a contra voucher | Entry screens | `Alt+O` | `F4` |
 | `entry.voucher.payment` | Switch to a payment voucher | Entry screens | `Alt+P` | `F5` |
@@ -83,7 +84,9 @@ Intended overlaps: Escape and (classic) Ctrl+Q on entry and list screens are the
 
 ## Parity with desktop accounting keys
 
-The classic key of every command, compared with the private shortcut catalogue (D-05 parity audit, D-11: the key paths are kept, the wording is ours). **same**: the catalogue's key for the same action in the same context. **alternate**: differs for a stated browser reason. **ours**: no counterpart in the catalogue. **unconfirmed**: the catalogue's key for the action is disputed and the analyst is checking it; the candidates are reserved meanwhile, and the binding is one line (`unconfirmedListKeys` in `src/lib/keymaps.ts`). Counts: 40 same, 0 alternate, 11 ours, 2 unconfirmed, over 53 commands. Every catalogue key that has a command here could be kept, because each is one a browser tab receives; the alternates are all for features still to come (next section).
+The classic key of every command, compared with the private shortcut catalogue (D-05 parity audit, D-11: the key paths are kept, the wording is ours). **same**: the catalogue's key for the same action in the same context. **alternate**: differs for a stated browser reason. **ours**: no counterpart in the catalogue. Counts: 43 same, 0 alternate, 11 ours, over 54 commands.
+
+How the catalogue's button bars map to keys, as the analyst established by pressing: the bars never print the modifier; a bottom-bar button that acts on the row or record (create a master, delete, void, and on the day book duplicate, insert and add) is an Alt chord; accept, quit and the side-bar letter buttons are Ctrl chords; a bare letter never runs a button. So list create and delete are `Alt+C` and `Alt+D`, entry delete is `Alt+D`, and the reserved remove and restore line keys are `Alt+R` and `Alt+U`. On the catalogue's lists a bare letter jumps to the next row starting with it; our lists do not do that yet (not built). Every catalogue key that has a command here could be kept, because each is one a browser tab receives; the alternates are all for features still to come (next section).
 
 | Id | Context | Classic | Parity | Note |
 |---|---|---|---|---|
@@ -91,7 +94,8 @@ The classic key of every command, compared with the private shortcut catalogue (
 | `nav.back` | Everywhere | `Escape` | same | A text field keeps Escape for itself, and a dialog closes on it. |
 | `nav.quit` | Everywhere | `Ctrl+Q` | same | Leaves one level without asking, also from inside a text field. At the company menu it does nothing, as there is nothing above it. Firefox on Linux quits on Ctrl+Q before the page sees it. |
 | `company.switch` | Everywhere | `F3` | same |  |
-| `nav.go-to` | Everywhere | `Alt+G`, `Ctrl+G` | same | Alt+G and Ctrl+G open the same go-to list here. |
+| `nav.go-to` | Everywhere | `Alt+G` | same | Opens a screen on top of this one: Escape there comes back here. |
+| `nav.switch-to` | Everywhere | `Ctrl+G` | same | Opens a screen in place of this one: Escape there goes to the company menu. |
 | `menu.next` | Company menu | `ArrowDown` | same |  |
 | `menu.previous` | Company menu | `ArrowUp` | same |  |
 | `menu.first` | Company menu | `Home` | same |  |
@@ -106,13 +110,13 @@ The classic key of every command, compared with the private shortcut catalogue (
 | `home.profit-and-loss` | Company menu | `P` | same |  |
 | `home.trial-balance` | Company menu | `T` | ours | One menu deeper in the catalogue, with no letter recorded. |
 | `home.ledger` | Company menu | `L` | ours | One menu deeper in the catalogue, with no letter recorded. |
-| `list.create` | Lists | `Alt+C` | unconfirmed | Alt+C is the catalogue's create-from-a-lookup key during entry; on a masters list the catalogue may mean C or Ctrl+C. Awaiting the analyst; C and Ctrl+C are reserved meanwhile. |
-| `list.delete` | Lists | `Alt+D` | unconfirmed | Alt+D deletes a day book row in the catalogue; on a masters list it may mean Ctrl+D. Awaiting the analyst; Ctrl+D is reserved meanwhile. |
+| `list.create` | Lists | `Alt+C` | same | Creates a master of the highlighted row's kind, under its group. |
+| `list.delete` | Lists | `Alt+D` | same | Asks first; a built-in row has no delete. |
 | `entry.accept` | Entry screens | `Ctrl+A`, `Ctrl+Enter` | same | Accepts the whole screen from anywhere, including inside a field; Ctrl+Enter is an extra key of ours. |
 | `entry.cancel` | Entry screens | `Escape`, `Ctrl+Q` | same | Unlike the catalogue, both keys ask first when something was typed. |
 | `entry.next-field` | Entry screens | `Enter` | same |  |
 | `entry.create-master` | Entry screens | `Alt+C` | same |  |
-| `entry.delete` | Entry screens | `Ctrl+D` | same |  |
+| `entry.delete` | Entry screens | `Alt+D` | same | Alt, like every key on the bottom bar that acts on the record. |
 | `entry.voucher.contra` | Entry screens | `F4` | same |  |
 | `entry.voucher.payment` | Entry screens | `F5` | same |  |
 | `entry.voucher.receipt` | Entry screens | `F6` | same |  |
@@ -132,7 +136,7 @@ The classic key of every command, compared with the private shortcut catalogue (
 | `report.export` | Reports | `Ctrl+E` | same |  |
 | `report.print` | Reports | `Ctrl+P` | same |  |
 | `report.open.group-summary` | Company menu | `G` | ours |  |
-| `list.next` | Lists | `ArrowDown` | same |  |
+| `list.next` | Lists | `ArrowDown` | same | The catalogue's lists also jump to the next row starting with a typed letter; that is not built here. |
 | `list.previous` | Lists | `ArrowUp` | same |  |
 | `list.first` | Lists | `Home` | same |  |
 | `list.last` | Lists | `End` | ours |  |
@@ -143,7 +147,7 @@ The classic key of every command, compared with the private shortcut catalogue (
 
 ### Reserved keys
 
-Catalogue keys whose feature does not exist yet (`classicReserved` in `src/lib/keymaps.ts`), described in our own words for what the later feature will do. No command may take them in their context, and a global reservation holds in every context except where the catalogue itself reuses the key (F2 is the period on a report; Ctrl+E and Ctrl+P export and print a report). 28 groups, 76 keys. Where the catalogue's key is one a browser tab never receives, the reserved key is the proposed alternate and the last column gives the catalogue key and the reason.
+Catalogue keys whose feature does not exist yet (`classicReserved` in `src/lib/keymaps.ts`), described in our own words for what the later feature will do. No command may take them in their context, and a global reservation holds in every context except where the catalogue itself reuses the key (F2 is the period on a report; Ctrl+E and Ctrl+P export and print a report). 27 groups, 74 keys. Where the catalogue's key is one a browser tab never receives, the reserved key is the proposed alternate and the last column gives the catalogue key and the reason.
 
 In classic every reserved key with Ctrl, Alt or Meta, and every reserved function key, is **claimed**: the registry takes it from the browser and runs nothing (`ReservedKeys` in `KeyboardShell.tsx`, mounted in each context's scope), so a key an accountant expects never opens the browser's history, bookmarks, address bar or print dialog. Single letters and Space are reserved but not claimed: they type or act on the focused control, and the registry runs single printable keys only in a focused menu. The messaging key comes from the observation notes of the shell's share menu, not from the shortcut catalogue itself.
 
@@ -161,20 +165,19 @@ In classic every reserved key with Ctrl, Alt or Meta, and every reserved functio
 | Everywhere | E-mail what is on the screen | `Ctrl+M` |  |
 | Everywhere | Send what is on the screen through a chat service | `Alt+W` | `Ctrl+Alt+W`: Windows reports Ctrl+Alt as AltGr, which types characters, so the registry does not run commands on it there. |
 | Company menu | Menu letters for banking tools, a stock overview, ratio analysis, the full list of reports, an overview page and signing out | `N`, `S`, `R`, `D`, `O`, `Q` |  |
-| Lists | Mark a row; hide a row from the view and bring it back | `Space`, `Ctrl+R`, `Ctrl+U` |  |
-| Lists | Candidate create and delete keys, until the analyst confirms which the list uses | `C`, `Ctrl+C`, `Ctrl+D` |  |
+| Lists | Mark a row; hide a row from the view and bring it back | `Space`, `Alt+R`, `Alt+U` |  |
 | Lists | List views and settings: another grouping, other kinds of master, valuation settings, other layouts, exception lists, saved layouts and filters | `F5`, `F10`, `Ctrl+B`, `Ctrl+H`, `Ctrl+J`, `Ctrl+L`, `Ctrl+F` |  |
 | Entry screens | Pick another voucher type from the full list | `F10` |  |
 | Entry screens | Switch to the voucher types for returns, stock moves, stock counts and customer orders | `Alt+F5`, `Alt+F6`, `Alt+F7`, `Ctrl+F7`, `Ctrl+F8` |  |
 | Entry screens | Change the entry layout, add details, mark the entry provisional, reuse a skipped number, fill from an earlier entry, open reports about it | `Ctrl+H`, `Ctrl+I`, `Ctrl+L`, `Ctrl+U`, `Ctrl+F`, `Ctrl+O` |  |
-| Entry screens | Take a line out of the entry | `Ctrl+R` |  |
+| Entry screens | Take a line out of the entry and put it back | `Alt+R`, `Alt+U` |  |
 | Entry screens | Mark the entry as dated in the future | `Alt+T` | `Ctrl+T`: Ctrl+T opens a new browser tab; a page never receives it. |
 | Entry screens | Close an order before everything on it has been delivered | `Alt+L` | `Ctrl+W`: Ctrl+W closes the browser tab; a page never receives it. |
 | Reports | Other ways to see the report: by group, by month, at another valuation, by stock group, with profit, with orders | `F4`, `F5`, `F6`, `F7`, `F8`, `F9` |  |
 | Reports | Valuation settings, other layouts, exception lists, saved layouts and filters | `Ctrl+B`, `Ctrl+H`, `Ctrl+J`, `Ctrl+L`, `Ctrl+F` |  |
 | Reports | Add, change and remove comparison columns | `Ctrl+C`, `Ctrl+A`, `Ctrl+D` |  |
-| Reports | Add comparison columns automatically | `Alt+U` | `Ctrl+N`: Ctrl+N opens a new browser window; a page never receives it. |
-| Reports | Mark a line; hide a line from the view and bring it back | `Space`, `Ctrl+R`, `Ctrl+U` |  |
+| Reports | Add comparison columns automatically | `Alt+J` | `Ctrl+N`: Ctrl+N opens a new browser window; a page never receives it. |
+| Reports | Mark a line; hide a line from the view and bring it back | `Space`, `Alt+R`, `Alt+U` |  |
 | Reports | On a day book row: void it, delete it, copy it, insert an entry before it, add one after it | `Alt+X`, `Alt+D`, `Alt+2`, `Alt+I`, `Alt+A` |  |
 | Reports | Save a tax return | `Alt+B` |  |
 
@@ -186,14 +189,14 @@ In classic, these keys do the same thing from the company menu, a list, an entry
 
 - **Help, F1**: the keyboard help, from anywhere outside a dialog.
 - **Change company, F3**: the company list, from anywhere outside a dialog, fields included.
-- **Go to, Alt+G or Ctrl+G**: a list of the masters, vouchers and reports, opened by letter or Enter (`GoToDialog` in `KeyboardShell.tsx`); on a report, its own list, which carries the period over.
+- **Go to, Alt+G, and switch to, Ctrl+G**: the same list of the masters, vouchers and reports, opened by letter or Enter (`GoToDialog` in `KeyboardShell.tsx`; on a report, its own list, which carries the period over). Its title says which one is open. Go to stacks: Escape on the screen it opened returns to the screen it was opened from. Switch to replaces: the company menu takes the place of the screen it was opened from and the new screen opens on top, so Escape there lands on the company menu. Both go through `useOpenScreen`, and Escape and Ctrl+Q pick their target with `backSource` (`src/lib/commands.ts`): the go-to return while still on the screen it opened, else the screen's own back, else the shell's. Web-safe has go-to only (Ctrl+G is the browser's find-next).
 - **Back, Escape**: one level up. A text field, select or combobox keeps Escape (the field's own meaning; entry screens and the alter list handle it themselves), and a dialog closes on it.
 - **Leave, Ctrl+Q**: one level up without asking, also from inside a text field, in one press (the alter list included: its Escape ladder is Escape's alone); on an entry screen it is the screen's own cancel, which asks first when something was typed; in any dialog it closes the dialog as Escape does.
 - **Accept, Ctrl+A**: on an entry screen, from any field, button or lookup; in the period dialog it applies the period. Elsewhere there is nothing to accept and the key keeps its browser meaning (select all).
 - **Period, F2**: on a report, the period (or the date). Elsewhere F2 is reserved for changing the working date, which does not exist yet.
 - **Calculator**: reserved (`Alt+=`, as Ctrl+N cannot be taken).
 - **Kept from the browser**: in classic, a key that belongs to a switched-off command (delete on a built-in row, accept for a viewer) or to a reserved feature is still taken from the browser and does nothing (`disabledClaims` and `reservedClaims`). Every dialog (`DialogKeys`: help, go-to, change company, the report's period and go-to, every confirmation) closes on Ctrl+Q, opens the help on F1, and claims every other classic key, because a dialog cuts off the scopes around it. Escape, Enter, the arrows, Tab and letters are never claimed. Web-safe claims nothing.
-- **Text editing always wins over a claim**: in a text field, textarea, select or editable region, and whenever text is selected on the page, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z and Ctrl+A are never claimed, whatever is reserved, so copying and undo always work. A reserved key that is one of these (Ctrl+C on a list, Ctrl+C and Ctrl+A on a report) is claimed only while focus is on something that is not editable, such as a list row, with nothing selected. Ctrl+A keeps its claim where it is the accept key (entry screens, D-05). The rule is `claimSplit` in `src/lib/keymaps.ts`, used wherever claims are registered (`useClaim` and `useAppCommand` in `KeyboardShell.tsx`).
+- **Text editing always wins over a claim**: in a text field, textarea, select or editable region, and whenever text is selected on the page, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z and Ctrl+A are never claimed, whatever is reserved, so copying and undo always work. A reserved key that is one of these (Ctrl+C and Ctrl+A on a report) is claimed only while focus is on something that is not editable, such as a list row, with nothing selected. Ctrl+A keeps its claim where it is the accept key (entry screens, D-05). The rule is `claimSplit` in `src/lib/keymaps.ts`, used wherever claims are registered (`useClaim` and `useAppCommand` in `KeyboardShell.tsx`).
 
 ## Masters screens
 
@@ -207,7 +210,7 @@ The chart of accounts, the create and alter forms and the history view register 
 
 ## Reports
 
-Report screens (`src/routes/app/c.$companyId.reports*.tsx`, with their frame in `src/components/reports/`) mount the `report` context. The highlighted line is the table's current row and holds focus, so the table's own Up, Down, Home, End and Enter act on the focused row, and the commands do the same from anywhere else on the page. Escape stays `nav.back`: on a report it goes back one drill-down level (`useBackOverride` in `KeyboardShell.tsx`) and highlights the line it left from, and from a statement it returns to the company menu. Go to (`Alt+G`, classic also `Ctrl+G`) opens the report's own "open another report" list, a `KeyboardMenu`, so the company-menu letters open a report there and `G` the group summary. In the period dialog the date fields keep the arrow keys, Enter or classic `Ctrl+A` applies the period, and Escape or classic `Ctrl+Q` closes the dialog without leaving the report. In classic, `Ctrl+E` exports and `Ctrl+P` prints the report on screen, taking those keys from the browser while a report is open.
+Report screens (`src/routes/app/c.$companyId.reports*.tsx`, with their frame in `src/components/reports/`) mount the `report` context. The highlighted line is the table's current row and holds focus, so the table's own Up, Down, Home, End and Enter act on the focused row, and the commands do the same from anywhere else on the page. Escape stays `nav.back`: on a report it goes back one drill-down level (`useBackOverride` in `KeyboardShell.tsx`) and highlights the line it left from, and from a statement it returns to the company menu. Go to (`Alt+G`) and, in classic, switch to (`Ctrl+G`) open the report's own list of reports, a `KeyboardMenu`, so the company-menu letters open a report there and `G` the group summary; go to stacks and switch to replaces, as everywhere. In the period dialog the date fields keep the arrow keys, Enter or classic `Ctrl+A` applies the period, and Escape or classic `Ctrl+Q` closes the dialog without leaving the report. In classic, `Ctrl+E` exports and `Ctrl+P` prints the report on screen, taking those keys from the browser while a report is open.
 
 ## Rules the tests enforce
 
@@ -230,11 +233,12 @@ Report screens (`src/routes/app/c.$companyId.reports*.tsx`, with their frame in 
 
 ## Open
 
-- Cross-browser key reachability (D-05) is not settled. The `@ten98/ui` 0.37.0 reachability matrix covers F1–F10, F12, Enter, Escape, Ctrl+A, Ctrl+Enter, Ctrl+S, Ctrl+P, Alt+C, Alt+D, Alt+E, Alt+F, Alt+G and Ctrl+K in Chromium, Firefox and WebKit at the page level. Not yet measured in any engine: `Ctrl+Q`, `Ctrl+G`, `Ctrl+E`, `Ctrl+D`, `Ctrl+/`, `Alt+F5`, `Alt+H`, `Alt+N`, `Alt+K`, `Alt+X`, `Alt+Y`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`, `Alt+M`, `PageUp`, `PageDown`, `Home`, `End` and the menu letters; not measured anywhere at the browser-window level, where the browser could take the key before the page: `F1`, `F3`, `F5`, `F6`, `Ctrl+A`, `Ctrl+D`, `Ctrl+E`, `Ctrl+G`, `Ctrl+P`, `Ctrl+Q`. The keymap-parity branch drove classic in one Chromium-based browser only.
+- Cross-browser key reachability (D-05) is not settled. The `@ten98/ui` 0.37.0 reachability matrix covers F1–F10, F12, Enter, Escape, Ctrl+A, Ctrl+Enter, Ctrl+S, Ctrl+P, Alt+C, Alt+D, Alt+E, Alt+F, Alt+G and Ctrl+K in Chromium, Firefox and WebKit at the page level. Not yet measured in any engine: `Ctrl+Q`, `Ctrl+G`, `Ctrl+E`, `Ctrl+D`, `Alt+R`, `Ctrl+/`, `Alt+F5`, `Alt+H`, `Alt+N`, `Alt+K`, `Alt+X`, `Alt+Y`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`, `Alt+M`, `PageUp`, `PageDown`, `Home`, `End` and the menu letters; not measured anywhere at the browser-window level, where the browser could take the key before the page: `F1`, `F3`, `F5`, `F6`, `Ctrl+A`, `Ctrl+D`, `Ctrl+E`, `Ctrl+G`, `Ctrl+P`, `Ctrl+Q`. The keymap-parity branch drove classic in one Chromium-based browser only.
 - `Ctrl+Alt` chords: on Windows the registry treats Ctrl+Alt as AltGr and does not run a command on it, so a catalogue key such as Ctrl+Alt+W cannot be delivered; the reserved alternate is `Alt+W`. Whether to deliver Ctrl+Alt chords where no AltGr layout is active is an engine question.
 - A lookup with its list open ignores Ctrl+Q (the list closes on Escape).
 - Platforms, with the per-platform chords of the next `@ten98/ui` release: on macOS plain F1 to F12 act as media and display keys unless Fn is held or the keyboard setting is changed, and Ctrl+F3, Ctrl+F7 and Ctrl+F8 are system shortcuts there; Firefox on Linux quits on Ctrl+Q before the page sees it. None of these can be fixed from the page.
 - Menu letters on non-Latin keyboard layouts: an Arabic layout sends a different character for the same physical key, so the letters do nothing there; the arrows and Enter still work. This needs the engine to match unmodified printable keys by physical key as it already does for modified ones; requested from the design system, no local workaround.
+- Lists do not jump to the next row starting with a typed letter, as the catalogue's lists do (not built).
 - Coming back to the menu highlights the last item only when it was opened from the menu. Arriving any other way (sidebar, address bar, reload) highlights the first item.
 - Apple platforms: the web-safe `Alt+letter` chords for lists and entry screens (`Alt+C`, `Alt+X`, `Alt+Y`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`) and the classic `Alt+C`, `Alt+D`, `Alt+H` and `Alt+G` are Option+letter on macOS, which types characters and starts dead keys, so binding them takes those characters away from text fields. An Apple overlay waits on per-platform keymap entries in the registry, requested from the design system; the app does not detect the platform itself. They stay unverified on Apple until then.
 - `@ten98/ui` gaps noticed: `Dialog` has no initial-focus target, so dialogs open with focus on their close button; the go-to and report dialogs move focus to their list after two animation frames (`useFocusOnOpen` in `src/components/reports/ReportScreen.tsx`), the company picker needs one Tab.

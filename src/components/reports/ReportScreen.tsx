@@ -1,11 +1,10 @@
 import { Button, DateRangeField, Dialog, Field, Inline, Input, KeyHint, ReportPanel, ReportToolbar, saveFile, ShortcutScope, Stack, Switch, Text } from '@ten98/ui'
-import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
 import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
-import { DialogKeys, ReservedKeys, useAppCommand, useBackOverride } from '../KeyboardShell'
+import { DialogKeys, ReservedKeys, screenModeText, useAppCommand, useBackOverride, useOpenScreen, type ScreenMode } from '../KeyboardShell'
 import { periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
 
 /** Reports the "open another report" menu offers, by the menu letter command each one answers to. */
@@ -46,9 +45,12 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
   children: ReactNode
 }) {
   const company = useCompany()
-  const navigate = useNavigate()
   const [periodOpen, setPeriodOpen] = useState(false)
-  const [goToOpen, setGoToOpen] = useState(false)
+  const [goToMode, setGoToMode] = useState<ScreenMode | null>(null)
+  const goToOpen = goToMode !== null
+  const shownMode = useRef<ScreenMode>('go-to')
+  if (goToMode) shownMode.current = goToMode
+  const openScreen = useOpenScreen()
   const [menuFocus, setMenuFocus] = useState(0)
   const [goToActive, setGoToActive] = useState<CommandId>(destinations[0].command)
   useFocusOnOpen(goToOpen, () => setMenuFocus(request => request + 1))
@@ -78,7 +80,7 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
   return <ShortcutScope name={contextTitles.report}>
     <ReservedKeys context='report' />
     <ReportCommands periodOpen={() => setPeriodOpen(true)} hasPeriod={period !== undefined} detail={detail} zeros={zeros}
-      exportCsv={exportPath ? () => void exportCsv() : undefined} goTo={() => setGoToOpen(true)} />
+      exportCsv={exportPath ? () => void exportCsv() : undefined} openList={setGoToMode} />
     <Stack gap={4}>
       <ReportToolbar label={`${title} view`}
         controls={<Inline gap={4} wrap align='center'>
@@ -96,9 +98,9 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <DialogKeys name='Open another report' open={goToOpen}><Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
+    <DialogKeys name={screenModeText[shownMode.current].title} open={goToOpen}><Dialog open={goToOpen} onOpenChange={next => { if (!next) setGoToMode(null) }} title={`${screenModeText[shownMode.current].title} another report`} description={`${screenModeText[shownMode.current].description} ${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
       {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={goToActive} onActiveChange={setGoToActive}
-        groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodKind === 'statement' ? periodSearch(search) : {} } as never) })} />}
+        groups={reportMenuGroups(report => { const how = shownMode.current; setGoToMode(null); void openScreen(how, reportRoutes[report], { companyId: company.id }, periodKind === 'statement' ? periodSearch(search) : {}) })} />}
     </Dialog></DialogKeys>
   </ShortcutScope>
 }
@@ -111,15 +113,16 @@ export function reportMenuGroups(open: (report: ReportRoute) => void): KeyboardM
   }))
 }
 
-function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo }: {
-  periodOpen: () => void; hasPeriod: boolean; detail?: { toggle: () => void }; zeros?: { toggle: () => void }; exportCsv?: () => void; goTo: () => void
+function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, openList }: {
+  periodOpen: () => void; hasPeriod: boolean; detail?: { toggle: () => void }; zeros?: { toggle: () => void }; exportCsv?: () => void; openList: (mode: ScreenMode) => void
 }) {
   useAppCommand('report.period', periodOpen, { enabled: hasPeriod })
   useAppCommand('report.detail', () => detail?.toggle(), { enabled: detail !== undefined })
   useAppCommand('report.zero-lines', () => zeros?.toggle(), { enabled: zeros !== undefined })
   useAppCommand('report.export', () => exportCsv?.(), { enabled: exportCsv !== undefined })
   useAppCommand('report.print', () => window.print())
-  useAppCommand('nav.go-to', goTo)
+  useAppCommand('nav.go-to', () => openList('go-to'))
+  useAppCommand('nav.switch-to', () => openList('switch-to'))
   return null
 }
 

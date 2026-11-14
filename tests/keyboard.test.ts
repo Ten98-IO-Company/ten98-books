@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
-import { ariaKeyShortcuts, commandIds, commands, keepsEscape, type CommandContext, type CommandId } from '../src/lib/commands.ts';
+import { ariaKeyShortcuts, backSource, commandIds, commands, keepsEscape, type CommandContext, type CommandId } from '../src/lib/commands.ts';
 import { browserReservedChords, claimable, claimSplit, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, keymapNames, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 
@@ -231,7 +231,7 @@ test('global keys behave the same from every context and focus target', () => {
     assert.equal(resolve('classic', 'F1', context, target), 'help.keyboard', where);
     assert.equal(resolve('classic', 'F3', context, target), 'company.switch', where);
     assert.equal(resolve('classic', 'Alt+G', context, target), 'nav.go-to', where);
-    assert.equal(resolve('classic', 'Ctrl+G', context, target), 'nav.go-to', where);
+    assert.equal(resolve('classic', 'Ctrl+G', context, target), 'nav.switch-to', where);
     // Ctrl+Q leaves one level: an entry screen through its own cancel (which asks first), everywhere else nav.quit.
     const quit = context[0] === 'entry' ? 'entry.cancel' : 'nav.quit';
     assert.equal(resolve('classic', 'Ctrl+Q', context, target), quit, where);
@@ -261,7 +261,7 @@ test('focus targets: a text field, a lookup, a button, a list row, a report row 
   assert.equal(resolve('classic', 'Enter', ['entry'], 'control'), undefined);
   assert.equal(resolve('classic', 'Ctrl+A', ['entry'], 'control'), 'entry.accept');
   assert.equal(resolve('classic', 'Escape', ['entry'], 'control'), 'entry.cancel');
-  assert.equal(resolve('classic', 'Ctrl+D', ['entry'], 'control'), 'entry.delete');
+  assert.equal(resolve('classic', 'Alt+D', ['entry'], 'control'), 'entry.delete');
   // A focused list row (an option) keeps its arrows and Enter; the list's chords run.
   assert.equal(resolve('classic', 'ArrowDown', ['list'], 'control'), undefined);
   assert.equal(resolve('classic', 'Alt+C', ['list'], 'control'), 'list.create');
@@ -303,9 +303,11 @@ test('classic claims every reserved key in its context, and the keys of a switch
   assert.equal(resolveScreen('classic', 'Ctrl+P', ['entry'], 'text'), 'reserved.global');
   assert.equal(resolveScreen('classic', 'Ctrl+E', ['entry'], 'text'), 'reserved.global');
   assert.equal(resolveScreen('classic', 'Ctrl+H', ['entry'], 'text'), 'reserved.entry');
-  assert.equal(resolveScreen('classic', 'Ctrl+R', ['entry'], 'text'), 'reserved.entry');
+  assert.equal(resolveScreen('classic', 'Alt+R', ['entry'], 'text'), 'reserved.entry');
   // A list: the disputed create and delete candidates and the list settings keys.
-  for (const chord of ['Ctrl+D', 'Ctrl+H', 'F10', 'F5']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), 'reserved.list', chord);
+  for (const chord of ['Ctrl+H', 'F10', 'F5', 'Alt+R', 'Alt+U']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), 'reserved.list', chord);
+  // Ctrl+C and Ctrl+D do nothing on the catalogue's lists and are not reserved here: Ctrl+C simply copies.
+  for (const chord of ['Ctrl+C', 'Ctrl+D']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), undefined, chord);
   // A built-in row: delete is switched off, and Alt+D is still claimed.
   assert.equal(resolveScreen('classic', 'Alt+D', ['list'], 'control', ['list.delete']), 'claim.list.delete');
   assert.equal(resolveScreen('classic', 'Alt+D', ['list'], 'control'), 'list.delete');
@@ -355,12 +357,13 @@ test('a claim never takes the clipboard and editing chords from a text field or 
   // The alter list's search field (a text target in the list context): Ctrl+C is reserved there, yet copies.
   for (const target of ['text', 'multiline'] as const) {
     for (const chord of [...editingKeys, 'Ctrl+A']) assert.equal(resolveScreen('classic', chord, ['list'], target), undefined, `${chord} in a field`);
-    assert.equal(resolveScreen('classic', 'Ctrl+D', ['list'], target), 'reserved.list', 'other reserved keys are still claimed in a field');
+    assert.equal(resolveScreen('classic', 'Ctrl+H', ['list'], target), 'reserved.list', 'other reserved keys are still claimed in a field');
   }
-  // A list row (a non-editable control) with nothing selected: the reserved Ctrl+C is claimed.
-  assert.equal(resolveScreen('classic', 'Ctrl+C', ['list'], 'control'), 'reserved.list.editing');
-  // The same row with text selected on the page: copying works.
-  assert.equal(resolveScreen('classic', 'Ctrl+C', ['list'], 'control', [], true), undefined);
+  // A list row: Ctrl+C is not reserved on lists, so it copies.
+  assert.equal(resolveScreen('classic', 'Ctrl+C', ['list'], 'control'), undefined);
+  // A report row (non-editable) with nothing selected: the reserved column key Ctrl+C is claimed; with a selection it copies.
+  assert.equal(resolveScreen('classic', 'Ctrl+C', ['report'], 'control'), 'reserved.report.editing');
+  assert.equal(resolveScreen('classic', 'Ctrl+C', ['report'], 'control', [], true), undefined);
   // A report row: the reserved column keys Ctrl+C and Ctrl+A are claimed off a field only.
   assert.equal(resolveScreen('classic', 'Ctrl+A', ['report'], 'control'), 'reserved.report.editing');
   assert.equal(resolveScreen('classic', 'Ctrl+A', ['report'], 'text'), undefined);
@@ -372,4 +375,29 @@ test('a claim never takes the clipboard and editing chords from a text field or 
   // The split itself.
   assert.deepEqual(claimSplit(['Ctrl+C', 'Ctrl+D', 'Ctrl+A', 'F5']), { always: ['Ctrl+D', 'F5'], editing: ['Ctrl+C', 'Ctrl+A'] });
   assert.deepEqual(claimSplit(['Ctrl+A', 'Ctrl+Enter'], ['Ctrl+A', 'Ctrl+Enter']), { always: ['Ctrl+A', 'Ctrl+Enter'], editing: [] });
+});
+
+test('go-to stacks and switch-to replaces: where Escape leads from the screen they opened', () => {
+  const dayBook = '/app/c/x/reports/day-book', trial = '/app/c/x/reports/trial-balance';
+  // Alt+G from the day book to the trial balance: Escape there returns to the day book, before the report's own back.
+  const fromDayBook = { from: `${dayBook}?from=2026-01-01&to=2026-01-31`, to: trial };
+  assert.equal(backSource(trial, fromDayBook, true, true), 'go-to');
+  assert.equal(backSource(trial.toUpperCase(), fromDayBook, true, true), 'go-to', 'an address in other letter case is the same screen');
+  // Once the user has moved on (a drill-down), that screen's own back applies again.
+  assert.equal(backSource('/app/c/x/reports/group-summary', fromDayBook, true, true), 'screen');
+  // Ctrl+G leaves no return: the screen goes back its usual way, and switch-to has put the company menu under it.
+  assert.equal(backSource(trial, null, true, true), 'screen');
+  assert.equal(backSource('/app/c/x/masters/chart-of-accounts', null, false, true), 'shell');
+  assert.equal(backSource('/app/c/x', null, false, false), 'none');
+  // Both open the same list, on different keys, in classic.
+  const merged = mergeKeymaps(keymaps.classic);
+  assert.deepEqual([merged['nav.go-to'], merged['nav.switch-to']], [['Alt+G'], ['Ctrl+G']]);
+});
+
+test('row and record actions on the bottom bar are Alt chords, bar letters, accept and quit are Ctrl chords', () => {
+  const merged = mergeKeymaps(keymaps.classic);
+  for (const id of ['list.create', 'list.delete', 'entry.create-master', 'entry.delete'] as const) assert.match(merged[id][0], /^Alt\+/, id);
+  for (const id of ['entry.accept', 'nav.quit'] as const) assert.match(merged[id][0], /^Ctrl\+/, id);
+  const rowActions = classicReserved.filter(entry => /line|row:/i.test(entry.purpose)).flatMap(entry => entry.keys).filter(key => key !== 'Space');
+  assert.ok(rowActions.length >= 6 && rowActions.every(key => key.startsWith('Alt+')), rowActions.join());
 });

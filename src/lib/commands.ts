@@ -35,8 +35,10 @@ export const commands = {
   // nav.back off to leave Escape to the field (keepsEscape).
   'nav.quit': { title: 'Leave this screen', context: 'global' },
   'company.switch': { title: 'Change company', context: 'global' },
-  // A report screen registers its own go-to in its scope (the period carries over); elsewhere the shell's dialog opens.
-  'nav.go-to': { title: 'Go to another screen or report', context: 'global' },
+  // Two ways to open a screen from one list (the shell's dialog; a report registers its own, so the period carries over).
+  // Go-to stacks: Escape on the opened screen returns here. Switch-to replaces: Escape there ends at the company menu.
+  'nav.go-to': { title: 'Go to a screen (Escape comes back)', context: 'global' },
+  'nav.switch-to': { title: 'Switch to a screen (Escape goes to the menu)', context: 'global' },
 
   'menu.next': { title: 'Highlight the next item', context: 'company-home', bar: false },
   'menu.previous': { title: 'Highlight the previous item', context: 'company-home', bar: false },
@@ -120,6 +122,20 @@ export function barCommands<T extends { id: string; enabled: boolean; keys: read
   })
   const rank = (command: T) => commandContexts.indexOf(commandOf(command.id as CommandId).context)
   return eligible.filter(command => !eligible.some(other => other !== command && rank(other) > rank(command) && other.keys.some(key => command.keys.includes(key))))
+}
+
+/** The screen a go-to opened (`to`, a path) and the address it was opened from (`from`). */
+export type GoToReturn = { readonly from: string; readonly to: string }
+
+/**
+ * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take: on the screen a go-to opened, back to where the go-to was
+ * opened from (it stacked); otherwise the screen's own back (a report's drill-down level), else the shell's (the
+ * company menu). A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes
+ * back the usual way, and that ends at the menu.
+ */
+export function backSource(path: string, goTo: GoToReturn | null, screen: boolean, shell: boolean): 'go-to' | 'screen' | 'shell' | 'none' {
+  if (goTo && goTo.to.toLowerCase() === path.toLowerCase()) return 'go-to'
+  return screen ? 'screen' : shell ? 'shell' : 'none'
 }
 
 /** The `aria-keyshortcuts` value for registry chords: space-separated, with Ctrl written Control as ARIA requires. */
