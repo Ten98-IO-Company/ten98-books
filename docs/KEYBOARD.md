@@ -47,6 +47,8 @@ Intended overlaps: Escape and (classic) Ctrl+Q on entry and list screens are the
 | `home.ledger` | Ledger | Company menu | `L` | `L` |
 | `home.cost-centres` | Cost categories and centres | Company menu | `E` | `E` |
 | `report.open.group-summary` | Group summary | Company menu | `G` | `G` |
+| `report.open.cost-category-summary` | Cost category summary | Company menu | `Y` | `Y` |
+| `report.open.cost-centre-breakup` | Cost centre break-up | Company menu | `U` | `U` |
 | `list.next` | Highlight the next row | Lists | `ArrowDown` | `ArrowDown` |
 | `list.previous` | Highlight the previous row | Lists | `ArrowUp` | `ArrowUp` |
 | `list.first` | Highlight the first row | Lists | `Home` | `Home` |
@@ -140,6 +142,8 @@ How the catalogue's button bars map to keys, as the analyst established by press
 | `report.export` | Reports | `Ctrl+E` | same |  |
 | `report.print` | Reports | `Ctrl+P` | same |  |
 | `report.open.group-summary` | Company menu | `G` | ours |  |
+| `report.open.cost-category-summary` | Company menu | `Y` | ours | The catalogue reaches its cost reports through go-to by name, with no menu letter recorded. |
+| `report.open.cost-centre-breakup` | Company menu | `U` | ours | As the cost category summary. Opens a list of centres to choose from, where the catalogue asks for the centre first. |
 | `list.next` | Lists | `ArrowDown` | same | The catalogue's lists also jump to the next row starting with a typed letter; that is not built here. |
 | `list.previous` | Lists | `ArrowUp` | same |  |
 | `list.first` | Lists | `Home` | same |  |
@@ -179,7 +183,7 @@ In classic every reserved key with Ctrl, Alt or Meta, and every reserved functio
 | Entry screens | Take a line out of the entry and put it back | `Alt+R`, `Alt+U` |  |
 | Entry screens | Mark the entry as dated in the future | `Alt+T` | `Ctrl+T`: Ctrl+T opens a new browser tab; a page never receives it. |
 | Entry screens | Close an order before everything on it has been delivered | `Alt+L` | `Ctrl+W`: Ctrl+W closes the browser tab; a page never receives it. |
-| Reports | Other ways to see the report: by group, by month, at another valuation, by stock group, with profit, with orders | `F4`, `F5`, `F6`, `F7`, `F8`, `F9` |  |
+| Reports | Other ways to see the report: by group, by month, at another valuation, by stock group, with profit, with orders; on the cost reports another centre or group, and group-wise or ledger-wise | `F4`, `F5`, `F6`, `F7`, `F8`, `F9` |  |
 | Reports | Valuation settings, other layouts, exception lists, saved layouts and filters | `Ctrl+B`, `Ctrl+H`, `Ctrl+J`, `Ctrl+L`, `Ctrl+F` |  |
 | Reports | Add, change and remove comparison columns | `Ctrl+C`, `Ctrl+A`, `Ctrl+D` |  |
 | Reports | Add comparison columns automatically | `Alt+J` | `Ctrl+N`: Ctrl+N opens a new browser window; a page never receives it. |
@@ -226,11 +230,13 @@ Screens for the company's cost categories and cost centres (rules and routes: [L
 - **The ledger form** asks "Takes cost centres" after the group and before the opening balance (the observation notes do not record the exact position; this is the place the group-dependent ledger settings have). Left alone on a new ledger it follows the group, as the server does: income and expense groups take cost centres, others do not; the field shows the value in force and says what the default is for the chosen group, and when the company has the feature off that vouchers do not ask yet. The profit and loss ledger takes none, and the field is locked there. An altered ledger always shows and sends its own value. The ledger history lists a change of the setting.
 - **Typed answers.** On every lookup of the masters forms (the Yes/No ones, groups, categories, centres, natures, Dr and Cr), typing a choice (`yes`, `no`, the start of a name) and pressing Enter picks it and moves on, and so does Enter on text that names the choice already held, so Enter is never needed twice. A value the combobox reports is taken whenever it is an enabled option's, including a picked row whose value equals what was typed (type `no`, `ArrowDown`, Enter, or a click on the row, picks No). The decisions are pure functions in `src/lib/lookup-entry.ts`, applied by `useEntryLookups`, which the group, ledger, cost category and cost centre forms all use.
 - **Viewers** see the list and every form read-only with Back focused, no Create, Delete, Move or Switch, and the server's refusal is worded as for any write if one is forced.
-- **Not here.** Cost allocation on voucher lines (the voucher entry screen), the cost reports, and creating a category from inside the lookup of the centre form (`entry.create-master` is registered on every entry screen switched off: there is nothing to create in place yet, and classic keeps its chord, `Alt+C`, from the browser).
+- **Not here.** Cost allocation on voucher lines (the voucher entry screen), and creating a category from inside the lookup of the centre form (`entry.create-master` is registered on every entry screen switched off: there is nothing to create in place yet, and classic keeps its chord, `Alt+C`, from the browser).
 
 ## Reports
 
 Report screens (`src/routes/app/c.$companyId.reports*.tsx`, with their frame in `src/components/reports/`) mount the `report` context. The highlighted line is the table's current row and holds focus, so the table's own Up, Down, Home, End and Enter act on the focused row, and the commands do the same from anywhere else on the page. Escape stays `nav.back`: on a report it goes back one drill-down level (`useBackOverride` in `KeyboardShell.tsx`) and highlights the line it left from, and from a statement it returns to the company menu. Go to (`Alt+G`) and, in classic, switch to (`Ctrl+G`) open the report's own list of reports, a `KeyboardMenu`, so the company-menu letters open a report there and `G` the group summary; go to stacks and switch to replaces, as everywhere. In the period dialog the date fields keep the arrow keys, Enter or classic `Ctrl+A` applies the period, and Escape or classic `Ctrl+Q` closes the dialog without leaving the report. In classic, `Ctrl+E` exports and `Ctrl+P` prints the report on screen, taking those keys from the browser while a report is open.
+
+**Cost reports.** The cost category summary (menu letter `Y`) and the cost centre break-up (`U`) are on the company menu, in the go-to and switch-to lists and in the report's own list, under Cost centres; the catalogue opens them through go-to by name, which our list does by letter. They use the keys of every report: arrows, Enter to drill, Escape back, the period (`F2` in classic, `Alt+P` in web-safe), export (`Ctrl+E`, `Alt+O`) and print (`Ctrl+P`, `Alt+I`). Enter on a centre of the summary opens that centre's break-up (the catalogue opens a centre summary there, which is not built); in the break-up, Enter on a sub-centre opens its break-up and on a ledger the ledger's vouchers for the period. Opened without a centre, the break-up lists the centres: typing narrows the list and Enter opens the highlighted one. The catalogue's other keys on these reports are reserved in classic and not built: `F4` another centre (summary) or group (break-up), `F5` group-wise or ledger-wise, `F6` the monthly view, and `F12` the report settings. When the company has cost centres switched off, both screens say so with the masters screen's notice and still show what was saved. Viewers read them like every report.
 
 ## Rules the tests enforce
 

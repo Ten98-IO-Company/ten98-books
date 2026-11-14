@@ -9,11 +9,11 @@ import { readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
  * survives a reload and can be linked: the period (`from`, `to`), the view (`detail`, `zeros`), the subject (`group`,
- * `ledger`, `voucher`) and the highlighted line (`hl`, written into the level being left when drilling down, so going
+ * `ledger`, `voucher`, `centre`) and the highlighted line (`hl`, written into the level being left when drilling down, so going
  * back restores it).
  */
 export type ReportSearch = {
-  from?: string; to?: string; detail?: boolean; zeros?: boolean; hl?: string; group?: string; ledger?: string; voucher?: string
+  from?: string; to?: string; detail?: boolean; zeros?: boolean; hl?: string; group?: string; ledger?: string; voucher?: string; centre?: string
   /** A register's earlier page cursors, oldest first, joined by dots (base64url cursors contain none). */
   pages?: string
 }
@@ -29,7 +29,7 @@ export function reportSearch(search: Record<string, unknown>): ReportSearch {
     from: date(search.from), to: date(search.to),
     detail: search.detail === true ? true : undefined, zeros: search.zeros === true ? true : undefined,
     hl: typeof search.hl === 'string' && key.test(search.hl) ? search.hl : undefined,
-    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher),
+    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher), centre: id(search.centre),
     pages: writeCursorStack(readCursorStack(search.pages)),
   }
   return Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined)) as ReportSearch
@@ -120,6 +120,8 @@ export const reportRoutes = {
   'ledger-monthly': '/app/c/$companyId/reports/ledger-monthly',
   'ledger-vouchers': '/app/c/$companyId/reports/ledger-vouchers',
   voucher: '/app/c/$companyId/reports/voucher',
+  'cost-category-summary': '/app/c/$companyId/reports/cost-category-summary',
+  'cost-centre-breakup': '/app/c/$companyId/reports/cost-centre-breakup',
 } as const
 export type ReportRoute = keyof typeof reportRoutes
 export type ReportLink = { report: ReportRoute; search: ReportSearch }

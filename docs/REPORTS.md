@@ -60,6 +60,8 @@ Rows count when their voucher does (regular and undeleted; a post-dated voucher 
 
 Not built yet, all observed: the centre summary under a category (which lists only the sub-centres in that category, so a parent shows its own amount there) and its monthly summary; the break-up's group-wise view (this one lists ledgers); the cost break-up of a ledger and of a group; the "show opening balance" report option (off by default in the reference; with it on, centres of categories used on income and expense ledgers have no opening, and those used on balance-sheet ledgers carry theirs). There is no cost-centre profit and loss in the reference.
 
+**Screens.** `/reports/cost-category-summary` and `/reports/cost-centre-breakup?centre=<id>` (`src/routes/app/c.$companyId.reports_.cost-*.tsx`), on the report frame of every other report: the period, CSV export, print, the drill trail and Escape back, read-only for viewers. The summary lists each category in bold with its top-level centres below it, with opening, debit, credit and closing; Enter on a centre opens its break-up. The break-up names the centre and its category, lists the sub-centres and then the ledgers with the server's total, and Enter on a sub-centre opens its break-up and on a ledger that ledger's vouchers for the period. Opened without a centre (from the menu), the break-up lists the company's centres to choose from. When the company has cost centres switched off, both screens show the masters screen's notice and still show the saved amounts, which keep counting. Keys: [KEYBOARD.md](KEYBOARD.md#reports). Two drill-downs differ from the reference, which opens a centre summary from the category summary and a ledger's monthly summary restricted to the centre from the break-up: the centre summary is not built, and **the ledger vouchers report has no centre filter** (the server offers none), so a ledger opened from a break-up shows all its vouchers for the period, every centre's and unallocated ones alike, and its totals are the ledger's, not the centre's. A centre filter on the ledger reports is a server change still to come.
+
 ## Drill-down and screens
 
 Enter goes down one level and Escape goes back one level, to the line it left from (D-05, D-09: drill-down is by route):
@@ -70,6 +72,7 @@ Enter goes down one level and Escape goes back one level, to the line it left fr
 - group summary → a sub-group's summary or a ledger's monthly summary
 - monthly summary → that month's ledger vouchers. The month is the vouchers' period, so for an income or expense ledger a month after the first opens at zero and ends on that month's movement, not on the summary's running closing. The profit and loss ledger is the other side of the same rule: a month after the first opens with the income and expense result carried up to that month (for example a month whose summary line closes at zero, from the year start, shows January's result in its vouchers' opening and closing). We keep the month a period of its own rather than giving the summary a per-month carried figure, because the summary is one period and its months add up to it, as every other ledger's do
 - ledger vouchers and day book → the voucher, read-only
+- cost category summary → a centre's break-up; break-up → a sub-centre's break-up, or a ledger's vouchers (not filtered by the centre, see above)
 
 Going back follows the path taken in this tab and restores the highlighted line (`hl` in the address of the level left) and, on a register (day book, ledger vouchers), its page: the cursors of the pages before it are in the address too (`pages`), so a reload or a link keeps the page as well. A level reached any other way (a link, a reload) goes back to its logical parent: a group to its parent group or its statement, a ledger to its group, a month's vouchers to the monthly summary, a voucher to its day.
 
@@ -84,7 +87,7 @@ Measured on a generated company of 52,784 voucher lines (12,600 four-line vouche
 ## Not in M1
 
 - Stock: no opening or closing stock and no stock valuation in profit and loss or the balance sheet; no inventory columns in the day book.
-- Cost centre reports beyond the two above, foreign-currency bills, interest on bills, multi-currency columns, tax reports, budgets; bill and cost centre reports have no screens yet.
+- Cost centre reports beyond the two above, foreign-currency bills, interest on bills, multi-currency columns, tax reports, budgets; bill reports have no screens yet.
 - Comparative and additional columns (previous period, other periods, percentages), monthly views of a group, a cash-flow or funds-flow statement, ratio analysis.
 - Configurable layouts (vertical or horizontal statements, narrations in the day book, filters, saved views); the day book filter by voucher type.
 - Editing from a report: the voucher view is read-only.

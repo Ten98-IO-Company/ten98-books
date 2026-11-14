@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { costBreakupKey, costSummaryLines, defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -79,4 +79,19 @@ test('the cursor stack of a register round-trips through the address; anything e
   for (const text of [undefined, '', 'a..b', '.a', 'a.', 'a b', 'a/b', 7, ['a'], 'x'.repeat(121), Array.from({ length: 201 }, () => 'a').join('.')]) {
     assert.deepEqual(readCursorStack(text), [], JSON.stringify(text)?.slice(0, 40));
   }
+});
+
+test('the cost category summary becomes table lines: each category, then its top-level centres one level in, keys kept apart', () => {
+  const figures = (closing: string) => ({ opening: '0.00', debit: closing, credit: '0.00', closing });
+  const lines = costSummaryLines({ from: '2026-01-01', to: '2026-01-31', categories: [
+    { categoryId: 'a1', name: 'Area', ...figures('70.00'), centres: [{ costCentreId: 'c1', name: 'North', ...figures('50.00') }, { costCentreId: 'c2', name: 'South', ...figures('20.00') }] },
+    { categoryId: 'b1', name: 'Projects', ...figures('5.00'), centres: [{ costCentreId: 'c3', name: 'Roof', ...figures('5.00') }] },
+  ] });
+  assert.deepEqual(lines.map(line => [line.key, line.kind, line.depth, line.name, line.closing]), [
+    ['k:a1', 'category', 0, 'Area', '70.00'], ['c:c1', 'centre', 1, 'North', '50.00'], ['c:c2', 'centre', 1, 'South', '20.00'],
+    ['k:b1', 'category', 0, 'Projects', '5.00'], ['c:c3', 'centre', 1, 'Roof', '5.00'],
+  ]);
+  assert.deepEqual(costSummaryLines({ from: '2026-01-01', to: '2026-01-31', categories: [] }), []);
+  // A sub-centre and a ledger with the same id stay two lines.
+  assert.notEqual(costBreakupKey({ kind: 'centre', id: 'x' }), costBreakupKey({ kind: 'ledger', id: 'x' }));
 });

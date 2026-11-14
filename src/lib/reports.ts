@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { financialYearOf } from './company.ts';
 import { calendarDate, type Nature, type Side, type VoucherKind, type VoucherStatus } from './ledger.ts';
+import type { CostCategorySummary, CostFigures } from './cost-centres.ts';
+import type { Wire } from './money.ts';
 
 /**
  * The M1 reports' shared vocabulary: query schemas (zod at the API boundary), the shapes the server returns and pure
@@ -212,3 +214,21 @@ export const popCursor = (stack: readonly string[]): readonly string[] => stack.
 const cursorList = /^[A-Za-z0-9_-]{1,120}(\.[A-Za-z0-9_-]{1,120}){0,199}$/;
 export const readCursorStack = (text: unknown): readonly string[] => typeof text === 'string' && cursorList.test(text) ? text.split('.') : [];
 export const writeCursorStack = (stack: readonly string[]): string | undefined => stack.length ? stack.join('.') : undefined;
+
+/** A line of the cost category summary screen: each category with its figures, then its top-level centres one level in. */
+export type CostSummaryLine = {
+  key: string; kind: 'category' | 'centre'; id: string; name: string; depth: 0 | 1;
+  opening: string; debit: string; credit: string; closing: string;
+};
+
+/** The summary's categories and centres as table lines in the server's order, keyed `k:` (category) and `c:` (centre). */
+export function costSummaryLines(report: Wire<CostCategorySummary>): CostSummaryLine[] {
+  const figures = ({ opening, debit, credit, closing }: Wire<CostFigures>) => ({ opening, debit, credit, closing });
+  return report.categories.flatMap((category): CostSummaryLine[] => [
+    { key: `k:${category.categoryId}`, kind: 'category', id: category.categoryId, name: category.name, depth: 0, ...figures(category) },
+    ...category.centres.map((centre): CostSummaryLine => ({ key: `c:${centre.costCentreId}`, kind: 'centre', id: centre.costCentreId, name: centre.name, depth: 1, ...figures(centre) })),
+  ]);
+}
+
+/** The table key of a break-up line: `c:` for a sub-centre, `l:` for a ledger (ids alone could be equal across the two). */
+export const costBreakupKey = (row: { kind: 'centre' | 'ledger'; id: string }) => `${row.kind === 'centre' ? 'c' : 'l'}:${row.id}`;

@@ -15,6 +15,8 @@ const destinations: readonly { group: string; command: CommandId; label: string;
   { group: 'Statements', command: 'report.open.group-summary', label: 'Group summary', report: 'group-summary' },
   { group: 'Registers', command: 'home.day-book', label: 'Day book', report: 'day-book' },
   { group: 'Registers', command: 'home.ledger', label: 'Ledger', report: 'ledger' },
+  { group: 'Cost centres', command: 'report.open.cost-category-summary', label: 'Cost category summary', report: 'cost-category-summary' },
+  { group: 'Cost centres', command: 'report.open.cost-centre-breakup', label: 'Cost centre break-up', report: 'cost-centre-breakup' },
 ]
 
 export type PeriodControl =
