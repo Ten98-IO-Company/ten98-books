@@ -5,7 +5,7 @@ Invented companies for demonstration and for checking ten98-books against anothe
 Two commands read this folder (run from the repository root, against the database in `.env`, after the user has been created in the app):
 
 ```bash
-pnpm seed:demo -- --owner <email> [--company <slug> | --all] [--masters-only] --yes
+pnpm seed:demo -- --owner <email> [--company <slug> | --all] [--masters-only [--as "<company name>"]] --yes
 pnpm demo:compare -- --owner <email> [--company <slug> | --all]
 ```
 
@@ -22,6 +22,16 @@ For the named user, per company folder:
 **Bills.** The seeder sends the bill keys a dataset keeps under `extras` through the ledger module's own posting path (see "Bill keys" below): a ledger's `billWise` flag, default credit days and opening bills with the ledger when it is created, and a voucher line's bill rows with the voucher. The ledger module's answers are reported: the summary counts the bill rows posted and lists the `warnings` the postings raised (`bill_attached`, `bill_over_settled`, ...) by code, each naming the voucher and bill. Bills are base currency only, so a row on a line in a foreign currency is left out and counted, and so is an against row (a settlement) naming a bill that no posted row creates (the bill belongs to a foreign-currency line, or to a voucher the dataset carries without lines, or its voucher is optional or cancelled); the line itself is posted, its amount lands on account, and the summary says how many rows were left out and why. Bills are created when a company is first seeded. A company seeded before bill rows were sent holds its vouchers without them, so the request of a voucher that now carries bill rows no longer matches what was stored; the seeder then replays that voucher as it was posted (the key proves it is this dataset's voucher), counts it as present, lists it in the summary as kept without bill rows, and goes on. Any other difference under the same key (a changed amount, date or line) still stops the seed. Seed into a new company or database to get the bills of such vouchers.
 
 **Masters only.** `--masters-only` runs steps 1 and 2 only: nothing is posted, the summary says "vouchers: not posted (masters only)", and a second run changes nothing. The company is found by its creation key, so a person may enter vouchers against the masters, and a later full `seed:demo` (without the flag) finds the same company, posts the dataset's vouchers beside theirs and sets no opening bill twice.
+
+**Named copies (`--as`).** A dataset has one company per owner, so a second copy of its masters needs a name: `--masters-only --as "<company name>"` creates (or finds again) a separate masters-only company with that name, with the dataset's settings, groups, ledgers and openings, for the same owner. It exists for walks that must start from identical masters, for example one copy of the starter masters per keymap walk:
+
+```bash
+pnpm seed:demo -- --owner <email> --company starter-trading --masters-only --as "Keymap walk A" --yes
+pnpm seed:demo -- --owner <email> --company starter-trading --masters-only --as "Keymap walk B" --yes
+pnpm seed:demo -- --owner <email> --company starter-trading --yes   # the dataset's own company, with its vouchers
+```
+
+The copy is found by its own creation key (the dataset, the owner and a digest of the trimmed name, `demo:<slug>:<owner id>:as:<digest>`), so running the same command again changes nothing, a different name is another copy, and the key of the dataset's own company is never touched: the seed without `--as` still finds or creates that company and no other. A copy is found by that key only, so renaming it afterwards keeps it found by the same `--as` name. `--as` is refused without `--masters-only` (a copy never gets vouchers from the seeder), with `--all` and without `--company` (it names one copy of one dataset). The name is checked as company creation checks a name (1 to 120 characters, no control characters, surrounding spaces trimmed) and may not be the dataset's own company name, in any letter case, since that company is the one without `--as`. `demo:compare` reads the dataset's own company only and ignores named copies: with a copy alone it reports that the dataset has not been seeded, and it never compares a copy's masters.
 
 What it cannot post is skipped and counted, never dropped silently. The summary lists: vouchers of a type ten98-books does not have (`not yet supported: 3 sales order, 4 stock journal, ...`); vouchers of a supported type that have no lines (cancelled ones, or ones marked `extras.noAccountingEffect`: a voucher needs two lines here, so they cannot be represented yet); vouchers the ledger's own posting rules refuse (for example a payment that credits no cash or bank ledger), with the ledger's reason, because that is a difference from the dataset; and `items.json` (stock is not modelled), with the opening stock value. Any other refusal stops the seed.
 

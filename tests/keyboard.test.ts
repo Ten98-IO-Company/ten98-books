@@ -388,9 +388,12 @@ test('rule 3: the habit chords are claimed on every list, report and entry scree
 });
 
 test('rule 4: entry screens claim like lists and reports, F10 is claimed on reports, Alt+D on the alter list', () => {
-  // A masters form registers no voucher-type or create-in-place command.
-  const notOnMastersForms = commandIds.filter(id => id.startsWith('entry.voucher.') || id === 'entry.create-master');
+  // A masters form registers no voucher-type command; create-in-place is registered switched off (useEntryCommands), a claim.
+  const notOnMastersForms = commandIds.filter(id => id.startsWith('entry.voucher.'));
   for (const chord of ['F5', 'Ctrl+B', 'Ctrl+J', 'Alt+D']) assert.equal(resolveScreen('classic', chord, ['entry'], 'text', [], [...notOnMastersForms, 'entry.delete']), 'reserved.global', `${chord} on a form without delete`);
+  // Create-in-place is switched off on every masters form, and classic still keeps its chord from the browser.
+  assert.equal(resolveScreen('classic', 'Alt+C', ['entry'], 'text', ['entry.create-master']), 'claim.entry.create-master');
+  assert.equal(resolveScreen('web-safe', 'Alt+C', ['entry'], 'text', ['entry.create-master']), undefined);
   // A form that can delete runs its own Alt+D; one whose delete is off claims it.
   assert.equal(resolveScreen('classic', 'Alt+D', ['entry'], 'text'), 'entry.delete');
   assert.equal(resolveScreen('classic', 'Alt+D', ['entry'], 'text', ['entry.delete']), 'claim.entry.delete');

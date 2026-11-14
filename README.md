@@ -9,7 +9,7 @@ Web accounting for GCC businesses on the Ten98 stack: double-entry books, invent
 - [Keyboard commands](docs/KEYBOARD.md)
 - [Ledger core](docs/LEDGER.md): data model, posting rules, numbering and the HTTP API of the double-entry books
 - [Reports](docs/REPORTS.md): day book, trial balance, profit and loss, balance sheet and the drill-down to a voucher, with CSV export
-- Masters screens: the chart of accounts, create and alter group and ledger, and their history, under Masters in the company menu (keys in [docs/KEYBOARD.md](docs/KEYBOARD.md))
+- Masters screens: the chart of accounts, create and alter group and ledger, cost categories and cost centres (list, create, alter, move, delete, the company's cost centres switch), and their history, under Masters in the company menu (keys in [docs/KEYBOARD.md](docs/KEYBOARD.md))
 
 `main` is production, `dev` is staging; feature branches start from `dev`.
 
@@ -39,6 +39,6 @@ pnpm seed:demo -- --owner you@example.com --all --yes
 pnpm demo:compare -- --owner you@example.com --all
 ```
 
-`seed:demo` creates each company for that user (who becomes its owner) through the same functions the app uses, then its groups, ledgers with opening balances and bill settings, and vouchers with their bill rows; a second run changes nothing and reports "already present". With `--masters-only` it creates the company, groups and ledgers and no vouchers, for entering vouchers by hand against the same masters (a later full seed adds the vouchers). `demo:compare` reads the seeded company's figures through the report modules and prints expected, actual and difference per line (exact to the minor unit) in three groups (matches, differs, not yet comparable with the reason); it exits with 1 when a comparable line differs. Use `--company <slug>` instead of `--all` for one dataset.
+`seed:demo` creates each company for that user (who becomes its owner) through the same functions the app uses, then its groups, ledgers with opening balances and bill settings, and vouchers with their bill rows; a second run changes nothing and reports "already present". With `--masters-only` it creates the company, groups and ledgers and no vouchers, for entering vouchers by hand against the same masters (a later full seed adds the vouchers); with `--as "<company name>"` as well, it makes a separately named masters-only copy, so one owner can hold several copies of a dataset's masters. `demo:compare` reads the seeded company's figures through the report modules and prints expected, actual and difference per line (exact to the minor unit) in three groups (matches, differs, not yet comparable with the reason); it exits with 1 when a comparable line differs. Use `--company <slug>` instead of `--all` for one dataset.
 
 MIT licensed; see [LICENSE](LICENSE).

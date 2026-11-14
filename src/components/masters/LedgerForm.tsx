@@ -5,22 +5,32 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { api } from '../../lib/api'
 import { useCompany } from '../../lib/app-context'
+import { costCentresDefault, effectiveCostSetting, withCostSetting, type CostSettingAction, type WithCostSetting } from '../../lib/cost-centre-forms'
+import { yesNo } from '../../lib/lookup-entry'
 import type { Side, TrialBalance } from '../../lib/ledger'
 import {
   amountExample, displayAmount, effectiveSide, emptyLedgerForm, groupChoices, groupPath, isolate, ledgerDeleteReason, ledgerFormOf, ledgerFormReducer, ledgerGroupReason,
-  ledgerPayload, natureSingular, openingLocked, plainAmount, resolveLookup, sideTitles, validateLedgerForm, type Choice, type LedgerField, type LedgerFormAction, type LedgerFormValues, type LedgerRow,
+  ledgerPayload, natureSingular, openingLocked, plainAmount, sideTitles, validateLedgerForm, type Choice, type LedgerField, type LedgerFormAction, type LedgerFormValues, type LedgerRow,
 } from '../../lib/masters'
 import type { Wire } from '../../lib/money'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
+import { EntryScope, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import type { MasterFormProps } from './GroupForm'
 import { LookupField } from './LookupField'
 import { useCanWrite } from './useCanWrite'
+import { useCostCentresEnabled } from './useCostData'
+import { useEntryLookups, type LookupSpec } from './useEntryLookups'
 
 const sideChoices: Choice[] = [{ value: 'Dr', label: `Dr · ${sideTitles.Dr}` }, { value: 'Cr', label: `Cr · ${sideTitles.Cr}` }]
 
-type LookupName = 'groupId' | 'side'
-const lookupOrder: readonly LookupName[] = ['groupId', 'side']
+type LookupName = 'groupId' | 'costCentres' | 'side'
+const lookupOrder: readonly LookupName[] = ['groupId', 'costCentres', 'side']
+
+/** The form's values with the cost centres setting, which sits beside the group (after it, before the opening balance). */
+type Values = WithCostSetting<LedgerFormValues>
+type Action = LedgerFormAction | CostSettingAction
+const reduce = withCostSetting<LedgerFormValues, LedgerFormAction>(ledgerFormReducer)
+const costChoices: Choice[] = [...yesNo]
 
 /** Create ledger and alter ledger: the group, an opening balance with its side, and a running total of the openings. */
 export function LedgerForm(props: MasterFormProps<LedgerRow>) {
@@ -54,9 +64,10 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   // The screens that render this form wait for the role, so it is known here; anything but a writer reads only.
   const readOnly = !useCanWrite()
   const form = useRef<HTMLFormElement>(null)
-  const [values, dispatch] = useReducer(ledgerFormReducer, undefined, () => existing ? ledgerFormOf(existing) : emptyLedgerForm(initialGroupId ?? ''))
+  const [values, dispatch] = useReducer(reduce, undefined, (): Values => existing ? { ...ledgerFormOf(existing), costCentres: existing.costCentres } : { ...emptyLedgerForm(initialGroupId ?? ''), costCentres: null })
+  const costCentresOn = useCostCentresEnabled(company.id)
   const initial = useRef(values)
-  const [errors, setErrors] = useState<Partial<Record<LedgerField, string>>>({})
+  const [errors, setErrors] = useState<Partial<Record<LedgerField | 'costCentres', string>>>({})
   const [saved, setSaved] = useState('')
   const [confirming, setConfirming] = useState(false)
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
@@ -86,56 +97,36 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
-  const lookups: Record<LookupName, { options: Choice[]; current: (from: LedgerFormValues) => string; actions: (value: string) => LedgerFormAction[]; blank: string }> = {
+  const natureOf = (from: Values) => groups.find(item => item.id === from.groupId)?.nature
+  const lookups: Record<LookupName, LookupSpec<Values, Action>> = {
     groupId: { options: groupOptions, current: from => from.groupId, actions: value => [{ type: 'set', field: 'groupId', value }], blank: 'Choose the group this ledger belongs to.' },
+    costCentres: { options: costChoices, current: from => effectiveCostSetting(from.costCentres, natureOf(from)) ? 'yes' : 'no', actions: value => [{ type: 'costCentres', value: value === 'yes' }], blank: 'Choose Yes or No.' },
     side: { options: sideChoices, current: from => effectiveSide(from, groups), actions: value => [{ type: 'side', value: value as Side }], blank: 'Choose Dr or Cr.' },
   }
 
-  /** Applies what was typed in one lookup to `from`: its single matching choice, or an error on that field (null). */
-  function settle(field: LookupName, text: string, from: LedgerFormValues): LedgerFormValues | null {
-    const lookup = lookups[field]
-    const result = resolveLookup(lookup.options, text, lookup.current(from))
-    const error = 'error' in result ? result.error : result.value === '' ? lookup.blank : ''
-    if (error) { setErrors(previous => ({ ...previous, [field]: error })); return null }
-    setErrors(previous => ({ ...previous, [field]: undefined }))
-    if ('error' in result || result.value === lookup.current(from)) return from
-    let next = from
-    for (const action of lookup.actions(result.value)) { next = ledgerFormReducer(next, action); dispatch(action) }
-    return next
-  }
-
-  /** Typed lookup text with no row highlighted, on Enter or the accept chord: pick the one choice it names or show the error here. */
-  function typedEnter(field: LookupName, text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
-    const lookup = lookups[field]
-    const result = resolveLookup(lookup.options, text, lookup.current(values))
-    if ('value' in result && result.value === lookup.current(values)) return 'unchanged'
-    if (!settle(field, text, values)) return 'error'
-    // On Enter a pick moves on, as after a highlighted row, once the new value is on screen.
-    if (advance) window.setTimeout(() => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) }, 0)
-    return 'picked'
-  }
+  const entryLookups = useEntryLookups({
+    form, values, reduce, dispatch, specs: lookups, order: lookupOrder,
+    // The profit and loss ledger has no group and takes no cost centres: those lookups are not asked.
+    shown: field => !((field === 'groupId' || field === 'costCentres') && outsideGroups), setErrors,
+    advance: field => { const next = nextEntryField(form.current, field); if (next === 'confirm') askToSave(); else focusEntryField(form.current, next) },
+  })
 
   /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
-  function prepare(): LedgerFormValues | null {
-    let next = values
-    for (const field of lookupOrder) {
-      const text = entryText(form.current, field)
-      if (text === null || (field === 'groupId' && outsideGroups)) continue
-      const settled = settle(field, text, next)
-      if (!settled) { focusEntryField(form.current, field); return null }
-      next = settled
-    }
-    const found = validateLedgerForm(next, exponent, groupIds, outsideGroups)
+  function prepare(): Values | null {
+    const settled = entryLookups.settleAll()
+    if (!settled) return null
+    const found = validateLedgerForm(settled, exponent, groupIds, outsideGroups)
     setErrors(found)
     if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return null }
-    return next
+    return settled
   }
 
   async function save() {
     if (readOnly) return
     const ready = prepare()
     if (!ready) return
-    const body = ledgerPayload(ready, groups, exponent, existing?.revision)
+    // Left alone on a new ledger, the setting follows the group on the server; the profit and loss ledger takes none.
+    const body = { ...ledgerPayload(ready, groups, exponent, existing?.revision), ...ready.costCentres !== null && !outsideGroups ? { costCentres: ready.costCentres } : {} }
     const result = await run(() => api<{ ledger: LedgerRow }>(existing ? `/api/companies/${company.id}/ledgers/${existing.id}` : `/api/companies/${company.id}/ledgers`, { method: 'POST', body }))
     if (!result) return
     const done = result.ledger
@@ -174,18 +165,21 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
 
   useEntryCommands({
     form, readOnly,
-    onLeaveField: (name, text) => name in lookups ? settle(name as LookupName, text, values) !== null : true,
+    onLeaveField: (name, text) => entryLookups.isLookup(name) ? entryLookups.settle(name, text, values) !== null : true,
     onLastField: askToSave, onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/ledger/$ledgerId', params: { companyId: company.id, ledgerId: existing.id } }) : undefined,
   })
 
   const set = (field: 'name' | 'secondLanguageName' | 'amount') => (event: { target: { value: string } }) => dispatch({ type: 'set', field, value: event.target.value })
-  const choose = (field: LookupName) => (value: string) => { for (const action of lookups[field].actions(value)) dispatch(action); setErrors(previous => ({ ...previous, [field]: undefined })) }
+  const choose = (field: LookupName) => (value: string) => { for (const action of lookups[field].actions(value, values)) dispatch(action); setErrors(previous => ({ ...previous, [field]: undefined })) }
   const lockNote = `Opening balances are locked: the books are locked through ${company.lockedThrough}.`
+  const costValue = effectiveCostSetting(values.costCentres, group?.nature)
+  const costNote = outsideGroups ? 'The profit and loss ledger takes no cost centres.'
+    : `${values.costCentres === null ? 'Follows the group until you choose' : existing && values.costCentres === existing.costCentres ? 'The setting of this ledger' : 'As you chose'}: ledgers under income and expense groups take cost centres, others do not${group ? ` (this group: ${costCentresDefault(group.nature) ? 'yes' : 'no'})` : ''}.${costCentresOn === false ? ' The company has cost centres switched off, so vouchers do not ask for them yet.' : ''}`
   const summary = () => {
     const amount = plainAmount(values.amount)
-    return `“${values.name.trim()}” under ${where}. ${amount === '' ? 'No opening balance' : `Opening balance ${displayAmount(amount, exponent)} ${side}`}.`
+    return `“${values.name.trim()}” under ${where}. ${amount === '' ? 'No opening balance' : `Opening balance ${displayAmount(amount, exponent)} ${side}`}.${costValue && !outsideGroups ? ' Takes cost centres.' : ''}`
   }
   return <Stack gap={6}>
     <PageHeader eyebrow='Masters' title={existing ? <>Alter ledger {isolate(existing.name)}</> : 'Create ledger'}
@@ -207,7 +201,11 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       <Stack data-entry-field='groupId'>
         <LookupField label='Group' options={groupOptions} value={values.groupId} disabled={readOnly || outsideGroups} required={!outsideGroups} error={errors.groupId}
           description={outsideGroups ? 'The profit and loss ledger stays outside every group.' : group ? `Nature: ${natureSingular[group.nature]}. New balances default to ${group.nature === 'liability' || group.nature === 'income' ? 'credit' : 'debit'}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} onTypedEnter={(text, advance) => typedEnter('groupId', text, advance)} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} onTypedEnter={(text, advance) => entryLookups.typedEnter('groupId', text, advance)} />
+      </Stack>
+      <Stack data-entry-field='costCentres'>
+        <LookupField label='Takes cost centres' options={costChoices} value={outsideGroups ? 'no' : costValue ? 'yes' : 'no'} disabled={readOnly || outsideGroups} error={errors.costCentres}
+          description={costNote} onValueChange={choose('costCentres')} onTypedEnter={(text, advance) => entryLookups.typedEnter('costCentres', text, advance)} />
       </Stack>
       <Stack data-entry-field='amount'>
         <Field label='Opening balance' description={locked ? lockNote : `Optional, as of ${company.booksBeginning}, in ${company.baseCurrency}, for example ${amountExample(exponent)}.`} error={errors.amount}>
@@ -216,7 +214,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       </Stack>
       <Stack data-entry-field='side'>
         <LookupField label='Debit or credit' options={sideChoices} value={side} disabled={readOnly || locked} error={errors.side}
-          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} onTypedEnter={(text, advance) => typedEnter('side', text, advance)} />
+          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} onTypedEnter={(text, advance) => entryLookups.typedEnter('side', text, advance)} />
       </Stack>
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
