@@ -95,6 +95,10 @@ CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match
 -- by company_id, the identity index lost to the primary key whenever the joined tables had statistics and bill had
 -- none, and a page then read every bill of the company for each party it looked at.
 CREATE INDEX bill_ledger_order_idx ON bill (ledger_id, name_match_key(name) COLLATE "C", id);
+-- A bill by its id alone, for the lists' details of the bills on a page: led by company_id, the primary key looked cheap
+-- for company_id alone whenever the statistics predated the company's bills, and the planner read the company's bills
+-- for each bill of the page.
+CREATE UNIQUE INDEX bill_id_idx ON bill (id);
 
 -- ---- Vouchers created cancelled, without lines ----
 

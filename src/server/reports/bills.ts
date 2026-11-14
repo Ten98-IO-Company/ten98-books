@@ -58,7 +58,8 @@ async function billStates(context: LedgerContext, ledgerIds: string[], asOf: str
        w.pending, w.final_pending AS "finalPending", greatest(0, $3::date - ch.due_date)::int AS "overdueDays"
      FROM wanted w
        -- Each wanted bill by its key (a join could read every bill of the company while the table has no statistics).
-       CROSS JOIN LATERAL (SELECT x.id, x.name, x.ledger_id FROM bill x WHERE x.company_id = $1 AND x.id = w.bill_id AND x.ledger_id = ANY($2::uuid[]) LIMIT 1) b
+       -- By id alone (bill_id_idx; the ledgers name the company and the row-level policy filters as everywhere).
+       CROSS JOIN LATERAL (SELECT x.id, x.name, x.ledger_id FROM bill x WHERE x.id = w.bill_id AND x.ledger_id = ANY($2::uuid[]) LIMIT 1) b
        JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
        JOIN chosen ch ON ch.bill_id = w.bill_id
      WHERE $6::date IS NULL OR ch.row_date <= $6
@@ -156,10 +157,9 @@ async function scope(context: LedgerContext, groupId: string | undefined): Promi
   const { rows } = await context.client.query<{ id: string }>(
     `WITH RECURSIVE below(id) AS (SELECT unnest($2::uuid[]) UNION SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
      SELECT l.id FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM below)
-       -- One probe of bill_ledger_order_idx per ledger, by ledger alone (the ledger implies the company): with a company
-       -- condition the planner read the company's bills through the primary key for every ledger whenever bill had no
-       -- statistics and the joined tables had.
-       AND (SELECT true FROM bill b WHERE b.ledger_id = l.id LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
+       -- By ledger alone (the ledger implies the company). A semi-join: at worst, with statistics older than the company's
+       -- bills, it reads the company's bills once; a lookup per ledger then read them once per ledger without bills.
+       AND EXISTS (SELECT 1 FROM bill b WHERE b.ledger_id = l.id)`, [context.company.companyId, groups.map(group => group.id)]);
   return { groups, ledgerIds: rows.map(row => row.id) };
 }
 
