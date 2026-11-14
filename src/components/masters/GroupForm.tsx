@@ -1,17 +1,19 @@
-import { Alert, Button, Combobox, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
 import type { Nature } from '../../lib/ledger'
 import {
-  emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, natureLockReason, natureSingular,
-  parentReason, primaryChoice, validateGroupForm, type GroupField, type GroupRow, type LedgerRow, isolate } from '../../lib/masters'
-import { EntryScope, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+  emptyGroupForm, groupChoices, groupDeleteReason, groupFields, groupFormOf, groupFormReducer, groupPath, groupPayload, isolate, natureLockReason, natureSingular,
+  parentReason, primaryChoice, resolveLookup, validateGroupForm, type Choice, type GroupField, type GroupFormAction, type GroupFormValues, type GroupRow, type LedgerRow,
+} from '../../lib/masters'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
+import { LookupField } from './LookupField'
 
-const natureChoices = (['asset', 'liability', 'income', 'expense'] as const).map(value => ({ value, label: natureSingular[value] }))
-const yesNo = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
+const natureChoices: Choice[] = (['asset', 'liability', 'income', 'expense'] as const).map(value => ({ value, label: natureSingular[value] }))
+const yesNo: Choice[] = [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
 
 export type MasterFormProps<T> = {
   groups: GroupRow[]
@@ -23,6 +25,9 @@ export type MasterFormProps<T> = {
   /** Refetches the company's groups and ledgers. */
   reloadData: () => void
 }
+
+type LookupName = 'parentId' | 'nature' | 'grossProfit'
+const lookupOrder: readonly LookupName[] = ['parentId', 'nature', 'grossProfit']
 
 /** Create group and alter group: one form, in a fixed keyboard order, with the rules the page can see explained in place. */
 export function GroupForm(props: MasterFormProps<GroupRow>) {
@@ -48,6 +53,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const leave = useLeave({ to: '/app/c/$companyId/masters/chart-of-accounts', params: { companyId: company.id } })
 
   const parentChoices = useMemo(() => groupChoices(groups, { primary: true, reason: existing ? candidate => parentReason(existing, candidate, groups, ledgers) : undefined }), [groups, ledgers, existing])
+  const parentIds = useMemo(() => new Set(parentChoices.filter(choice => !choice.disabled).map(choice => choice.value)), [parentChoices])
   const natureLock = existing ? natureLockReason(existing, groups, ledgers) : null
   const deleteReason = existing ? groupDeleteReason(existing, groups, ledgers) : null
   const fields = groupFields(values)
@@ -56,19 +62,58 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
 
-  async function save() {
-    if (readOnly || busy) return
-    const found = validateGroupForm(values)
+  // What each lookup offers, how a chosen value changes the form, and what a blank field says.
+  const lookups: Record<LookupName, { options: Choice[]; current: (from: GroupFormValues) => string; actions: (value: string, from: GroupFormValues) => GroupFormAction[]; blank: string }> = {
+    parentId: {
+      options: parentChoices, current: from => from.parentId, blank: 'Choose the group this one sits under, or Primary.',
+      // Moving a group to the top keeps its own nature unless the form already names one.
+      actions: (value, from) => [{ type: 'set', field: 'parentId', value }, ...value === primaryChoice && existing && !from.nature ? [{ type: 'set', field: 'nature', value: existing.nature } as const] : []],
+    },
+    nature: { options: natureChoices, current: from => from.nature, actions: value => [{ type: 'set', field: 'nature', value: value as Nature }], blank: 'Choose the nature of a primary group.' },
+    grossProfit: { options: yesNo, current: from => from.grossProfit ? 'yes' : 'no', actions: value => [{ type: 'set', field: 'grossProfit', value: value === 'yes' }], blank: 'Choose Yes or No.' },
+  }
+
+  /** Applies what was typed in one lookup to `from`: its single matching choice, or an error on that field (null). */
+  function settle(field: LookupName, text: string, from: GroupFormValues): GroupFormValues | null {
+    const lookup = lookups[field]
+    const result = resolveLookup(lookup.options, text, lookup.current(from))
+    const error = 'error' in result ? result.error : result.value === '' ? lookup.blank : ''
+    if (error) { setErrors(previous => ({ ...previous, [field]: error })); return null }
+    setErrors(previous => ({ ...previous, [field]: undefined }))
+    if ('error' in result || result.value === lookup.current(from)) return from
+    let next = from
+    for (const action of lookup.actions(result.value, from)) { next = groupFormReducer(next, action); dispatch(action) }
+    return next
+  }
+
+  /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
+  function prepare(): GroupFormValues | null {
+    let next = values
+    for (const field of lookupOrder) {
+      const text = entryText(form.current, field)
+      if (text === null || !groupFields(next).includes(field)) continue
+      const settled = settle(field, text, next)
+      if (!settled) { focusEntryField(form.current, field); return null }
+      next = settled
+    }
+    const found = validateGroupForm(next, parentIds)
     setErrors(found)
-    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return }
-    const body = groupPayload(values, existing?.revision)
+    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return null }
+    return next
+  }
+
+  async function save() {
+    if (readOnly) return
+    const ready = prepare()
+    if (!ready) return
+    const body = groupPayload(ready, existing?.revision)
     const result = await run(() => api<{ group: GroupRow }>(existing ? `/api/companies/${company.id}/groups/${existing.id}` : `/api/companies/${company.id}/groups`, { method: 'POST', body }))
     if (!result) return
-    const saved = result.group
-    const where = saved.parentId ? `under ${groupPath([...groups, saved], saved.parentId).join(' › ')}` : `as a primary ${natureSingular[saved.nature].toLowerCase()} group`
-    const message = `Saved group “${saved.name}” ${where}.`
+    const done = result.group
+    const where = done.parentId ? `under ${groupPath([...groups, done], done.parentId).join(' › ')}` : `as a primary ${natureSingular[done.nature].toLowerCase()} group`
+    const message = `Saved group “${done.name}” ${where}.`
     if (existing) { setFlash(message); leave(); return }
-    if (values.parentId !== primaryChoice) rememberGroup(company.id, values.parentId)
+    if (ready.parentId !== primaryChoice) rememberGroup(company.id, ready.parentId)
     setSaved(message)
     dispatch({ type: 'saved' })
     reloadData()
@@ -83,10 +128,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   }
 
   function askToSave() {
-    if (readOnly) return
-    const found = validateGroupForm(values)
-    setErrors(found)
-    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return }
+    if (readOnly || !prepare()) return
     setConfirming(true)
   }
 
@@ -102,15 +144,19 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   }
 
   useEntryCommands({
-    form, readOnly, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
+    form, readOnly,
+    onLeaveField: (name, text) => name in lookups ? settle(name as LookupName, text, values) !== null : true,
+    onLastField: askToSave, onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/group/$groupId', params: { companyId: company.id, groupId: existing.id } }) : undefined,
   })
 
   const set = (field: 'name' | 'secondLanguageName') => (event: { target: { value: string } }) => dispatch({ type: 'set', field, value: event.target.value })
+  const choose = (field: LookupName) => (value: string) => { for (const action of lookups[field].actions(value, values)) dispatch(action); setErrors(previous => ({ ...previous, [field]: undefined })) }
   return <Stack gap={6}>
     <PageHeader eyebrow='Masters' title={existing ? <>Alter group {isolate(existing.name)}</> : 'Create group'}
-      description={existing ? 'Change the group, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next group after every save.'} />
+      description={readOnly ? 'How this group is set up. Changing it needs an owner, admin or editor; its history is open to you.'
+        : existing ? 'Change the group, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next group after every save.'} />
     {readOnly && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
     <FailureAlert failure={failure} onReload={reloadData} />
@@ -118,7 +164,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
       onConfirm={() => { setConfirming(false); void save() }} onCancel={keepEditing} />}
     <Form ref={form} onSubmit={() => undefined} busy={busy} gap={4} fieldErrors={errors} aria-label={existing ? 'Alter group' : 'Create group'}>
       <Stack data-entry-field='name'>
-        <Field label='Name' error={errors.name} required><Input value={values.name} onChange={set('name')} maxLength={120} autoComplete='off' autoFocus disabled={readOnly} /></Field>
+        <Field label='Name' error={errors.name} required><Input value={values.name} onChange={set('name')} maxLength={120} autoComplete='off' autoFocus={!readOnly} disabled={readOnly} /></Field>
       </Stack>
       <Stack data-entry-field='secondLanguageName'>
         <Field label='Name in a second language' description='Optional, for example the Arabic name.' error={errors.secondLanguageName}>
@@ -126,27 +172,22 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
         </Field>
       </Stack>
       <Stack data-entry-field='parentId'>
-        <Combobox allowCustom={false} label='Under' options={parentChoices} value={values.parentId} disabled={readOnly} required error={errors.parentId}
+        <LookupField label='Under' options={parentChoices} value={values.parentId} disabled={readOnly} required error={errors.parentId}
           description={values.parentId === primaryChoice ? 'A primary group sits at the top of the chart and has its own nature.' : parent ? `Takes the nature of its parent: ${natureSingular[parent.nature]}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.'
-          onValueChange={value => {
-            dispatch({ type: 'set', field: 'parentId', value })
-            if (value === primaryChoice && existing && !values.nature) dispatch({ type: 'set', field: 'nature', value: existing.nature })
-          }} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('parentId')} />
       </Stack>
       {fields.includes('nature') && <Stack data-entry-field='nature'>
-        <Combobox allowCustom={false} label='Nature' options={natureChoices} value={values.nature} disabled={readOnly || natureLock !== null} required error={errors.nature}
-          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature'
-          onValueChange={value => dispatch({ type: 'set', field: 'nature', value: value as Nature })} />
+        <LookupField label='Nature' options={natureChoices} value={values.nature} disabled={readOnly || natureLock !== null} required error={errors.nature}
+          description={natureLock ?? 'Asset, liability, income or expense. Every sub-group below takes it.'} placeholder='Choose a nature' onValueChange={choose('nature')} />
       </Stack>}
       {fields.includes('grossProfit') && <Stack data-entry-field='grossProfit'>
-        <Combobox allowCustom={false} label='Counts towards gross profit' options={yesNo} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly}
-          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={value => dispatch({ type: 'set', field: 'grossProfit', value: value === 'yes' })} />
+        <LookupField label='Counts towards gross profit' options={yesNo} value={values.grossProfit ? 'yes' : 'no'} disabled={readOnly} error={errors.grossProfit}
+          description='Direct income and direct expense groups are usually set to Yes.' onValueChange={choose('grossProfit')} />
       </Stack>}
       {existing && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
         {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
-        <Button type='button' variant='secondary' onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
+        <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
         {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy}>Delete <KeyHint command='entry.delete' /></Button>}
       </FormActions>
     </Form>

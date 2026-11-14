@@ -94,7 +94,7 @@ function HistoryBody({ kind, id }: { kind: MasterKind; id: string }) {
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title={name ? <>History of {isolate(name)}</> : `History of this ${kind}`}
       description={`Every change to this ${kind}, newest first. Times are in ${company.timeZone}. Press Escape to go back.`}
-      actions={<Button variant='secondary' onClick={leave}>Back</Button>} />
+      actions={<Button variant='secondary' autoFocus onClick={leave}>Back</Button>} />
     {error && <Alert tone='danger'>The history could not be loaded: {error}</Alert>}
     {!revisions && !error && <StatusLine busy>Loading the history…</StatusLine>}
     {revisions && <DataTable<RevisionRow> ariaLabel={`History of this ${kind}`} rows={rows} rowKey={row => row.id} searchable={false} sortable={false} pagination={false} density='compact' responsive='stack'

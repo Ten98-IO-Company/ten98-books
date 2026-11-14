@@ -77,6 +77,8 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'company.switch': 'F3',
     'list.delete': 'Alt+D',
     'entry.accept': ['Ctrl+A', 'Ctrl+Enter'],
+    // Ctrl+Q leaves a screen in desktop accounting software; Escape stays too.
+    'entry.cancel': ['Escape', 'Ctrl+Q'],
     'entry.delete': 'Alt+D',
     'entry.voucher.contra': 'F4',
     'entry.voucher.payment': 'F5',

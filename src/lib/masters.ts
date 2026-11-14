@@ -1,6 +1,6 @@
 import { formatMoney, parseMoney, type MoneyExponent } from '@ten98/runtime/browser';
-import { natures, type AccountGroup, type Ledger, type Nature, type Revision, type Side } from './ledger.ts';
-import type { Wire } from './money.ts';
+import { natures, sides, type AccountGroup, type Ledger, type Nature, type Revision, type Side } from './ledger.ts';
+import { normalizeAmountInput, type Wire } from './money.ts';
 
 /**
  * Client-side helpers of the masters screens: the chart tree, lookup choices, the rules the page already has the data
@@ -243,13 +243,18 @@ export function groupFormReducer(state: GroupFormValues, action: GroupFormAction
   }
 }
 
-export function validateGroupForm(values: GroupFormValues): Partial<Record<GroupField, string>> {
+/** What the group form checks. The parent must be one of the lookup's options (`parentIds`) or Primary, never free text. */
+export function validateGroupForm(values: GroupFormValues, parentIds: ReadonlySet<string>): Partial<Record<GroupField, string>> {
   const errors: Partial<Record<GroupField, string>> = {};
   if (!values.name.trim()) errors.name = 'Enter the group name.';
   else if (values.name.trim().length > 120) errors.name = 'Use at most 120 characters.';
   if (values.secondLanguageName.trim().length > 120) errors.secondLanguageName = 'Use at most 120 characters.';
   if (!values.parentId) errors.parentId = 'Choose the group this one sits under, or Primary.';
-  else if (values.parentId === primaryChoice && !values.nature) errors.nature = 'Choose the nature of a primary group.';
+  else if (values.parentId !== primaryChoice && !parentIds.has(values.parentId)) errors.parentId = 'Choose one of the listed groups, or Primary.';
+  else if (values.parentId === primaryChoice) {
+    if (!values.nature) errors.nature = 'Choose the nature of a primary group.';
+    else if (!natures.includes(values.nature)) errors.nature = 'Choose one of the four natures.';
+  }
   return errors;
 }
 
@@ -296,24 +301,36 @@ export function effectiveSide(values: LedgerFormValues, groups: readonly GroupRo
   return values.side ?? defaultSide(groups.find(group => group.id === values.groupId)?.nature);
 }
 
+/** An example amount in the company's currency format, for helper text: `1,250.50`, `1,250.500` or `1,250`. */
+export const amountExample = (exponent: MoneyExponent): string => exponent === 0 ? '1,250' : `1,250.${'5'.padEnd(exponent, '0')}`;
+
 /** An amount field's problem in plain words, or null. Blank means no opening balance. */
 export function amountProblem(text: string, exponent: MoneyExponent): string | null {
   const value = text.trim();
   if (value === '') return null;
   if (/^-/.test(value)) return 'Enter the opening balance as a positive amount and choose Dr or Cr.';
-  if (!/^\d{1,20}(\.\d{1,20})?$/.test(value)) return 'Enter an amount such as 1250.50, with digits and a decimal point only.';
-  if ((value.split('.')[1] ?? '').length > exponent) return exponent === 0 ? 'This currency has no decimal places.' : `This currency has ${exponent} decimal places at most.`;
-  try { parseMoney(value, exponent); } catch { return 'This amount is too large.'; }
+  const plain = normalizeAmountInput(value);
+  if (plain === null) return `Enter an amount such as ${amountExample(exponent)}: digits, a decimal point, and commas only between groups of three digits.`;
+  if ((plain.split('.')[1] ?? '').length > exponent) return exponent === 0 ? 'This currency has no decimal places.' : `This currency has ${exponent} decimal places at most.`;
+  try { parseMoney(plain, exponent); } catch { return 'This amount is too large.'; }
   return null;
 }
 
-/** `groupOptional` is for the profit and loss ledger, which has no group. */
-export function validateLedgerForm(values: LedgerFormValues, exponent: MoneyExponent, groupOptional = false): Partial<Record<LedgerField, string>> {
+/** The amount as the plain decimal string `parseMoney` takes, or '' when blank or malformed (validation reports the latter). */
+export const plainAmount = (text: string): string => normalizeAmountInput(text) ?? '';
+
+/**
+ * What the ledger form checks. The group must be one of the lookup's options (`groupIds`), never free text; `groupOptional`
+ * is for the profit and loss ledger, which has no group. The side is Dr or Cr or not chosen yet (it then follows the group).
+ */
+export function validateLedgerForm(values: LedgerFormValues, exponent: MoneyExponent, groupIds: ReadonlySet<string>, groupOptional = false): Partial<Record<LedgerField, string>> {
   const errors: Partial<Record<LedgerField, string>> = {};
   if (!values.name.trim()) errors.name = 'Enter the ledger name.';
   else if (values.name.trim().length > 120) errors.name = 'Use at most 120 characters.';
   if (values.secondLanguageName.trim().length > 120) errors.secondLanguageName = 'Use at most 120 characters.';
-  if (!values.groupId && !groupOptional) errors.groupId = 'Choose the group this ledger belongs to.';
+  if (!values.groupId) { if (!groupOptional) errors.groupId = 'Choose the group this ledger belongs to.'; }
+  else if (!groupIds.has(values.groupId)) errors.groupId = 'Choose one of the listed groups.';
+  if (values.side !== null && !sides.includes(values.side)) errors.side = 'Choose Dr or Cr.';
   const amount = amountProblem(values.amount, exponent);
   if (amount) errors.amount = amount;
   return errors;
@@ -321,7 +338,7 @@ export function validateLedgerForm(values: LedgerFormValues, exponent: MoneyExpo
 
 /** The request body for creating a ledger, or altering it when `revision` is given (an altered ledger always states its opening). */
 export function ledgerPayload(values: LedgerFormValues, groups: readonly GroupRow[], exponent: MoneyExponent, revision?: number) {
-  const amount = values.amount.trim();
+  const amount = plainAmount(values.amount);
   const opening = amount === '' ? undefined : { amount: formatMoney(parseMoney(amount, exponent), exponent), side: effectiveSide(values, groups) };
   return {
     name: values.name.trim(), secondLanguageName: values.secondLanguageName.trim() || null, groupId: values.groupId || null,
@@ -332,6 +349,47 @@ export function ledgerPayload(values: LedgerFormValues, groups: readonly GroupRo
 export function ledgerFormOf(ledger: LedgerRow): LedgerFormValues {
   const zero = ledger.opening.amount.replace(/[0.]/g, '') === '';
   return { name: ledger.name, secondLanguageName: ledger.secondLanguageName ?? '', groupId: ledger.groupId ?? '', amount: zero ? '' : ledger.opening.amount, side: zero ? null : ledger.opening.side };
+}
+
+// ---- Lookups ----
+
+const words = (text: string) => text.toLocaleLowerCase().split(/[\s·›/-]+/).filter(Boolean);
+
+/**
+ * What a lookup field's typed text means. The field's value is always one of its options, never the text: blank text
+ * clears it, text equal to the chosen label keeps it, and text that names exactly one choice (the whole label, or the
+ * start of the label or of one of its words, such as "cre" for "Cr · Credit") picks it. Anything else, including text
+ * that fits several choices or only a choice a rule disables, is an error in plain words and nothing is chosen.
+ */
+export function resolveLookup(options: readonly Choice[], text: string, current: string): { value: string } | { error: string } {
+  const typed = text.trim().toLocaleLowerCase();
+  if (typed === '') return { value: '' };
+  const chosen = options.find(option => option.value === current && !option.disabled);
+  if (chosen && chosen.label.toLocaleLowerCase() === typed) return { value: current };
+  const fits = (option: Choice) => option.label.toLocaleLowerCase().startsWith(typed) || words(option.label).some(word => word.startsWith(typed));
+  const exact = options.filter(option => !option.disabled && option.label.toLocaleLowerCase() === typed);
+  const found = exact.length ? exact : options.filter(option => !option.disabled && fits(option));
+  if (found.length === 1) return { value: found[0].value };
+  if (found.length > 1) return { error: `“${text.trim()}” could mean more than one choice. Type more of the name, or pick from the list.` };
+  const blocked = options.filter(option => option.disabled && fits(option));
+  if (blocked.length === 1 && blocked[0].disabledReason) return { error: blocked[0].disabledReason };
+  return { error: `“${text.trim()}” is not one of the choices. Pick one from the list.` };
+}
+
+/** Whether `value` is the value of an enabled option: the only values a lookup may hold. */
+export const isChoice = (options: readonly Choice[], value: string): boolean => options.some(option => option.value === value && !option.disabled);
+
+/**
+ * Runs one request at a time: a second call while one is running is ignored (resolves undefined) instead of sending
+ * the same request twice, which is what two accept keys in one tick would otherwise do.
+ */
+export function singleFlight(): <T>(task: () => Promise<T>) => Promise<T | undefined> {
+  let running = false;
+  return async task => {
+    if (running) return undefined;
+    running = true;
+    try { return await task(); } finally { running = false; }
+  };
 }
 
 // ---- Fixed keyboard order ----

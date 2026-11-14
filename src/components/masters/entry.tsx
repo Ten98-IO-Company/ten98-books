@@ -1,10 +1,10 @@
 import { Alert, Button, ShortcutScope } from '@ten98/ui'
 import { useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
-import { describeFailure, nextFieldAfter } from '../../lib/masters'
+import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
 import { useAppCommand } from '../KeyboardShell'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
@@ -26,6 +26,9 @@ function entryFields(form: HTMLElement | null): { name: string; control: HTMLInp
   })
 }
 
+/** The text a field's control shows right now (what a lookup displays, typed or chosen), or null when the field is not on screen. */
+export const entryText = (form: HTMLElement | null, name: string): string | null => entryFields(form).find(field => field.name === name)?.control.value ?? null
+
 export function focusEntryField(form: HTMLElement | null, name: string) {
   const control = entryFields(form).find(field => field.name === name)?.control
   control?.focus()
@@ -45,6 +48,8 @@ export function focusFirstInvalid(form: HTMLElement | null, errors: Partial<Reco
  */
 export function useEntryCommands(options: {
   form: RefObject<HTMLElement | null>
+  /** Called with the field being left and its text before Enter moves on; false keeps the focus there (a lookup with text that is no choice). */
+  onLeaveField?: (name: string, text: string) => boolean
   onLastField: () => void
   onAccept: () => void
   onCancel: () => void
@@ -60,6 +65,7 @@ export function useEntryCommands(options: {
     const fields = entryFields(form.current)
     const current = fields.find(field => field.control === document.activeElement)
     if (!current) return
+    if (latest.current.onLeaveField?.(current.name, current.control.value) === false) return
     const next = nextFieldAfter(fields.map(field => field.name), current.name)
     if (next === 'confirm') onLastField(); else focusEntryField(form.current, next)
   }, { allowInTextInput: true })
@@ -89,7 +95,9 @@ export function useMasterRequest() {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const returnTo = useRef<Element | null>(null)
-  const run = useCallback(async <T,>(task: () => Promise<T>): Promise<T | undefined> => {
+  // One request at a time: two accept keys in one tick must not send the same change twice.
+  const flight = useRef(singleFlight())
+  const run = useCallback(<T,>(task: () => Promise<T>): Promise<T | undefined> => flight.current(async () => {
     returnTo.current = document.activeElement
     setBusy(true); setFailure(null)
     try { return await task() }
@@ -98,7 +106,7 @@ export function useMasterRequest() {
       else setFailure(describeFailure(cause instanceof ApiError ? cause.status : undefined, errMsg(cause)))
       return undefined
     } finally { setBusy(false) }
-  }, [unauthorized])
+  }), [unauthorized])
   // The form locks its fields while the request runs, which drops focus to the page. Once the fields are back, focus
   // returns to where it was, or to the first field when that control went away with a closed dialog.
   useEffect(() => {
@@ -126,8 +134,14 @@ export function FailureAlert({ failure, onReload }: { failure: Failure | null; o
  * Escape (the form's cancel command) keeps editing. Built here because the stock dialogs start on their close button.
  */
 export function SaveConfirm({ title, description, onConfirm, onCancel }: { title: string; description: string; onConfirm: () => void; onCancel: () => void }) {
-  return <Alert tone='info' title={title} actions={<>
+  // Y answers yes and N returns to editing, as the accept question of desktop accounting software does.
+  const answer = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.ctrlKey || event.altKey || event.metaKey) return
+    const key = event.key.toLowerCase()
+    if (key === 'y') { event.preventDefault(); onConfirm() } else if (key === 'n') { event.preventDefault(); onCancel() }
+  }
+  return <Alert tone='info' title={title} onKeyDown={answer} actions={<>
     <Button autoFocus onClick={onConfirm}>Save</Button>
     <Button variant='secondary' onClick={onCancel}>Keep editing</Button>
-  </>}>{description} Press Enter to save, or Escape to keep editing.</Alert>
+  </>}>{description} Press Enter or Y to save, or Escape or N to keep editing.</Alert>
 }

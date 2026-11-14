@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  amountProblem, buildChartRows, cashFamilyIds, defaultSide, describeChanges, describeFailure, displayAmount, effectiveSide, emptyGroupForm, emptyLedgerForm,
+  amountExample, amountProblem, buildChartRows, cashFamilyIds, defaultSide, describeChanges, describeFailure, displayAmount, effectiveSide, emptyGroupForm, emptyLedgerForm,
   groupChoices, groupDeleteReason, groupFields, groupFormReducer, groupPayload, ledgerDeleteReason, ledgerFormReducer, ledgerGroupReason, ledgerPayload,
-  natureLockReason, nextFieldAfter, openingLocked, parentReason, primaryChoice, validateGroupForm, validateLedgerForm,
+  isChoice, natureLockReason, nextFieldAfter, openingLocked, parentReason, plainAmount, primaryChoice, resolveLookup, singleFlight, validateGroupForm, validateLedgerForm,
   type GroupRow, type LedgerRow, type RevisionRow,
 } from '../src/lib/masters.ts';
 
@@ -111,8 +111,10 @@ test('saving resets the form for the next entry and keeps the parent group', () 
 });
 
 test('the group form validates what the page can know and builds the request body', () => {
-  assert.deepEqual(validateGroupForm(emptyGroupForm()), { name: 'Enter the group name.', parentId: 'Choose the group this one sits under, or Primary.' });
-  assert.equal(validateGroupForm({ ...emptyGroupForm(primaryChoice), name: 'X' }).nature, 'Choose the nature of a primary group.');
+  const parents = new Set(['assets', 'capital']);
+  assert.deepEqual(validateGroupForm(emptyGroupForm(), parents), { name: 'Enter the group name.', parentId: 'Choose the group this one sits under, or Primary.' });
+  assert.equal(validateGroupForm({ ...emptyGroupForm(primaryChoice), name: 'X' }, parents).nature, 'Choose the nature of a primary group.');
+  assert.deepEqual(validateGroupForm({ ...emptyGroupForm('assets'), name: 'X' }, parents), {});
   assert.deepEqual(groupPayload({ name: ' Fees ', secondLanguageName: '', parentId: 'assets', nature: '', grossProfit: false }), { name: 'Fees', secondLanguageName: null, parentId: 'assets' });
   assert.deepEqual(groupPayload({ name: 'Top', secondLanguageName: 'أعلى', parentId: primaryChoice, nature: 'income', grossProfit: true }, 3), { name: 'Top', secondLanguageName: 'أعلى', parentId: null, nature: 'income', grossProfit: true, revision: 3 });
 });
@@ -123,9 +125,10 @@ test('amounts are checked against the currency exponent and stay strings', () =>
   assert.match(amountProblem('1.2345', 3) ?? '', /3 decimal places at most/);
   assert.match(amountProblem('1.5', 0) ?? '', /no decimal places/);
   assert.match(amountProblem('-5', 2) ?? '', /positive/);
-  assert.match(amountProblem('1,250.50', 2) ?? '', /digits and a decimal point/);
+  assert.equal(amountProblem('1,250.50', 2), null);
+  assert.match(amountProblem('12,50', 2) ?? '', /groups of three/);
   assert.match(amountProblem('99999999999999999999', 2) ?? '', /too large/);
-  assert.deepEqual(validateLedgerForm({ ...emptyLedgerForm('capital'), name: 'N', amount: '1.234' }, 2), { amount: 'This currency has 2 decimal places at most.' });
+  assert.deepEqual(validateLedgerForm({ ...emptyLedgerForm('capital'), name: 'N', amount: '1.234' }, 2, new Set(['capital'])), { amount: 'This currency has 2 decimal places at most.' });
   assert.equal(displayAmount('1234567.5', 3), '1,234,567.500');
   assert.equal(displayAmount('-1234.50', 2), '-1,234.50');
   assert.equal(displayAmount('12', 0), '12');
@@ -159,4 +162,68 @@ test('history lists what changed in words, resolving group ids and formatting mi
   assert.deepEqual(describeChanges(revision('delete', snapshot('Rent', '0', 'Dr'), null), 3, () => null), ['Deleted']);
   const moved = describeChanges(revision('alter', { name: 'G', parentId: 'a', nature: 'asset', grossProfit: false }, { name: 'G', parentId: 'gone', nature: 'asset', grossProfit: false }, 'group'), 2, id => id === 'a' ? 'Assets' : null);
   assert.deepEqual(moved, ['Under: Assets → a group that was deleted since']);
+});
+
+const choices = [
+  { value: 'Dr', label: 'Dr · Debit' }, { value: 'Cr', label: 'Cr · Credit' },
+];
+const groupOptions = [
+  { value: 'fixed', label: 'Fixed Assets' }, { value: 'fund', label: 'Fund Reserve' }, { value: 'cash', label: 'Cash on Hand' },
+  { value: 'locked', label: 'Locked Group', disabled: true, disabledReason: 'This group is held by a rule.' },
+];
+
+test('lookup text never becomes a value: a unique prefix picks the choice, anything else is an error and picks nothing', () => {
+  assert.deepEqual(resolveLookup(choices, 'cre', 'Dr'), { value: 'Cr' });
+  assert.deepEqual(resolveLookup(choices, 'CR', 'Dr'), { value: 'Cr' });
+  assert.deepEqual(resolveLookup(choices, 'Dr · Debit', 'Dr'), { value: 'Dr' });
+  assert.deepEqual(resolveLookup(groupOptions, 'fix', ''), { value: 'fixed' });
+  assert.deepEqual(resolveLookup(groupOptions, 'assets', ''), { value: 'fixed' }, 'the start of a later word of the label also names it');
+  assert.deepEqual(resolveLookup(groupOptions, 'cash on', ''), { value: 'cash' });
+  // "fi" is the start of one word only in Fixed Assets, but "f" fits Fixed Assets and Fund Reserve.
+  assert.deepEqual(resolveLookup(groupOptions, 'fi', ''), { value: 'fixed' });
+  const many = resolveLookup(groupOptions, 'f', '');
+  assert.ok('error' in many && /more than one choice/.test(many.error));
+  const none = resolveLookup(groupOptions, 'zzz', 'fixed');
+  assert.ok('error' in none && /is not one of the choices/.test(none.error));
+  const blocked = resolveLookup(groupOptions, 'lock', '');
+  assert.deepEqual(blocked, { error: 'This group is held by a rule.' });
+  assert.deepEqual(resolveLookup(choices, '   ', 'Dr'), { value: '' }, 'cleared text clears the value instead of keeping the old one');
+  assert.equal(isChoice(groupOptions, 'fixed'), true);
+  assert.equal(isChoice(groupOptions, 'fi'), false, 'text is not a value');
+  assert.equal(isChoice(groupOptions, 'locked'), false, 'a disabled option is not a value');
+});
+
+test('the forms refuse a value that is not an option: free text in a group, a side or a nature is an error on that field', () => {
+  const groups = new Set(['capital']);
+  assert.equal(validateLedgerForm({ ...emptyLedgerForm('fi'), name: 'N' }, 2, groups).groupId, 'Choose one of the listed groups.');
+  assert.equal(validateLedgerForm({ ...emptyLedgerForm(''), name: 'N' }, 2, groups).groupId, 'Choose the group this ledger belongs to.');
+  assert.equal(validateLedgerForm({ ...emptyLedgerForm(''), name: 'N' }, 2, groups, true).groupId, undefined, 'the profit and loss ledger has no group');
+  assert.equal(validateLedgerForm({ ...emptyLedgerForm('capital'), name: 'N', side: 'cre' as never }, 2, groups).side, 'Choose Dr or Cr.');
+  assert.deepEqual(validateLedgerForm({ ...emptyLedgerForm('capital'), name: 'N', side: 'Cr' }, 2, groups), {});
+  assert.equal(validateGroupForm({ ...emptyGroupForm('fi'), name: 'N' }, new Set(['assets'])).parentId, 'Choose one of the listed groups, or Primary.');
+  assert.equal(validateGroupForm({ ...emptyGroupForm(primaryChoice), name: 'N', nature: 'inc' as never }, new Set()).nature, 'Choose one of the four natures.');
+});
+
+test('a second request while one is running is ignored, so two accept keys in one tick send one request', async () => {
+  const run = singleFlight();
+  let started = 0;
+  const task = async () => { started += 1; await new Promise(resolve => setTimeout(resolve, 20)); return 'saved'; };
+  const [first, second] = await Promise.all([run(task), run(task)]);
+  assert.equal(started, 1);
+  assert.equal(first, 'saved');
+  assert.equal(second, undefined);
+  assert.equal(await run(task), 'saved', 'once it has finished the next request runs');
+  assert.equal(started, 2);
+  await assert.rejects(() => run(async () => { throw new Error('refused'); }), /refused/);
+  assert.equal(await run(task), 'saved', 'a refused request does not leave the guard stuck');
+});
+
+test('amounts typed with grouping are read, and the example follows the currency exponent', () => {
+  assert.equal(plainAmount('1,250.5'), '1250.5');
+  assert.equal(plainAmount('12,50'), '');
+  assert.equal(amountExample(3), '1,250.500');
+  assert.equal(amountExample(2), '1,250.50');
+  assert.equal(amountExample(0), '1,250');
+  assert.match(amountProblem('12,50', 3) ?? '', /1,250\.500/);
+  assert.deepEqual(ledgerPayload({ ...emptyLedgerForm('capital'), name: 'Rent', amount: '1,250.5' }, groups, 3), { name: 'Rent', secondLanguageName: null, groupId: 'capital', opening: { amount: '1250.500', side: 'Cr' } });
 });

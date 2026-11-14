@@ -1,19 +1,24 @@
-import { Alert, Button, Card, Combobox, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import type { MoneyExponent } from '@ten98/runtime/browser'
 import { api } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
-import type { TrialBalance } from '../../lib/ledger'
+import type { Side, TrialBalance } from '../../lib/ledger'
 import {
-  displayAmount, effectiveSide, emptyLedgerForm, groupChoices, groupPath, ledgerDeleteReason, ledgerFormOf, ledgerFormReducer, ledgerGroupReason, ledgerPayload,
-  natureSingular, openingLocked, sideTitles, validateLedgerForm, type LedgerField, type LedgerRow, isolate } from '../../lib/masters'
+  amountExample, displayAmount, effectiveSide, emptyLedgerForm, groupChoices, groupPath, isolate, ledgerDeleteReason, ledgerFormOf, ledgerFormReducer, ledgerGroupReason,
+  ledgerPayload, natureSingular, openingLocked, plainAmount, resolveLookup, sideTitles, validateLedgerForm, type Choice, type LedgerField, type LedgerFormAction, type LedgerFormValues, type LedgerRow,
+} from '../../lib/masters'
 import type { Wire } from '../../lib/money'
-import type { MoneyExponent } from '@ten98/runtime/browser'
-import { EntryScope, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import type { MasterFormProps } from './GroupForm'
+import { LookupField } from './LookupField'
 
-const sideChoices = [{ value: 'Dr', label: `Dr · ${sideTitles.Dr}` }, { value: 'Cr', label: `Cr · ${sideTitles.Cr}` }]
+const sideChoices: Choice[] = [{ value: 'Dr', label: `Dr · ${sideTitles.Dr}` }, { value: 'Cr', label: `Cr · ${sideTitles.Cr}` }]
+
+type LookupName = 'groupId' | 'side'
+const lookupOrder: readonly LookupName[] = ['groupId', 'side']
 
 /** Create ledger and alter ledger: the group, an opening balance with its side, and a running total of the openings. */
 export function LedgerForm(props: MasterFormProps<LedgerRow>) {
@@ -26,11 +31,17 @@ type OpeningTotals = Wire<TrialBalance>
 function useOpeningTotals(companyId: string, booksBeginning: string) {
   const [totals, setTotals] = useState<OpeningTotals | null>(null)
   const [unavailable, setUnavailable] = useState(false)
-  const reload = useCallback(() => {
-    api<{ trialBalance: OpeningTotals }>(`/api/companies/${companyId}/trial-balance?from=${booksBeginning}&to=${booksBeginning}`)
-      .then(result => { setTotals(result.trialBalance); setUnavailable(false) }).catch(() => setUnavailable(true))
-  }, [companyId, booksBeginning])
-  useEffect(reload, [reload])
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => {
+    // Totals of another company must never show for this one: clear them, and ignore an answer that arrives late.
+    const controller = new AbortController()
+    setTotals(null); setUnavailable(false)
+    api<{ trialBalance: OpeningTotals }>(`/api/companies/${companyId}/trial-balance?from=${booksBeginning}&to=${booksBeginning}`, { signal: controller.signal })
+      .then(result => { if (!controller.signal.aborted) setTotals(result.trialBalance) })
+      .catch(() => { if (!controller.signal.aborted) setUnavailable(true) })
+    return () => controller.abort()
+  }, [companyId, booksBeginning, attempt])
+  const reload = useCallback(() => setAttempt(value => value + 1), [])
   return { totals, unavailable, reload }
 }
 
@@ -57,6 +68,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const outsideGroups = existing?.systemKey === 'profit_and_loss'
   const locked = openingLocked(company)
   const groupOptions = useMemo(() => groupChoices(groups, { reason: candidate => ledgerGroupReason(existing ?? null, candidate, groups) }), [groups, existing])
+  const groupIds = useMemo(() => new Set(groupOptions.filter(choice => !choice.disabled).map(choice => choice.value)), [groupOptions])
   const deleteReason = existing ? ledgerDeleteReason(existing) : null
   const group = groups.find(item => item.id === values.groupId)
   const side = effectiveSide(values, groups)
@@ -64,19 +76,52 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
-  async function save() {
-    if (readOnly || busy) return
-    const found = validateLedgerForm(values, exponent, outsideGroups)
+  const lookups: Record<LookupName, { options: Choice[]; current: (from: LedgerFormValues) => string; actions: (value: string) => LedgerFormAction[]; blank: string }> = {
+    groupId: { options: groupOptions, current: from => from.groupId, actions: value => [{ type: 'set', field: 'groupId', value }], blank: 'Choose the group this ledger belongs to.' },
+    side: { options: sideChoices, current: from => effectiveSide(from, groups), actions: value => [{ type: 'side', value: value as Side }], blank: 'Choose Dr or Cr.' },
+  }
+
+  /** Applies what was typed in one lookup to `from`: its single matching choice, or an error on that field (null). */
+  function settle(field: LookupName, text: string, from: LedgerFormValues): LedgerFormValues | null {
+    const lookup = lookups[field]
+    const result = resolveLookup(lookup.options, text, lookup.current(from))
+    const error = 'error' in result ? result.error : result.value === '' ? lookup.blank : ''
+    if (error) { setErrors(previous => ({ ...previous, [field]: error })); return null }
+    setErrors(previous => ({ ...previous, [field]: undefined }))
+    if ('error' in result || result.value === lookup.current(from)) return from
+    let next = from
+    for (const action of lookup.actions(result.value)) { next = ledgerFormReducer(next, action); dispatch(action) }
+    return next
+  }
+
+  /** The form as it will be saved: every lookup settled from the text on screen and every field checked, or null with the problem shown. */
+  function prepare(): LedgerFormValues | null {
+    let next = values
+    for (const field of lookupOrder) {
+      const text = entryText(form.current, field)
+      if (text === null || (field === 'groupId' && outsideGroups)) continue
+      const settled = settle(field, text, next)
+      if (!settled) { focusEntryField(form.current, field); return null }
+      next = settled
+    }
+    const found = validateLedgerForm(next, exponent, groupIds, outsideGroups)
     setErrors(found)
-    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return }
-    const body = ledgerPayload(values, groups, exponent, existing?.revision)
+    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return null }
+    return next
+  }
+
+  async function save() {
+    if (readOnly) return
+    const ready = prepare()
+    if (!ready) return
+    const body = ledgerPayload(ready, groups, exponent, existing?.revision)
     const result = await run(() => api<{ ledger: LedgerRow }>(existing ? `/api/companies/${company.id}/ledgers/${existing.id}` : `/api/companies/${company.id}/ledgers`, { method: 'POST', body }))
     if (!result) return
-    const ledger = result.ledger
-    const opening = ledger.opening.amount.replace(/[0.]/g, '') === '' ? '' : ` with an opening balance of ${displayAmount(ledger.opening.amount, exponent)} ${ledger.opening.side}`
-    const message = `Saved ledger “${ledger.name}”${ledger.groupId ? ` under ${groupPath(groups, ledger.groupId).join(' › ')}` : ''}${opening}.`
+    const done = result.ledger
+    const opening = done.opening.amount.replace(/[0.]/g, '') === '' ? '' : ` with an opening balance of ${displayAmount(done.opening.amount, exponent)} ${done.opening.side}`
+    const message = `Saved ledger “${done.name}”${done.groupId ? ` under ${groupPath(groups, done.groupId).join(' › ')}` : ''}${opening}.`
     if (existing) { setFlash(message); leave(); return }
-    rememberGroup(company.id, values.groupId)
+    rememberGroup(company.id, ready.groupId)
     setSaved(message)
     dispatch({ type: 'saved' })
     reloadData(); openings.reload()
@@ -91,13 +136,9 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   }
 
   function askToSave() {
-    if (readOnly) return
-    const found = validateLedgerForm(values, exponent, outsideGroups)
-    setErrors(found)
-    if (Object.keys(found).length) { focusFirstInvalid(form.current, found); return }
+    if (readOnly || !prepare()) return
     setConfirming(true)
   }
-  const summary = () => `“${values.name.trim()}” under ${where}. ${values.amount.trim() === '' ? 'No opening balance' : `Opening balance ${displayAmount(values.amount.trim(), exponent)} ${side}`}.`
 
   function keepEditing() {
     setConfirming(false)
@@ -111,24 +152,31 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   }
 
   useEntryCommands({
-    form, readOnly, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
+    form, readOnly,
+    onLeaveField: (name, text) => name in lookups ? settle(name as LookupName, text, values) !== null : true,
+    onLastField: askToSave, onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/ledger/$ledgerId', params: { companyId: company.id, ledgerId: existing.id } }) : undefined,
   })
 
   const set = (field: 'name' | 'secondLanguageName' | 'amount') => (event: { target: { value: string } }) => dispatch({ type: 'set', field, value: event.target.value })
+  const choose = (field: LookupName) => (value: string) => { for (const action of lookups[field].actions(value)) dispatch(action); setErrors(previous => ({ ...previous, [field]: undefined })) }
   const lockNote = `Opening balances are locked: the books are locked through ${company.lockedThrough}.`
+  const summary = () => {
+    const amount = plainAmount(values.amount)
+    return `“${values.name.trim()}” under ${where}. ${amount === '' ? 'No opening balance' : `Opening balance ${displayAmount(amount, exponent)} ${side}`}.`
+  }
   return <Stack gap={6}>
     <PageHeader eyebrow='Masters' title={existing ? <>Alter ledger {isolate(existing.name)}</> : 'Create ledger'}
-      description={existing ? 'Change the ledger, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next ledger after every save, with the group kept.'} />
+      description={readOnly ? 'How this ledger is set up. Changing it needs an owner, admin or editor; its history is open to you.'
+        : existing ? 'Change the ledger, then press Enter on the last field to save.' : 'Fill in the fields in order and press Enter after each. The form is ready for the next ledger after every save, with the group kept.'} />
     {readOnly && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
     <FailureAlert failure={failure} onReload={reloadData} />
-    {confirming && <SaveConfirm title={existing ? 'Save the changes?' : 'Save this ledger?'} description={summary()}
-      onConfirm={() => { setConfirming(false); void save() }} onCancel={keepEditing} />}
+    {confirming && <SaveConfirm title={existing ? 'Save the changes?' : 'Save this ledger?'} description={summary()} onConfirm={() => { setConfirming(false); void save() }} onCancel={keepEditing} />}
     <Form ref={form} onSubmit={() => undefined} busy={busy} gap={4} fieldErrors={errors} aria-label={existing ? 'Alter ledger' : 'Create ledger'}>
       <Stack data-entry-field='name'>
-        <Field label='Name' error={errors.name} required><Input value={values.name} onChange={set('name')} maxLength={120} autoComplete='off' autoFocus disabled={readOnly} /></Field>
+        <Field label='Name' error={errors.name} required><Input value={values.name} onChange={set('name')} maxLength={120} autoComplete='off' autoFocus={!readOnly} disabled={readOnly} /></Field>
       </Stack>
       <Stack data-entry-field='secondLanguageName'>
         <Field label='Name in a second language' description='Optional, for example the Arabic name.' error={errors.secondLanguageName}>
@@ -136,24 +184,23 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
         </Field>
       </Stack>
       <Stack data-entry-field='groupId'>
-        <Combobox allowCustom={false} label='Group' options={groupOptions} value={values.groupId} disabled={readOnly || outsideGroups} required={!outsideGroups} error={errors.groupId}
+        <LookupField label='Group' options={groupOptions} value={values.groupId} disabled={readOnly || outsideGroups} required={!outsideGroups} error={errors.groupId}
           description={outsideGroups ? 'The profit and loss ledger stays outside every group.' : group ? `Nature: ${natureSingular[group.nature]}. New balances default to ${group.nature === 'liability' || group.nature === 'income' ? 'credit' : 'debit'}.` : 'Type to filter. Each group shows where it sits.'}
-          placeholder='Choose a group' emptyMessage='No group matches.'
-          onValueChange={value => dispatch({ type: 'set', field: 'groupId', value })} />
+          placeholder='Choose a group' emptyMessage='No group matches.' onValueChange={choose('groupId')} />
       </Stack>
       <Stack data-entry-field='amount'>
-        <Field label='Opening balance' description={locked ? lockNote : `Optional, as of ${company.booksBeginning}, in ${company.baseCurrency} with ${exponent} decimal places.`} error={errors.amount}>
-          <Input value={values.amount} onChange={set('amount')} inputMode='decimal' autoComplete='off' placeholder={exponent === 0 ? '0' : `0.${'0'.repeat(exponent)}`} disabled={readOnly || locked} />
+        <Field label='Opening balance' description={locked ? lockNote : `Optional, as of ${company.booksBeginning}, in ${company.baseCurrency}, for example ${amountExample(exponent)}.`} error={errors.amount}>
+          <Input value={values.amount} onChange={set('amount')} inputMode='decimal' autoComplete='off' dir='ltr' placeholder={exponent === 0 ? '0' : `0.${'0'.repeat(exponent)}`} disabled={readOnly || locked} />
         </Field>
       </Stack>
       <Stack data-entry-field='side'>
-        <Combobox allowCustom={false} label='Debit or credit' options={sideChoices} value={side} disabled={readOnly || locked} error={errors.side}
-          description='Follows the group’s nature until you choose.' onValueChange={value => dispatch({ type: 'side', value: value === 'Cr' ? 'Cr' : 'Dr' })} />
+        <LookupField label='Debit or credit' options={sideChoices} value={side} disabled={readOnly || locked} error={errors.side}
+          description='Follows the group’s nature until you choose.' onValueChange={choose('side')} />
       </Stack>
       {existing && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
         {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
-        <Button type='button' variant='secondary' onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
+        <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
         {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy}>Delete <KeyHint command='entry.delete' /></Button>}
       </FormActions>
     </Form>
