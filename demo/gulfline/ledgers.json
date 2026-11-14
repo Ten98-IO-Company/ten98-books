@@ -399,7 +399,8 @@
     "name": "VAT Output 5%",
     "group": "duties_taxes",
     "extras": {
-      "taxType": "Others"
+      "taxType": "Others",
+      "taxRate": "5"
     }
   },
   {
@@ -407,7 +408,8 @@
     "name": "VAT Input 5%",
     "group": "duties_taxes",
     "extras": {
-      "taxType": "Others"
+      "taxType": "Others",
+      "taxRate": "5"
     }
   },
   {

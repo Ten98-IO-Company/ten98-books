@@ -198,10 +198,13 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.deepEqual(result.notComparable, ['payroll (a feature block ten98-books cannot compute yet)',
     'trialBalance: 1 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss)']);
   const differing = result.lines.filter(line => !line.ok).map(line => line.label);
-  assert.deepEqual(differing, ['Closing balance of Cash', 'Total capital and liabilities', 'Total assets']);
+  assert.deepEqual(differing, ['Voucher numbers equal to expectedNumber (dataset sequence (not yet verified against the reference))', 'Closing balance of Cash', 'Total capital and liabilities', 'Total assets']);
+  const wrongNumber = result.lines.find(line => line.label.startsWith('Voucher numbers equal'))!;
+  assert.deepEqual([wrongNumber.expected, wrongNumber.actual, wrongNumber.difference], ['2', '1', '-1']);
+  assert.match(wrongNumber.note!, /^1 voucher\(s\) differ \(by year: 2026: 1\); examples: rent-wrong \(2026-04-03\): expected 5, assigned 2$/);
   const cash = result.lines.find(line => line.label === 'Closing balance of Cash')!;
   assert.deepEqual([cash.expected, cash.actual, cash.difference], ['20.000 Dr', '30.000 Dr', '10.000 Dr'], 'exact on three-decimal minor units');
-  assert.equal(result.differences, 3, 'the count a non-zero exit code is based on');
+  assert.equal(result.differences, 4, 'the count a non-zero exit code is based on');
   const printed = formatCompareResult(result).join('\n');
   assert.ok(printed.includes('DIFFERS') && printed.includes('NOT YET COMPARABLE') && printed.includes('payroll'));
   assert.deepEqual((await seedDataset(owner.userId, edge)).vouchers, { created: 0, present: 4, cancelled: 0 });
@@ -383,12 +386,16 @@ test('the comparison leaves skipped vouchers and stock out of the counts, checks
   const stock = byLabel['Opening-balance difference (equals the opening stock value)'];
   assert.deepEqual([stock.expected, stock.actual, stock.ok], ['500.00 Cr', '500.00 Cr', true]);
   assert.deepEqual([byLabel['Total debit'].ok, byLabel['Total credit'].ok, byLabel['Gross profit (excluding stock)'].ok, byLabel['Net profit (excluding stock)'].ok], [true, true, true, true]);
-  assert.deepEqual(result.lines.filter(line => !line.ok).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type journal']);
+  assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type journal'], 'the number line agrees: the shifted number is explained');
+  const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
+  assert.deepEqual([shifted.expected, shifted.ok], ['1', false]);
+  assert.match(shifted.reason!, /examples: journal-3 \(2026-01-06\): expected 3, assigned 1/);
   assert.ok(!('Gross profit' in byLabel) && !('Total assets' in byLabel), 'stock-inclusive figures are not compared');
   assert.deepEqual(result.notComparable, [
     'stockSummary (needs inventory)',
     'voucher types ten98-books does not have, left out of the voucher counts: sales_order 1, memorandum 1 (needs those voucher types)',
     'vouchers without lines of supported types (cancelled or no accounting effect) cannot be represented yet, left out of the voucher counts: journal 1',
+    'voucher numbers: expectedNumber of 1 voucher(s) of types ten98-books does not have (not checked)',
     'trialBalance: 2 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss, Purchases)',
     'profitAndLoss.grossProfit and profitAndLoss.netProfit (include opening and closing stock; need inventory)',
     'balanceSheet.total and balanceSheet.closingStockInAssets (include closing stock; need inventory)',
@@ -424,8 +431,8 @@ test('a ledger expected.json lists at zero is not yet comparable only when its o
   const bank = reconciled.lines.find(line => line.label === 'Closing balance of Bank')!;
   assert.deepEqual([bank.expected, bank.actual, bank.ok], ['0.00', '500.00 Dr', false]);
   assert.match(bank.reason!, /lists these 1 ledger\(s\) at zero, but its own totals need their balances/);
-  assert.deepEqual([reconciled.pending, reconciled.differences], [1, 2], 'only the two voucher-count lines differ');
-  assert.match(formatCompareResult(reconciled).join('\n'), /NOT YET COMPARABLE \(1 line\(s\)[^]*reason: expected.json lists these 1 ledger/);
+  assert.deepEqual([reconciled.pending, reconciled.differences], [2, 2], 'only the two voucher-count lines differ; the bank line and the shifted journal number are not yet comparable');
+  assert.match(formatCompareResult(reconciled).join('\n'), /NOT YET COMPARABLE \(2 line\(s\)[^]*reason: expected.json lists these 1 ledger/);
 
   // The same zero with a second figure wrong: the totals no longer reconcile, so the zero is a real difference.
   const wrongToo = stockDataset();

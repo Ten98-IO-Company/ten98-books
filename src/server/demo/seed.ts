@@ -8,7 +8,7 @@ import { ledgerContext, runLedger } from '../ledger/context.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
-import { DemoError, demoRoot, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
+import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 
 /**
  * The demo seeder. For an existing user it creates each dataset's company through the app's own `createCompany` (the
@@ -204,17 +204,14 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
     }
     return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])) };
   });
-  // Earlier vouchers of each type that hold a number in the dataset but receive none here (skipped or optional), which
-  // shifts the numbers of the later ones; named beside any number that differs.
-  const holes = new Map<string, string[]>();
-  const hole = (type: string, label: string) => holes.set(type, [...holes.get(type) ?? [], label]);
   const bump = (counts: Record<string, number>, type: string) => { counts[type] = (counts[type] ?? 0) + 1; };
+  const assigned = new Map<string, number | null>();
+  const refused = new Set<string>();
   for (const voucher of dataset.vouchers) {
     const at = `voucher "${voucher.key}"`;
     const disposition = dispositionOf(voucher);
     if (disposition !== 'post') {
       bump(disposition === 'unsupported-type' ? report.unsupportedTypes : report.noEntries, voucher.type);
-      if (disposition === 'no-entries' && voucher.expectedNumber !== undefined) hole(voucher.type, `${voucher.key} (${voucher.status === 'cancelled' ? 'cancelled without lines' : 'no entries'})`);
       continue;
     }
     try {
@@ -234,22 +231,19 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
       });
       if (done.replayed && !done.cancelled) report.vouchers.present++; else report.vouchers.created++;
       if (done.cancelled) report.vouchers.cancelled++;
-      if (voucher.expectedNumber === undefined) continue;
-      if (done.number === null) { report.numbers.unnumbered++; hole(voucher.type, `${voucher.key} (${voucher.status})`); continue; }
-      report.numbers.checked++;
-      if (String(done.number) === String(voucher.expectedNumber)) { report.numbers.matched++; continue; }
-      const earlier = holes.get(voucher.type) ?? [];
-      const why = earlier.length ? `; ${earlier.length} earlier ${voucher.type} voucher(s) hold numbers in the dataset but none here${Number(voucher.expectedNumber) === done.number + earlier.length ? ', which accounts for the whole difference' : ''}: ${earlier.join(', ')}` : '';
-      report.numberDifferences.push(`${at} (${voucher.type}): expected number ${voucher.expectedNumber}, ten98-books assigned ${done.number}${why}`);
+      assigned.set(voucher.key, done.number);
     } catch (error) {
       if (error instanceof FoundationError && error.code === 'posting_rule') {
         report.refused.push(`${at} (${voucher.type}, ${voucher.date}, ${voucher.status}): ${error.message}`);
-        if (voucher.expectedNumber !== undefined) hole(voucher.type, `${voucher.key} (refused by a posting rule)`);
+        refused.add(voucher.key);
         continue;
       }
       failure(dataset, 'vouchers', at, error);
     }
   }
+  const check = checkNumbers(dataset, assigned, refused);
+  Object.assign(report.numbers, { checked: check.checked, matched: check.matched, unnumbered: check.unnumbered });
+  report.numberDifferences = check.differences.map(describeNumberDifference);
 }
 
 /**

@@ -6,7 +6,7 @@ import { listLedgers } from '../ledger/masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
 import { listVouchers } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
-import { DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
+import { checkNumbers, DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 import { findDemoCompany, findUserId, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
 
 /**
@@ -77,7 +77,8 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     // Dataset vouchers of a posted kind that are not in the books (refused by a posting rule, or never seeded), so a count
     // that falls short can say which voucher it is.
     const prefix = voucherKeyPrefix(dataset.slug);
-    const seeded = new Set((await client.query<{ key: string }>('SELECT idempotency_key AS key FROM voucher WHERE company_id = $1 AND starts_with(idempotency_key, $2)', [access.companyId, prefix])).rows.map(row => row.key.slice(prefix.length)));
+    const assigned = new Map((await client.query<{ key: string; number: number | null }>('SELECT idempotency_key AS key, number FROM voucher WHERE company_id = $1 AND starts_with(idempotency_key, $2)', [access.companyId, prefix])).rows.map((row): [string, number | null] => [row.key.slice(prefix.length), row.number]));
+    const seeded = new Set(assigned.keys());
     const absent = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && dispositionOf(voucher) === 'post' && !seeded.has(voucher.key));
     const absentNote = (type?: string) => {
       const those = absent.filter(voucher => type === undefined || voucher.type === type);
@@ -112,6 +113,25 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       const noEntries = [...new Set(unposted.filter(voucher => dispositionOf(voucher) === 'no-entries').map(voucher => voucher.type))].map((type): [string, number] => [type, unpostedOf(type)]);
       if (noEntries.length) skipped.push(`vouchers without lines of supported types (cancelled or no accounting effect) cannot be represented yet, left out of the voucher counts: ${listed(noEntries)}`);
     }
+
+    // Voucher numbers (every dataset voucher, whatever its date: numbering is not bound to the period). A difference that
+    // earlier skipped vouchers of the same type account for is not yet comparable; any other is a difference.
+    const numbered = checkNumbers(dataset, assigned);
+    const shifted = numbered.differences.filter(difference => difference.explained);
+    const real = numbered.differences.filter(difference => !difference.explained);
+    const examples = (list: typeof real) => list.slice(0, 3).map(difference => `${difference.key} (${difference.date}): expected ${difference.expected}, assigned ${difference.assigned}`).join('; ');
+    if (numbered.checked > 0) {
+      const years = [...real.reduce((counts, difference) => counts.set(difference.date.slice(0, 4), (counts.get(difference.date.slice(0, 4)) ?? 0) + 1), new Map<string, number>())].sort().map(([year, count]) => `${year}: ${count}`).join(', ');
+      const comparableCount = numbered.checked - shifted.length;
+      push('Voucher numbers', `Voucher numbers equal to expectedNumber (${numbersKind(dataset)})`, String(comparableCount), String(numbered.matched), String(numbered.matched - comparableCount), real.length === 0,
+        real.length ? `${real.length} voucher(s) differ (by year: ${years}); examples: ${examples(real)}` : undefined);
+    }
+    if (shifted.length) {
+      lines.push({ block: 'Voucher numbers', label: 'Voucher numbers shifted by vouchers ten98-books does not post', expected: String(shifted.length), actual: 'not compared', difference: 'n/a', ok: false,
+        reason: `their numbers differ only because earlier vouchers of the same type hold numbers in the dataset but none here (cancelled without lines, optional, refused or absent); examples: ${examples(shifted)}` });
+    }
+    const unsupportedNumbered = dataset.vouchers.filter(voucher => voucher.expectedNumber !== undefined && dispositionOf(voucher) === 'unsupported-type').length;
+    if (unsupportedNumbered) skipped.push(`voucher numbers: expectedNumber of ${unsupportedNumbered} voucher(s) of types ten98-books does not have (not checked)`);
 
     // Trial balance: totals, each named ledger's closing balance and side, and every ledger the file leaves out.
     const trial = expected.trialBalance;

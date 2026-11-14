@@ -136,6 +136,41 @@ export function dispositionOf(voucher: VoucherEntry): 'post' | 'unsupported-type
   return voucher.lines.length === 0 ? 'no-entries' : 'post';
 }
 
+export type NumberDifference = { key: string; type: string; date: string; expected: string | number; assigned: number; holes: string[]; explained: boolean };
+export type NumberCheck = { checked: number; matched: number; unnumbered: number; differences: NumberDifference[] };
+
+/**
+ * Compares the numbers ten98-books assigned (`assigned`: dataset voucher key to number, null for an optional voucher; a
+ * posted-kind voucher missing from the map is not in the books) with `expectedNumber`. A difference is `explained` when
+ * earlier vouchers of the same type hold numbers in the dataset but none here (cancelled without lines, optional,
+ * refused or absent) and their count accounts for the whole gap; otherwise it is a real difference. Shared by the seeder,
+ * which knows which vouchers were refused, and the comparison, which reads the numbers back from the books.
+ */
+export function checkNumbers(dataset: Pick<Dataset, 'vouchers'>, assigned: ReadonlyMap<string, number | null>, refused: ReadonlySet<string> = new Set()): NumberCheck {
+  const holes = new Map<string, string[]>();
+  const hole = (type: string, label: string) => holes.set(type, [...holes.get(type) ?? [], label]);
+  const result: NumberCheck = { checked: 0, matched: 0, unnumbered: 0, differences: [] };
+  for (const voucher of dataset.vouchers) {
+    const disposition = dispositionOf(voucher);
+    if (disposition === 'unsupported-type' || voucher.expectedNumber === undefined) continue;
+    if (disposition === 'no-entries') { hole(voucher.type, `${voucher.key} (${voucher.status === 'cancelled' ? 'cancelled without lines' : 'no entries'})`); continue; }
+    if (!assigned.has(voucher.key)) { hole(voucher.type, `${voucher.key} (${refused.has(voucher.key) ? 'refused by a posting rule' : 'not in the books'})`); continue; }
+    const number = assigned.get(voucher.key)!;
+    if (number === null) { result.unnumbered++; hole(voucher.type, `${voucher.key} (${voucher.status})`); continue; }
+    result.checked++;
+    if (String(number) === String(voucher.expectedNumber)) { result.matched++; continue; }
+    const earlier = holes.get(voucher.type) ?? [];
+    result.differences.push({ key: voucher.key, type: voucher.type, date: voucher.date, expected: voucher.expectedNumber, assigned: number, holes: earlier, explained: earlier.length > 0 && Number(voucher.expectedNumber) === number + earlier.length });
+  }
+  return result;
+}
+
+export function describeNumberDifference(difference: NumberDifference): string {
+  const why = difference.holes.length
+    ? `; ${difference.holes.length} earlier ${difference.type} voucher(s) hold numbers in the dataset but none here${difference.explained ? ', which accounts for the whole difference' : ''}: ${difference.holes.join(', ')}` : '';
+  return `voucher "${difference.key}" (${difference.type}): expected number ${difference.expected}, ten98-books assigned ${difference.assigned}${why}`;
+}
+
 /** Minor units of a plain decimal string; refuses more decimal places than the currency has instead of rounding. */
 export function toMinor(value: string, exponent: MoneyExponent): bigint {
   if ((value.split('.')[1] ?? '').length > exponent) throw new RangeError(`has more than ${exponent} decimal places`);

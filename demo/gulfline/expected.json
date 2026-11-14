@@ -240,5 +240,6 @@
     "report": "Pending payable bills at the end of 2026",
     "pendingBills": 5,
     "pendingTotal": "82415.06"
-  }
+  },
+  "numbersVerified": true
 }

@@ -37,9 +37,10 @@ for (const slug of ['gulfline', 'najd']) {
     assert.deepEqual(first.noEntries, { journal: 2 }, 'the two cancelled journals without lines');
     assert.equal(first.refused.length, 1);
     assert.match(first.refused[0], /^voucher "journal-001" \(journal, 2026-06-15, optional\): A journal cannot use a cash or bank ledger/);
-    assert.deepEqual(first.numbers, { checked: 300, matched: 298, unnumbered: 0, kind: 'dataset sequence (not yet verified against the reference)' });
-    assert.equal(first.numberDifferences.length, 2);
-    assert.ok(first.numberDifferences.every(line => line.includes('3 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference')));
+    assert.deepEqual(first.numbers, { checked: 300, matched: 265, unnumbered: 0, kind: 'confirmed against the reference' });
+    // 35 numbers differ: two journals shifted by the two cancelled journals without lines, and 33 that are not explained.
+    assert.equal(first.numberDifferences.length, 35);
+    assert.equal(first.numberDifferences.filter(line => line.includes('which accounts for the whole difference')).length, 2);
     assert.ok(first.skipped.some(line => line.startsWith('items.json: stock not yet supported (14 item(s), 3 location(s); opening stock worth 369440.00')));
 
     started = Date.now();
@@ -53,13 +54,19 @@ for (const slug of ['gulfline', 'najd']) {
     const text = formatCompareResult(result).join('\n');
     // Three groups, every line in one: the 16 ledgers expected.json lists at zero (its own totals need their balances) are
     // not yet comparable with the reason; only the sign, the journal count and the journal type count differ.
-    const placeholders = result.lines.filter(line => line.reason);
+    const placeholders = result.lines.filter(line => line.reason && line.block === 'Trial balance');
     assert.equal(placeholders.length, 16, text);
     assert.ok(placeholders.every(line => line.block === 'Trial balance' && line.expected === '0.00' && line.reason!.includes('its own totals need their balances')));
     const findings = result.lines.filter(line => !line.ok && !line.reason);
-    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)', 'Voucher count (types ten98-books has)', 'Vouchers of type journal'], text);
-    assert.deepEqual([result.matches, result.differences, result.pending], [40, 3, 16]);
-    assert.match(text, /MATCHES \(40\)[^]*DIFFERS \(3\)[^]*NOT YET COMPARABLE \(16 line\(s\)/);
+    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)', 'Voucher count (types ten98-books has)', 'Voucher numbers equal to expectedNumber (confirmed against the reference)', 'Vouchers of type journal'], text);
+    assert.deepEqual([result.matches, result.differences, result.pending], [40, 4, 17]);
+    assert.match(text, /MATCHES \(40\)[^]*DIFFERS \(4\)[^]*NOT YET COMPARABLE \(17 line\(s\)/);
+    // The one real numbering difference: one counter per type here, restarts on 1 January 2027 in the dataset.
+    const numbers = findings.find(line => line.label.startsWith('Voucher numbers equal'))!;
+    assert.deepEqual([numbers.expected, numbers.actual, numbers.difference], ['298', '265', '-33']);
+    assert.match(numbers.note!, /^33 voucher\(s\) differ \(by year: 2026: 5, 2027: 28\); examples: purchase-026 \(2027-01-06\): expected 1, assigned 26; sales-081 \(2027-01-03\): expected 1, assigned 81; sales-082 \(2027-01-05\): expected 2, assigned 82$/);
+    const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
+    assert.deepEqual([shifted.expected, shifted.ok, typeof shifted.reason], ['2', false, 'string']);
     assert.ok(findings.find(line => line.label === 'Vouchers of type journal')!.note!.includes('journal-001 (journal, optional)'));
     assert.ok(findings.find(line => line.label === 'Net profit (excluding stock)')!.note!.includes('opposite sign'));
     const net = result.lines.find(line => line.label === 'Net profit (excluding stock)')!;

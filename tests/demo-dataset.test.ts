@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { notComparable } from '../src/server/demo/compare.ts';
-import { DatasetError, dispositionOf, numbersKind, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
+import { checkNumbers, DatasetError, describeNumberDifference, dispositionOf, numbersKind, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
 import { goldenVouchers } from './helpers/golden.ts';
 
@@ -396,7 +396,38 @@ test('numbersVerified is an optional boolean that says what expectedNumber is; i
   mentions(problems(raw), 'expected.json', 'numbersVerified');
 });
 
-test('starter-trading says its numbers were confirmed; the large companies do not claim it', async () => {
-  assert.equal(numbersKind(await loadDataset(join(demoRoot, 'starter-trading'))), 'confirmed against the reference');
-  for (const slug of ['gulfline', 'najd']) assert.equal((await loadDataset(join(demoRoot, slug))).expected.numbersVerified, undefined, slug);
+test('every dataset in demo/ says its numbers were confirmed against the reference', async () => {
+  for (const slug of ['starter-trading', 'gulfline', 'najd']) assert.equal(numbersKind(await loadDataset(join(demoRoot, slug))), 'confirmed against the reference', slug);
+});
+
+/** Vouchers for the number check: type, key, date, status, lines, expectedNumber. */
+const numbered = (...rows: [type: string, key: string, date: string, status: 'regular' | 'cancelled' | 'optional', lines: number, expectedNumber?: number][]) => ({
+  vouchers: rows.map(([type, key, date, status, lines, expectedNumber]) => ({
+    key, type, date, status, postDated: false, expectedNumber, lines: Array.from({ length: lines }, () => ({ ledger: 'x', side: 'Dr' as const, amount: '1.00' })),
+  })),
+});
+
+test('checkNumbers matches, skips what has no number to check, and explains a shift by skipped vouchers of the same type', () => {
+  const dataset = numbered(
+    ['journal', 'j1', '2026-01-01', 'optional', 2, 1], ['journal', 'j2', '2026-01-02', 'cancelled', 0, 2], ['journal', 'j3', '2026-01-03', 'regular', 2, 3],
+    ['journal', 'j4', '2026-01-04', 'regular', 2, 4], ['sales_order', 'o1', '2026-01-05', 'regular', 0, 1], ['receipt', 'r1', '2026-01-06', 'regular', 2, 1], ['receipt', 'r2', '2026-01-07', 'regular', 2],
+  );
+  const assigned = new Map<string, number | null>([['j1', null], ['j3', 1], ['j4', 2], ['r1', 1], ['r2', 2]]);
+  const check = checkNumbers(dataset as never, assigned);
+  assert.deepEqual([check.checked, check.matched, check.unnumbered], [3, 1, 1], 'j3, j4 and r1 are checked; j1 is optional; o1 has an unsupported type; r2 has no expectedNumber');
+  assert.deepEqual(check.differences.map(difference => [difference.key, difference.expected, difference.assigned, difference.explained]), [['j3', 3, 1, true], ['j4', 4, 2, true]]);
+  assert.equal(describeNumberDifference(check.differences[0]), 'voucher "j3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: j1 (optional), j2 (cancelled without lines)');
+});
+
+test('checkNumbers names refused and absent vouchers, and a restart of numbering is a real difference, not an explained one', () => {
+  const dataset = numbered(
+    ['sales', 's1', '2026-12-30', 'regular', 2, 1], ['sales', 's2', '2026-12-31', 'regular', 2, 2], ['sales', 's3', '2027-01-02', 'regular', 2, 1], ['sales', 's4', '2027-01-03', 'regular', 2, 2],
+    ['payment', 'p1', '2026-01-02', 'regular', 2, 1], ['payment', 'p2', '2026-01-03', 'regular', 2, 2],
+  );
+  const check = checkNumbers(dataset as never, new Map([['s1', 1], ['s2', 2], ['s3', 3], ['s4', 4], ['p2', 1]]), new Set(['p1']));
+  assert.deepEqual(check.differences.map(difference => [difference.key, difference.expected, difference.assigned, difference.explained]), [['s3', 1, 3, false], ['s4', 2, 4, false], ['p2', 2, 1, true]]);
+  assert.ok(describeNumberDifference(check.differences[2]).endsWith('which accounts for the whole difference: p1 (refused by a posting rule)'));
+  assert.equal(describeNumberDifference(check.differences[0]), 'voucher "s3" (sales): expected number 1, ten98-books assigned 3');
+  const absent = checkNumbers(dataset as never, new Map([['s1', 1], ['s2', 2], ['s3', 3], ['s4', 4], ['p2', 1]]));
+  assert.ok(describeNumberDifference(absent.differences[2]).endsWith('p1 (not in the books)'));
 });
