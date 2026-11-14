@@ -37,7 +37,7 @@ for (const slug of ['gulfline', 'najd']) {
     assert.deepEqual(first.noEntries, { journal: 2 }, 'the two cancelled journals without lines');
     assert.equal(first.refused.length, 1);
     assert.match(first.refused[0], /^voucher "journal-001" \(journal, 2026-06-15, optional\): A journal cannot use a cash or bank ledger/);
-    assert.deepEqual(first.numbers, { checked: 300, matched: 298, unnumbered: 0 });
+    assert.deepEqual(first.numbers, { checked: 300, matched: 298, unnumbered: 0, kind: 'dataset sequence (not yet verified against the reference)' });
     assert.equal(first.numberDifferences.length, 2);
     assert.ok(first.numberDifferences.every(line => line.includes('3 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference')));
     assert.ok(first.skipped.some(line => line.startsWith('items.json: stock not yet supported (14 item(s), 3 location(s); opening stock worth 369440.00')));

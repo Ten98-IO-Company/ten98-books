@@ -76,6 +76,8 @@ test('seeding starter-trading creates the company, masters and 18 vouchers numbe
   assert.deepEqual(report.ledgers, { created: 12, present: 2, openingsSet: 3 });
   assert.deepEqual(report.vouchers, { created: 18, present: 0, cancelled: 0 });
   assert.deepEqual(report.numberDifferences, [], 'every expectedNumber matched');
+  assert.equal(report.numbers.kind, 'confirmed against the reference');
+  assert.ok(formatSeedReport(report).includes('  voucher numbers, confirmed against the reference: 18 of 18 checked match expectedNumber'));
   assert.deepEqual(report.skipped, []);
   assert.match(formatSeedReport(report)[0], /Starter Trading \(starter-trading\): seeded/);
   const me = (await owner.browser.call('/api/companies')).body.companies.find((company: { id: string }) => company.id === companyId);
@@ -93,6 +95,7 @@ test('the comparison finds zero differences against expected.json', async () => 
   assert.deepEqual([net.expected, net.actual, net.difference], ['-7400.00', '-7400.00', '0.00']);
   const printed: string[] = [];
   assert.equal(await compareDemo({ email: await emailOf(owner), company: 'starter-trading' }, line => printed.push(line)), 0);
+  assert.ok(printed.includes('  Voucher numbers (expectedNumber, checked when seeding): confirmed against the reference'));
   assert.ok(printed.some(line => line.includes('Closing balance of Supplier South') && line.includes('10075.00 Cr')));
 });
 
@@ -357,14 +360,15 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.deepEqual(report.noEntries, { journal: 1 });
   assert.equal(report.refused.length, 1);
   assert.match(report.refused[0], /^voucher "journal-1" \(journal, 2026-01-04, optional\): A journal cannot use a cash or bank ledger/);
-  assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 1 });
+  assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 1, kind: 'dataset sequence (not yet verified against the reference)' });
+  assert.ok(formatCompareResult(await compareDataset(owner.userId, stockDataset())).includes('  Voucher numbers (expectedNumber, checked when seeding): dataset sequence (not yet verified against the reference)'));
   assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (refused by a posting rule), journal-2 (cancelled without lines)']);
   assert.ok(report.skipped.includes('items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)'));
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
   assert.match(printed, /no entries to post .*: 1 journal/);
   assert.match(printed, /vouchers refused by ten98-books posting rules and not posted/);
-  assert.match(printed, /voucher numbers: 2 of 3 checked match expectedNumber; 1 optional voucher\(s\) hold a number in the dataset but take none until regular/);
+  assert.match(printed, /voucher numbers, dataset sequence \(not yet verified against the reference\): 2 of 3 checked match expectedNumber; 1 optional voucher\(s\) hold a number in the dataset but take none until regular/);
   assert.deepEqual(await seedDataset(owner.userId, stockDataset()).then(again => [again.vouchers, again.refused.length]), [{ created: 0, present: 4, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
 });
 

@@ -1,5 +1,6 @@
 {
   "period": { "from": "2026-01-01", "to": "2026-02-03" },
+  "numbersVerified": true,
   "voucherCount": 18,
   "vouchersByType": { "payment": 5, "receipt": 3, "contra": 2, "journal": 2, "purchase": 2, "sales": 2, "credit_note": 1, "debit_note": 1 },
   "trialBalance": {

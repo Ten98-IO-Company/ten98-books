@@ -8,7 +8,7 @@ import { ledgerContext, runLedger } from '../ledger/context.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
-import { DemoError, demoRoot, dispositionOf, listDatasetFolders, loadDataset, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
+import { DemoError, demoRoot, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 
 /**
  * The demo seeder. For an existing user it creates each dataset's company through the app's own `createCompany` (the
@@ -43,7 +43,7 @@ export type SeedReport = {
    */
   refused: string[];
   /** expectedNumber checks of posted vouchers: how many were compared, how many matched, and optional ones that take no number. */
-  numbers: { checked: number; matched: number; unnumbered: number };
+  numbers: { checked: number; matched: number; unnumbered: number; kind: string };
   /** Voucher numbers ten98-books assigned that differ from the dataset's `expectedNumber` (reported, never forced). */
   numberDifferences: string[];
   /** Standard ledgers the dataset names differently from ten98-books; the seeded name is kept, so the difference is listed. */
@@ -284,7 +284,7 @@ async function seedUnderLock(userId: string, dataset: Dataset): Promise<SeedRepo
   const report: SeedReport = {
     slug: dataset.slug, companyId: '', companyName: settings.name, companyCreated: false,
     groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
-    unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0 },
+    unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0, kind: numbersKind(dataset) },
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
   };
   if (!company) {
@@ -330,9 +330,9 @@ export function formatSeedReport(report: SeedReport): string[] {
   if (Object.keys(report.noEntries).length) lines.push(`  vouchers not posted, no entries to post (cancelled or no accounting effect; cannot be represented yet): ${typeCounts(report.noEntries)}`);
   if (report.refused.length) lines.push('  vouchers refused by ten98-books posting rules and not posted (a difference from the dataset):', ...report.refused.map(line => `    ${line}`));
   if (report.numbers.checked || report.numbers.unnumbered) {
-    lines.push(`  voucher numbers: ${report.numbers.matched} of ${report.numbers.checked} checked match expectedNumber${report.numbers.unnumbered ? `; ${report.numbers.unnumbered} optional voucher(s) hold a number in the dataset but take none until regular` : ''}`);
+    lines.push(`  voucher numbers, ${report.numbers.kind}: ${report.numbers.matched} of ${report.numbers.checked} checked match expectedNumber${report.numbers.unnumbered ? `; ${report.numbers.unnumbered} optional voucher(s) hold a number in the dataset but take none until regular` : ''}`);
   }
-  if (report.numberDifferences.length) lines.push('  voucher numbers that differ from expectedNumber (reported, not forced):', ...report.numberDifferences.map(line => `    ${line}`));
+  if (report.numberDifferences.length) lines.push(`  voucher numbers that differ from expectedNumber (${report.numbers.kind}; reported, not forced):`, ...report.numberDifferences.map(line => `    ${line}`));
   if (report.nameDifferences.length) lines.push('  standard ledger names that differ from the dataset:', ...report.nameDifferences.map(line => `    ${line}`));
   if (report.openingDifferences.length) lines.push('  opening balances left as they were:', ...report.openingDifferences.map(line => `    ${line}`));
   if (report.skipped.length) lines.push('  skipped (not modelled by ten98-books yet):', ...report.skipped.map(line => `    ${line}`));

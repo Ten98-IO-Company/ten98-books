@@ -6,7 +6,7 @@ import { listLedgers } from '../ledger/masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
 import { listVouchers } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
-import { DemoError, dispositionOf, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
+import { DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
 import { findDemoCompany, findUserId, selectDatasets, type DemoSelection } from './seed.ts';
 
 /**
@@ -16,9 +16,9 @@ import { findDemoCompany, findUserId, selectDatasets, type DemoSelection } from 
  */
 
 export type CompareLine = { block: string; label: string; expected: string; actual: string; difference: string; ok: boolean };
-export type CompareResult = { slug: string; companyName: string; companyId: string; role: string; period: { from: string; to: string }; lines: CompareLine[]; notComparable: string[]; differences: number };
+export type CompareResult = { numbers: string; slug: string; companyName: string; companyId: string; role: string; period: { from: string; to: string }; lines: CompareLine[]; notComparable: string[]; differences: number };
 
-const comparable = { top: ['period', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
+const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'],
   profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets'] };
 
@@ -176,7 +176,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/expected.json: the reports refused the period ${from} to ${to}: ${error.message}`);
     throw error;
   });
-  return { slug: dataset.slug, companyName: company.name, companyId: company.id, role: company.role, period: expected.period, lines, notComparable: skipped, differences: lines.filter(line => !line.ok).length };
+  return { numbers: numbersKind(dataset), slug: dataset.slug, companyName: company.name, companyId: company.id, role: company.role, period: expected.period, lines, notComparable: skipped, differences: lines.filter(line => !line.ok).length };
 }
 
 /** A readable table: one block per heading, then expected, actual and difference per line. */
@@ -184,7 +184,7 @@ export function formatCompareResult(result: CompareResult): string[] {
   const width = (pick: (line: CompareLine) => string, head: string) => Math.max(head.length, ...result.lines.map(line => pick(line).length));
   const [wl, we, wa, wd] = [width(l => l.label, 'Line'), width(l => l.expected, 'Expected'), width(l => l.actual, 'Actual'), width(l => l.difference, 'Difference')];
   const row = (label: string, e: string, a: string, d: string, mark: string) => `  ${label.padEnd(wl)}  ${e.padStart(we)}  ${a.padStart(wa)}  ${d.padStart(wd)}  ${mark}`;
-  const out = [`${result.companyName} (${result.slug}), company ${result.companyId} (${result.role}), ${result.period.from} to ${result.period.to}`, row('Line', 'Expected', 'Actual', 'Difference', '')];
+  const out = [`${result.companyName} (${result.slug}), company ${result.companyId} (${result.role}), ${result.period.from} to ${result.period.to}`, row('Line', 'Expected', 'Actual', 'Difference', ''), `  Voucher numbers (expectedNumber, checked when seeding): ${result.numbers}`];
   let block = '';
   for (const line of result.lines) {
     if (line.block !== block) { block = line.block; out.push(`  ${block}`); }

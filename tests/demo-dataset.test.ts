@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { notComparable } from '../src/server/demo/compare.ts';
-import { DatasetError, dispositionOf, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
+import { DatasetError, dispositionOf, numbersKind, duplicateKeys, listDatasetFolders, loadDataset, openingStockValue, parseDataset, demoRoot, toMinor, type ItemsFile, type RawDataset } from '../src/server/demo/dataset.ts';
 import { unmodelled } from '../src/server/demo/seed.ts';
 import { goldenVouchers } from './helpers/golden.ts';
 
@@ -382,4 +382,21 @@ test('the skipped-feature summary words items.json with its counts and the openi
     'items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)',
     'employees.json: feature file not modelled (kept as is)',
   ]);
+});
+
+test('numbersVerified is an optional boolean that says what expectedNumber is; it is not a figure to compare', () => {
+  const raw = good();
+  assert.equal(numbersKind(parseDataset(raw, 'demo/sample-shop')), 'dataset sequence (not yet verified against the reference)', 'the default');
+  raw.expected.numbersVerified = false;
+  assert.equal(numbersKind(parseDataset(raw, 'demo/sample-shop')), 'dataset sequence (not yet verified against the reference)');
+  raw.expected.numbersVerified = true;
+  assert.equal(numbersKind(parseDataset(raw, 'demo/sample-shop')), 'confirmed against the reference');
+  assert.deepEqual(notComparable(raw.expected), []);
+  raw.expected.numbersVerified = 'yes';
+  mentions(problems(raw), 'expected.json', 'numbersVerified');
+});
+
+test('starter-trading says its numbers were confirmed; the large companies do not claim it', async () => {
+  assert.equal(numbersKind(await loadDataset(join(demoRoot, 'starter-trading'))), 'confirmed against the reference');
+  for (const slug of ['gulfline', 'najd']) assert.equal((await loadDataset(join(demoRoot, slug))).expected.numbersVerified, undefined, slug);
 });

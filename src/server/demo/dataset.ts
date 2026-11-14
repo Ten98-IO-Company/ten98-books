@@ -68,6 +68,8 @@ const vouchersFile = z.array(z.strictObject({
 }));
 const expectedFile = z.looseObject({
   period: z.strictObject({ from: date, to: date }),
+  /** True when the voucher numbers in vouchers.json (expectedNumber) were confirmed against the reference system; default false. */
+  numbersVerified: z.boolean().optional(),
   voucherCount: count.optional(),
   vouchersByType: z.record(z.string(), count).optional(),
   trialBalance: z.looseObject({
@@ -118,6 +120,10 @@ export function openingStockValue(items: ItemsFile | undefined, exponent: MoneyE
   for (const item of items?.items ?? []) for (const line of item.opening ?? []) total += multiplyMoney(toMinor(line.rate, exponent), line.quantity, 'half-up');
   return total;
 }
+
+/** What expectedNumber is, for the lines that print it: the generator's own sequence until the dataset says it was confirmed. */
+export const numbersKind = (dataset: Pick<Dataset, 'expected'>) =>
+  dataset.expected.numbersVerified === true ? 'confirmed against the reference' : 'dataset sequence (not yet verified against the reference)';
 
 /**
  * What ten98-books can do with a voucher: `post` it through the ledger module, skip it because its type is not one of the
