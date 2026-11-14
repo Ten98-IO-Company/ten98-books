@@ -59,8 +59,8 @@ test('an unauthenticated request can neither read nor write a keymap', async () 
   assert.deepEqual(await rows(), []);
 });
 
-test('a user without a saved keymap gets web-safe, not yet chosen', async () => {
-  assert.deepEqual((await a.call('/api/account/keymap')).body, { keymap: 'web-safe', chosen: false });
+test('a user without a saved keymap gets classic (the default, D-05), not yet chosen', async () => {
+  assert.deepEqual((await a.call('/api/account/keymap')).body, { keymap: 'classic', chosen: false });
 });
 
 test('a user saves and reads back their own keymap', async () => {
@@ -68,16 +68,17 @@ test('a user saves and reads back their own keymap', async () => {
   assert.deepEqual((await a.call('/api/account/keymap')).body, { keymap: 'classic', chosen: true });
   assert.deepEqual(await put(a, { keymap: 'web-safe' }), { status: 200, body: { keymap: 'web-safe', chosen: true } });
   assert.deepEqual(await put(a, { keymap: 'classic' }), { status: 200, body: { keymap: 'classic', chosen: true } });
-  assert.deepEqual(await rows(), [{ user_id: ids.a, keymap: 'classic' }]);
+  assert.deepEqual(await put(a, { keymap: 'web-safe' }), { status: 200, body: { keymap: 'web-safe', chosen: true } });
+  assert.deepEqual(await rows(), [{ user_id: ids.a, keymap: 'web-safe' }]);
 });
 
 test("one user can neither read nor write another user's keymap", async () => {
-  assert.deepEqual((await b.call('/api/account/keymap')).body, { keymap: 'web-safe', chosen: false }, "B does not see A's choice");
-  assert.deepEqual((await b.call(`/api/account/keymap?userId=${ids.a}&user_id=${ids.a}`)).body, { keymap: 'web-safe', chosen: false }, 'a user id in the query is ignored');
-  assert.equal((await put(b, { keymap: 'web-safe', userId: ids.a })).status, 400, 'a user id in the body is refused');
-  assert.equal((await put(b, { keymap: 'web-safe' }, { path: `/api/account/keymap?userId=${ids.a}` })).status, 200);
-  assert.deepEqual(await rows(), [{ user_id: ids.a, keymap: 'classic' }, { user_id: ids.b, keymap: 'web-safe' }], "B's write landed on B's row only");
-  assert.deepEqual((await a.call('/api/account/keymap')).body, { keymap: 'classic', chosen: true });
+  assert.deepEqual((await b.call('/api/account/keymap')).body, { keymap: 'classic', chosen: false }, "B does not see A's choice");
+  assert.deepEqual((await b.call(`/api/account/keymap?userId=${ids.a}&user_id=${ids.a}`)).body, { keymap: 'classic', chosen: false }, 'a user id in the query is ignored');
+  assert.equal((await put(b, { keymap: 'classic', userId: ids.a })).status, 400, 'a user id in the body is refused');
+  assert.equal((await put(b, { keymap: 'classic' }, { path: `/api/account/keymap?userId=${ids.a}` })).status, 200);
+  assert.deepEqual(await rows(), [{ user_id: ids.b, keymap: 'classic' }, { user_id: ids.a, keymap: 'web-safe' }], "B's write landed on B's row only");
+  assert.deepEqual((await a.call('/api/account/keymap')).body, { keymap: 'web-safe', chosen: true });
 });
 
 test('the endpoint refuses bad input, other methods and cross-origin writes, and changes nothing', async () => {
@@ -93,5 +94,5 @@ test('the endpoint refuses bad input, other methods and cross-origin writes, and
 
 test("removing a user removes their keymap through the foreign key, as the application role", async () => {
   await getDatabase().pool.query('DELETE FROM "user" WHERE id=$1', [ids.b]);
-  assert.deepEqual(await rows(), [{ user_id: ids.a, keymap: 'classic' }]);
+  assert.deepEqual(await rows(), [{ user_id: ids.a, keymap: 'web-safe' }]);
 });

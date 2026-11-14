@@ -1,4 +1,5 @@
 import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { DialogKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
@@ -119,6 +120,6 @@ function ChartBody() {
         onOpen={key => { const row = cursors.find(item => item.key === key); if (row) go('edit', row) }} />
       : <EmptyState icon='book' title='The chart is empty' description='Create a group or a ledger to start.' />)}
     {canWrite && reason && <Text tone='muted' size='sm'>Delete is unavailable for the highlighted row: {reason}</Text>}
-    {dialog}
+    <DialogKeys name='Confirm' open={!!dialog}>{dialog}</DialogKeys>
   </Stack>
 }

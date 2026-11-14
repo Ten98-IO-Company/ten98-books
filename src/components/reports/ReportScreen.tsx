@@ -1,11 +1,10 @@
 import { Button, DateRangeField, Dialog, Field, Inline, Input, KeyHint, ReportPanel, ReportToolbar, saveFile, ShortcutScope, Stack, Switch, Text } from '@ten98/ui'
-import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
 import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
-import { useAppCommand, useBackOverride } from '../KeyboardShell'
+import { DialogKeys, ReservedKeys, screenModeText, useAppCommand, useBackOverride, useOpenScreen, type ScreenMode } from '../KeyboardShell'
 import { periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
 
 /** Reports the "open another report" menu offers, by the menu letter command each one answers to. */
@@ -46,10 +45,14 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
   children: ReactNode
 }) {
   const company = useCompany()
-  const navigate = useNavigate()
   const [periodOpen, setPeriodOpen] = useState(false)
-  const [goToOpen, setGoToOpen] = useState(false)
+  const [goToMode, setGoToMode] = useState<ScreenMode | null>(null)
+  const goToOpen = goToMode !== null
+  const shownMode = useRef<ScreenMode>('go-to')
+  if (goToMode) shownMode.current = goToMode
+  const openScreen = useOpenScreen()
   const [menuFocus, setMenuFocus] = useState(0)
+  const [goToActive, setGoToActive] = useState<CommandId>(destinations[0].command)
   useFocusOnOpen(goToOpen, () => setMenuFocus(request => request + 1))
   const [exportState, setExportState] = useState<{ busy: boolean; message: string; failed: boolean }>({ busy: false, message: '', failed: false })
 
@@ -75,8 +78,9 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
     : period?.kind === 'date' ? (period.date ? `As at ${longDate(period.date)}` : 'Choosing the date…') : 'Read-only'
 
   return <ShortcutScope name={contextTitles.report}>
+    <ReservedKeys context='report' />
     <ReportCommands periodOpen={() => setPeriodOpen(true)} hasPeriod={period !== undefined} detail={detail} zeros={zeros}
-      exportCsv={exportPath ? () => void exportCsv() : undefined} goTo={() => setGoToOpen(true)} />
+      exportCsv={exportPath ? () => void exportCsv() : undefined} openList={setGoToMode} />
     <Stack gap={4}>
       <ReportToolbar label={`${title} view`}
         controls={<Inline gap={4} wrap align='center'>
@@ -94,10 +98,10 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
-      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={destinations[0].command} onActiveChange={() => undefined}
-        groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodKind === 'statement' ? periodSearch(search) : {} } as never) })} />}
-    </Dialog>
+    <DialogKeys name={screenModeText[shownMode.current].title} open={goToOpen}><Dialog open={goToOpen} onOpenChange={next => { if (!next) setGoToMode(null) }} title={`${screenModeText[shownMode.current].title} another report`} description={`${screenModeText[shownMode.current].description} ${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
+      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={goToActive} onActiveChange={setGoToActive}
+        groups={reportMenuGroups(report => { const how = shownMode.current; setGoToMode(null); void openScreen(how, reportRoutes[report], { companyId: company.id }, periodKind === 'statement' ? periodSearch(search) : {}) })} />}
+    </Dialog></DialogKeys>
   </ShortcutScope>
 }
 
@@ -109,15 +113,16 @@ export function reportMenuGroups(open: (report: ReportRoute) => void): KeyboardM
   }))
 }
 
-function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo }: {
-  periodOpen: () => void; hasPeriod: boolean; detail?: { toggle: () => void }; zeros?: { toggle: () => void }; exportCsv?: () => void; goTo: () => void
+function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, openList }: {
+  periodOpen: () => void; hasPeriod: boolean; detail?: { toggle: () => void }; zeros?: { toggle: () => void }; exportCsv?: () => void; openList: (mode: ScreenMode) => void
 }) {
   useAppCommand('report.period', periodOpen, { enabled: hasPeriod })
   useAppCommand('report.detail', () => detail?.toggle(), { enabled: detail !== undefined })
   useAppCommand('report.zero-lines', () => zeros?.toggle(), { enabled: zeros !== undefined })
   useAppCommand('report.export', () => exportCsv?.(), { enabled: exportCsv !== undefined })
   useAppCommand('report.print', () => window.print())
-  useAppCommand('report.go-to', goTo)
+  useAppCommand('nav.go-to', () => openList('go-to'))
+  useAppCommand('nav.switch-to', () => openList('switch-to'))
   return null
 }
 
@@ -125,7 +130,7 @@ function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo 
  * Moves focus into a dialog once it has opened (the dialog itself starts on its close button). A stand-in for the
  * initial-focus option the design system is adding to Dialog: replace each use with that prop when it ships.
  */
-function useFocusOnOpen(open: boolean, focus: () => void) {
+export function useFocusOnOpen(open: boolean, focus: () => void) {
   const latest = useRef(focus)
   latest.current = focus
   useEffect(() => {
@@ -152,7 +157,7 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
     setShownFor(open)
     if (open) { setRange({ start: initial?.from ?? '', end: initial?.to ?? '' }); setDate(control.kind === 'date' ? control.date ?? '' : ''); setProblem(null) }
   }
-  return <Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
+  return <DialogKeys name='Period' open={open} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
     description={control.kind === 'date' ? 'The balance sheet shows balances at the end of this day.' : 'Every report you open next uses this period until you change it.'}
     onSubmit={() => {
       if (control.kind === 'date') { if (date) { control.onChange(date); onOpenChange(false) } return }
@@ -164,5 +169,5 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
     <Stack ref={body}>{control.kind === 'range'
       ? <DateRangeField label='Period' start={range.start} end={range.end} maxDays={3660} onChange={(next, issue) => { setRange(next); setProblem(issue) }} />
       : <Field label='As at' htmlFor={`${id}date`}><Input id={`${id}date`} type='date' value={date} required onChange={event => setDate(event.target.value)} /></Field>}</Stack>
-  </Dialog>
+  </Dialog></DialogKeys>
 }

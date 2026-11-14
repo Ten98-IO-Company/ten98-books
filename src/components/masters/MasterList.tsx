@@ -1,7 +1,7 @@
 import { Badge, Icon, Inline, ShortcutScope, Stack, Text } from '@ten98/ui'
 import { memo, useCallback, useEffect, useId, useMemo, useRef, type ReactNode, type RefObject } from 'react'
 import { contextTitles } from '../../lib/commands'
-import { useAppCommand } from '../KeyboardShell'
+import { ReservedKeys, useAppCommand } from '../KeyboardShell'
 
 export type ListEntry = {
   key: string
@@ -19,7 +19,7 @@ export type ListEntry = {
 
 /** The list context for a screen: its commands (movement, open, create, delete, history) register inside it. */
 export function ListScope({ children }: { children: ReactNode }) {
-  return <ShortcutScope name={contextTitles.list}>{children}</ShortcutScope>
+  return <ShortcutScope name={contextTitles.list}><ReservedKeys context='list' />{children}</ShortcutScope>
 }
 
 /**

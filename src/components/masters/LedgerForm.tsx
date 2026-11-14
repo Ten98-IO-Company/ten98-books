@@ -1,4 +1,5 @@
 import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
@@ -10,7 +11,7 @@ import {
   ledgerPayload, natureSingular, openingLocked, plainAmount, resolveLookup, sideTitles, validateLedgerForm, type Choice, type LedgerField, type LedgerFormAction, type LedgerFormValues, type LedgerRow,
 } from '../../lib/masters'
 import type { Wire } from '../../lib/money'
-import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useMasterRequest } from './entry'
+import { EntryScope, entryText, FailureAlert, focusEntryField, focusFirstInvalid, nextEntryField, SaveConfirm, useEntryCommands, useLeave, useLeaveGuard, useMasterRequest } from './entry'
 import { rememberGroup, setFlash } from './flash'
 import type { MasterFormProps } from './GroupForm'
 import { LookupField } from './LookupField'
@@ -81,6 +82,8 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const side = effectiveSide(values, groups)
   // A new entry is dirty once something is typed (the kept group after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
   const lookups: Record<LookupName, { options: Choice[]; current: (from: LedgerFormValues) => string; actions: (value: string) => LedgerFormAction[]; blank: string }> = {
@@ -138,7 +141,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
     const done = result.ledger
     const opening = done.opening.amount.replace(/[0.]/g, '') === '' ? '' : ` with an opening balance of ${displayAmount(done.opening.amount, exponent)} ${done.opening.side}`
     const message = `Saved ledger “${done.name}”${done.groupId ? ` under ${groupPath(groups, done.groupId).join(' › ')}` : ''}${opening}.`
-    if (existing) { setFlash(message); leave(); return }
+    if (existing) { setFlash(message); guard.pass(leave); return }
     rememberGroup(company.id, ready.groupId)
     setSaved(message)
     dispatch({ type: 'saved' })
@@ -150,7 +153,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
     if (!existing || readOnly || deleteReason) return
     if (!await confirm({ title: `Delete the ledger “${existing.name}”?`, description: 'The ledger is removed from the chart. Its history stays available. A ledger used in vouchers cannot be deleted.', confirmLabel: 'Delete ledger', danger: true })) return
     const done = await run(() => api(`/api/companies/${company.id}/ledgers/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
-    if (done) { setFlash(`Deleted ledger “${existing.name}”.`); leave() }
+    if (done) { setFlash(`Deleted ledger “${existing.name}”.`); guard.pass(leave) }
   }
 
   function askToSave() {
@@ -165,8 +168,8 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
 
   async function cancel() {
     if (confirming) { keepEditing(); return }
-    if (dirty && !readOnly && !await confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' })) return
-    leave()
+    // Asks first when something was typed, before the address changes.
+    await guard.leave(leave)
   }
 
   useEntryCommands({
@@ -217,9 +220,9 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
       </Stack>
       {existing && !readOnly && deleteReason && <Text tone='muted' size='sm'>Delete is unavailable: {deleteReason}</Text>}
       <FormActions>
-        {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy}>Save <KeyHint command='entry.accept' /></Button>}
+        {!readOnly && <Button type='button' onClick={() => void save()} disabled={busy} aria-keyshortcuts={acceptKeys}>Save <KeyHint command='entry.accept' /></Button>}
         <Button type='button' variant='secondary' autoFocus={readOnly} onClick={() => void cancel()}>{readOnly ? 'Back' : 'Leave'} <KeyHint command='entry.cancel' /></Button>
-        {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy}>Delete <KeyHint command='entry.delete' /></Button>}
+        {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy} aria-keyshortcuts={deleteKeys}>Delete <KeyHint command='entry.delete' /></Button>}
       </FormActions>
     </Form>
     <Card title='Opening balances of the company' description='Every ledger’s opening balance added up by the books. They may differ while you set up; saving is never blocked by it.' headingLevel={2}>
@@ -231,6 +234,6 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
         ]} />
         : <Text tone='muted'>{openings.unavailable ? 'The totals could not be loaded.' : 'Loading the totals…'}</Text>}
     </Card>
-    {dialog}
+    <DialogKeys name='Confirm' open={!!dialog}>{dialog}</DialogKeys>
   </Stack>
 }
