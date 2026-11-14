@@ -84,6 +84,6 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   }}>
     <DataTable caption={caption} columns={columns} rows={rows} rowKey={rowKey} activeKey={current ? keys[index] : undefined}
       onRowActivate={row => onOpen(row)} searchable={false} sortable={false} pagination={page !== undefined} page={page}
-      onPageChange={change => onPage?.(change.direction)} footerCells={footerCells} density='compact' />
+      onPageChange={change => { if (!pageBusy) onPage?.(change.direction) }} footerCells={footerCells} density='compact' />
   </Stack>
 }
