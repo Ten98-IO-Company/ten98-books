@@ -399,3 +399,18 @@ test('the comparison leaves skipped vouchers and stock out of the counts, checks
   const off = (await compareDataset(owner.userId, wrong)).lines.find(line => line.label.startsWith('Opening-balance difference'))!;
   assert.deepEqual([off.expected, off.actual, off.difference, off.ok], ['550.00 Cr', '500.00 Cr', '50.00 Dr', false]);
 });
+
+test('company creation carries an idempotency key, so a rerun finds the first company even when the marker search cannot', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const first = await seedDataset(user.userId, starter);
+  assert.equal(first.companyCreated, true);
+  // Renaming the company hides it from the name-based marker search; the key still returns the same company.
+  const renamed = await user.browser.call(`/api/workspaces/${first.companyId}/rename`, { name: 'Starter Trading (renamed)' });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  const again = await seedDataset(user.userId, starter);
+  assert.equal(again.companyId, first.companyId);
+  assert.equal(again.companyCreated, false);
+  assert.deepEqual(again.vouchers, { created: 0, present: 18, cancelled: 0 });
+  const mine = (await user.browser.call('/api/companies')).body.companies.filter((company: { name: string }) => company.name.startsWith('Starter Trading'));
+  assert.equal(mine.length, 1, 'one company, not a second copy');
+});

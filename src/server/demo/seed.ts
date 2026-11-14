@@ -289,12 +289,14 @@ async function seedUnderLock(userId: string, dataset: Dataset): Promise<SeedRepo
   };
   if (!company) {
     try {
-      const created = await createCompany(userId, {
+      // The key (dataset slug and owner) makes a repeated create return the first company, beside the marker search and the lock.
+      const { company: created, replayed } = await createCompany(userId, {
+        idempotencyKey: `demo:${dataset.slug}:${userId}`,
         name: settings.name, baseCurrency: settings.baseCurrency, financialYearStart: settings.financialYearStart, booksBeginning: settings.booksBeginning,
         timeZone: settings.timeZone, ...settings.secondLanguageName ? { secondLanguageName: settings.secondLanguageName } : {},
       });
       company = { id: created.id, name: created.name, role: 'owner' };
-      report.companyCreated = true;
+      report.companyCreated = !replayed;
     } catch (error) { failure(dataset, 'company', 'company', error); }
   }
   report.companyId = company!.id;
