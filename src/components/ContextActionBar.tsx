@@ -1,5 +1,5 @@
 import { Button, Inline, KeyHint, useShortcutCommands } from '@ten98/ui'
-import { barCommands, type CommandContext } from '../lib/commands'
+import { ariaKeyShortcuts, barCommands, type CommandContext } from '../lib/commands'
 
 /**
  * The commands available right now, each a button with its key in the active keymap. It reads the live registry, so a
@@ -10,7 +10,7 @@ export function ContextActionBar({ label = 'Available commands', contexts }: { l
   const shown = barCommands(useShortcutCommands(), contexts)
   if (!shown.length) return null
   return <Inline as='section' aria-label={label} gap={2}>
-    {shown.map(command => <Button key={command.id} variant='ghost' size='sm' onClick={command.run}>
+    {shown.map(command => <Button key={command.id} variant='ghost' size='sm' onClick={command.run} aria-keyshortcuts={ariaKeyShortcuts(command.keys)}>
       {command.label} <KeyHint command={command.id} />
     </Button>)}
   </Inline>

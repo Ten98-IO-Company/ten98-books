@@ -84,7 +84,7 @@ test('a lookup handles every chord its keymap binds to accept, and hands Escape 
   }
 });
 
-test('on the alter list the search field and the list share one Escape owner, list.cancel, from every focus target, in both keymaps', () => {
+test('on the alter list the search field and the list share one Escape owner, list.cancel, and Ctrl+Q leaves at once, from every focus target, in both keymaps', () => {
   const listCommands = (name: KeymapName) => {
     const merged = mergeKeymaps(keymaps[name]);
     return commandIds.filter(id => commands[id].context === 'global' || id === 'list.cancel').map(id => ({
@@ -93,7 +93,8 @@ test('on the alter list the search field and the list share one Escape owner, li
   };
   for (const name of keymapNames) for (const chord of escapes(name)) for (const target of targets) {
     const match = resolveShortcut({ chord: parseChord(chord)!, scopes: [{ id: 'list', focus: false }, { id: 'global', focus: false }], commands: listCommands(name), target });
-    assert.equal(match?.command.id, 'list.cancel', `${name} ${chord} on ${target}`);
+    // Escape runs the list's ladder (clear the filter, move to the list, leave); classic Ctrl+Q leaves at once (nav.quit).
+    assert.equal(match?.command.id, chord === 'Ctrl+Q' ? 'nav.quit' : 'list.cancel', `${name} ${chord} on ${target}`);
   }
   const live = (name: KeymapName, ids: string[]) => ids.map(id => ({ id, enabled: true, keys: mergeKeymaps(keymaps[name])[id] ?? [] }));
   for (const name of keymapNames) assert.deepEqual(barCommands(live(name, ['nav.back', 'list.cancel', 'list.history'])).map(command => command.id), ['list.cancel', 'list.history'], name);
