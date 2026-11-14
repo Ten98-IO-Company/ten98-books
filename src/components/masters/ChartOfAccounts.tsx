@@ -60,7 +60,8 @@ function ChartBody() {
   const company = useCompany()
   const navigate = useNavigate()
   const exponent = company.currencyMinorUnits as MoneyExponent
-  const canWrite = useCanWrite() === true
+  const writer = useCanWrite()
+  const canWrite = writer === true
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)
@@ -72,6 +73,9 @@ function ChartBody() {
   const current = cursors.find(row => row.key === active) ?? cursors[0]
   const latest = useRef({ current })
   latest.current = { current }
+  // A closed dialog can leave focus on the page; it returns to the list, where the cursor is.
+  const list = useRef<HTMLElement>(null)
+  const focusList = () => { window.setTimeout(() => list.current?.focus(), 0) }
 
   const move = (key: string) => { lastCursor.set(company.id, key); setActive(key) }
   const go = (kind: 'edit' | 'history', row: NonNullable<typeof current>) => {
@@ -92,9 +96,10 @@ function ChartBody() {
     if (!row || !canWrite || busy || reason) return
     const name = row.kind === 'group' ? row.group.name : row.ledger.name
     const revision = row.kind === 'group' ? row.group.revision : row.ledger.revision
-    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true })) return
+    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true })) { focusList(); return }
     const next = cursors[cursors.indexOf(row) + 1] ?? cursors[cursors.indexOf(row) - 1]
     const done = await run(() => api(`/api/companies/${company.id}/${row.kind === 'group' ? 'groups' : 'ledgers'}/${row.id}/delete`, { method: 'POST', body: { revision } }))
+    focusList()
     if (!done) return
     if (next) move(next.key)
     setMessage(`Deleted ${row.kind} “${name}”.`)
@@ -111,12 +116,12 @@ function ChartBody() {
     <PageHeader eyebrow='Masters' title='Chart of accounts'
       description={groups && ledgers ? `${count(groups.length, 'group', 'groups')} and ${count(ledgers.length, 'ledger', 'ledgers')}. Use the arrow keys, then Enter to alter the highlighted row.` : 'Loading the chart…'}
       actions={canWrite ? <Button variant='secondary' onClick={() => void navigate({ to: '/app/c/$companyId/masters/new', params: { companyId: company.id }, search: under ? { under } : {} })}>Create</Button> : undefined} />
-    {!canWrite && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
+    {writer === false && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     <FailureAlert failure={failure} />
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
     {groups && ledgers && (rows.length
-      ? <MasterList label='Chart of accounts' entries={entries} active={current?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList
+      ? <MasterList label='Chart of accounts' entries={entries} active={current?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList listRef={list}
         onOpen={key => { const row = cursors.find(item => item.key === key); if (row) go('edit', row) }} />
       : <EmptyState icon='book' title='The chart is empty' description='Create a group or a ledger to start.' />)}
     {canWrite && reason && <Text tone='muted' size='sm'>Delete is unavailable for the highlighted row: {reason}</Text>}

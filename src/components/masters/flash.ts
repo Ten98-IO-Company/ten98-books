@@ -19,3 +19,8 @@ export const rememberedChoice = (companyId: string): string => lastChoice.get(co
 const lastGroup = new Map<string, string>()
 export const rememberGroup = (companyId: string, groupId: string) => { lastGroup.set(companyId, groupId) }
 export const rememberedGroup = (companyId: string): string | undefined => lastGroup.get(companyId)
+
+/** The cost category chosen last per company in this tab, so a new cost centre starts in it. */
+const lastCostCategory = new Map<string, string>()
+export const rememberCostCategory = (companyId: string, categoryId: string) => { lastCostCategory.set(companyId, categoryId) }
+export const rememberedCostCategory = (companyId: string): string | undefined => lastCostCategory.get(companyId)

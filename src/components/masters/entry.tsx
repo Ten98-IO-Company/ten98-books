@@ -77,6 +77,8 @@ export function useEntryCommands(options: {
   // would do nothing on a button, the Save panel or a viewer's screen. The shell's nav.back shares the key but this
   // scope is inside it and wins; the action bar lists only the innermost (barCommands in src/lib/commands.ts).
   useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true, label: options.readOnly ? 'Go back one level' : undefined })
+  // Switched off: a master cannot be created from inside a lookup yet, but classic keeps the chord from the browser here.
+  useAppCommand('entry.create-master', () => undefined, { enabled: false })
   useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
   useAppCommand('entry.history', () => latest.current.onHistory?.(), { enabled: options.onHistory !== undefined })
 }
