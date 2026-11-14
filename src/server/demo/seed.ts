@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { formatMoney } from '@ten98/runtime';
-import { baseCurrencies } from '../../lib/company.ts';
+import { baseCurrencies, companyCreateInput } from '../../lib/company.ts';
 import { FoundationError } from '../auth.ts';
 import { createCompany, listCompanies } from '../companies.ts';
 import { getDatabase } from '../db.ts';
@@ -31,6 +32,20 @@ export const supportedFeatures: ReadonlySet<string> = new Set(['accounting', 'bi
 export const voucherKeyPrefix = (slug: string) => `demo:${slug}:`;
 /** The idempotency key the company is created under: one company per dataset and owner, however it is renamed later. */
 export const creationKey = (slug: string, userId: string) => `demo:${slug}:${userId}`;
+/**
+ * The key of a named masters-only copy (`--as`): the dataset, the owner and a digest of the name, so a rerun with the same
+ * name finds the same company, and no name can reach the unnamed company's key (the name travels as a digest because
+ * a key allows letters, digits and a few signs only).
+ */
+export const namedCreationKey = (slug: string, userId: string, name: string) => `${creationKey(slug, userId)}:as:${createHash('sha256').update(name).digest('hex').slice(0, 16)}`;
+
+/** The name of a named copy, checked as company creation checks a name; it may not be the dataset's own name (that company is the unnamed one). */
+export function validateCopyName(dataset: Dataset, value: string): string {
+  const parsed = companyCreateInput.shape.name.safeParse(value);
+  if (!parsed.success) throw new DemoError(`--as: ${parsed.error.issues[0]?.message ?? 'check the company name.'} (1 to 120 characters, no control characters)`);
+  if (parsed.data.toLowerCase() === dataset.company.name.toLowerCase()) throw new DemoError(`--as: "${parsed.data}" is the name of the dataset's own company; run the seed without --as for that one, or choose another name.`);
+  return parsed.data;
+}
 
 export type Counts = { created: number; present: number };
 export type SeedReport = {
@@ -101,12 +116,14 @@ export type DemoCompany = { id: string; name: string; role: string };
  * voucher-key marker decide. Seeding considers only companies the user owns,
  * so membership of somebody else's copy neither blocks nor redirects it; reading considers every company the user can
  * open and prefers the one they own. A same-named company that is not this dataset's, or two that are, stops the
- * command rather than guess.
+ * command rather than guess. A named masters-only copy (`copyName`) is found by its own key only: it never matches by name,
+ * and the name search above never returns it, because a copy may not carry the dataset's own name.
  */
-export async function findDemoCompany(userId: string, dataset: Dataset, purpose: 'seed' | 'read'): Promise<DemoCompany | null> {
+export async function findDemoCompany(userId: string, dataset: Dataset, purpose: 'seed' | 'read', copyName?: string): Promise<DemoCompany | null> {
   // company_creation holds creation keys only (no company data, outside row-level security): a read-only lookup.
   const { rows: [created] } = await getDatabase().pool.query<{ company_id: string }>(
-    'SELECT company_id FROM company_creation WHERE user_id = $1 AND idempotency_key = $2', [userId, creationKey(dataset.slug, userId)]);
+    'SELECT company_id FROM company_creation WHERE user_id = $1 AND idempotency_key = $2',
+    [userId, copyName === undefined ? creationKey(dataset.slug, userId) : namedCreationKey(dataset.slug, userId, copyName)]);
   if (created) {
     const keyed = (await listCompanies(userId)).find(company => company.id === created.company_id && company.company !== null && !company.twoFactorLocked);
     if (keyed) {
@@ -114,6 +131,7 @@ export async function findDemoCompany(userId: string, dataset: Dataset, purpose:
       return { id: keyed.id, name: keyed.name, role: keyed.role };
     }
   }
+  if (copyName !== undefined) return null;
   const named = (await listCompanies(userId)).filter(company => company.company !== null && !company.twoFactorLocked && company.name === dataset.company.name
     && (purpose === 'read' || company.role === 'owner'));
   let ours: typeof named = [];
@@ -337,15 +355,19 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
  * first run's company instead of creating another. The lock is released on every exit path (a dropped connection
  * releases it too). It is polled rather than awaited, because the pool's statement timeout would cut a long wait.
  */
-export async function seedDataset(userId: string, dataset: Dataset, mastersOnly = false): Promise<SeedReport> {
+export async function seedDataset(userId: string, dataset: Dataset, mastersOnly = false, copyName?: string): Promise<SeedReport> {
+  if (copyName !== undefined) {
+    if (!mastersOnly) throw new DemoError('--as makes a second copy of the masters only: add --masters-only (the full seed always uses the dataset\'s own company).');
+    copyName = validateCopyName(dataset, copyName);
+  }
   const client = await getDatabase().pool.connect();
-  const lockKey = `demo-seed:${userId}:${dataset.slug}`;
+  const lockKey = `demo-seed:${userId}:${dataset.slug}${copyName === undefined ? '' : `:as:${copyName}`}`;
   let broken = false;
   try {
     while (!(await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked', [lockKey])).rows[0].locked) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    try { return await seedUnderLock(userId, dataset, mastersOnly); }
+    try { return await seedUnderLock(userId, dataset, mastersOnly, copyName); }
     finally { await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [lockKey]).catch(() => { broken = true; }); }
   } catch (error) {
     broken = broken || (error as { code?: string })?.code?.startsWith('08') === true;
@@ -353,15 +375,15 @@ export async function seedDataset(userId: string, dataset: Dataset, mastersOnly 
   } finally { client.release(broken); }
 }
 
-async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: boolean): Promise<SeedReport> {
+async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: boolean, copyName?: string): Promise<SeedReport> {
   const settings = dataset.company;
   const currency = baseCurrencies[settings.baseCurrency as keyof typeof baseCurrencies];
   if (!currency) throw new DemoError(`demo/${dataset.slug}/company.json: baseCurrency "${settings.baseCurrency}" is not supported by ten98-books (${Object.keys(baseCurrencies).join(', ')})`);
   if (currency.minorUnits !== settings.minorUnits) throw new DemoError(`demo/${dataset.slug}/company.json: minorUnits ${settings.minorUnits} does not match ${settings.baseCurrency}, which has ${currency.minorUnits}`);
 
-  let company = await findDemoCompany(userId, dataset, 'seed');
+  let company = await findDemoCompany(userId, dataset, 'seed', copyName);
   const report: SeedReport = {
-    slug: dataset.slug, companyId: '', companyName: settings.name, companyCreated: false,
+    slug: dataset.slug, companyId: '', companyName: copyName ?? settings.name, companyCreated: false,
     groups: { created: 0, present: 0 }, ledgers: { created: 0, present: 0, openingsSet: 0 }, vouchers: { created: 0, present: 0, cancelled: 0 },
     unsupportedTypes: {}, noEntries: {}, refused: [], numbers: { checked: 0, matched: 0, unnumbered: 0, kind: numbersKind(dataset) },
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
@@ -371,8 +393,8 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
     try {
       // The key (dataset slug and owner) makes a repeated create return the first company, beside the marker search and the lock.
       const { company: created, replayed } = await createCompany(userId, {
-        idempotencyKey: creationKey(dataset.slug, userId),
-        name: settings.name, baseCurrency: settings.baseCurrency, financialYearStart: settings.financialYearStart, booksBeginning: settings.booksBeginning,
+        idempotencyKey: copyName === undefined ? creationKey(dataset.slug, userId) : namedCreationKey(dataset.slug, userId, copyName),
+        name: copyName ?? settings.name, baseCurrency: settings.baseCurrency, financialYearStart: settings.financialYearStart, booksBeginning: settings.booksBeginning,
         timeZone: settings.timeZone, ...settings.secondLanguageName ? { secondLanguageName: settings.secondLanguageName } : {},
       });
       company = { id: created.id, name: created.name, role: 'owner' };
@@ -428,8 +450,12 @@ export function formatSeedReport(report: SeedReport): string[] {
 }
 
 /** The `seed-demo` command: seeds every selected dataset in turn and stops at the first error. */
-export async function seedDemo(selection: DemoSelection & { yes: boolean; mastersOnly?: boolean }, print: (line: string) => void = console.log): Promise<void> {
+export async function seedDemo(selection: DemoSelection & { yes: boolean; mastersOnly?: boolean; as?: string }, print: (line: string) => void = console.log): Promise<void> {
   if (!selection.yes) throw new DemoError('Seeding creates companies and vouchers in the database. Add --yes to confirm.');
+  if (selection.as !== undefined) {
+    if (selection.mastersOnly !== true) throw new DemoError('--as makes a second copy of the masters only: add --masters-only (the full seed always uses the dataset\'s own company).');
+    if (selection.all || !selection.company) throw new DemoError('--as names one copy of one dataset: give --company <slug> and not --all.');
+  }
   const userId = await findUserId(selection.email);
-  for (const dataset of await selectDatasets(selection)) for (const line of formatSeedReport(await seedDataset(userId, dataset, selection.mastersOnly === true))) print(line);
+  for (const dataset of await selectDatasets(selection)) for (const line of formatSeedReport(await seedDataset(userId, dataset, selection.mastersOnly === true, selection.as))) print(line);
 }
