@@ -214,3 +214,18 @@ test('a sales bill named by the bare number joins last year\'s bill of the same 
   assert.deepEqual(bills.map((bill: any) => [bill.name, bill.pending, bill.billDate, bill.dueDate]), [['1', '140.00', '2026-12-10', '2027-01-09']],
     'one bill holding both invoices, dated and due as the first');
 });
+
+test('an invoice with a credit-period bill moved into the next year takes that year\'s number and its due date follows the new date', async () => {
+  const books = await company('Moved Invoice');
+  const call = (path: string, body?: unknown) => owner.browser.call(`/api/companies/${books.id}${path}`, body);
+  const party = await addLedger(owner.browser, books.id, 'Moving Customer', books.books.group('receivables'));
+  const sales = await addLedger(owner.browser, books.id, 'Sales', books.books.group('sales'));
+  const lines = (name: string) => [{ ledgerId: party, side: 'Dr', amount: '100', bills: [{ kind: 'new_ref', name, amount: '100', creditPeriod: { count: 30, unit: 'day' } }] }, { ledgerId: sales, side: 'Cr', amount: '100' }];
+  const invoice = (date: string, name: string) => call('/vouchers', { ...voucherBody(books.books.type('sales'), date, []), lines: lines(name) });
+  const december = (await invoice('2026-12-10', 'INV-A')).body.voucher;
+  assert.equal((await invoice('2027-01-05', 'INV-B')).body.voucher.number, 1);
+  const moved = await call(`/vouchers/${december.id}`, { date: '2027-01-20', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, revision: december.revision, lines: lines('INV-A') });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.deepEqual([moved.body.voucher.number, moved.body.voucher.date, moved.body.voucher.lines[0].bills[0].dueDate], [2, '2027-01-20', '2027-02-19']);
+  assert.deepEqual(await counters(books.id), [{ period: '2026-01-01', last: 1 }, { period: '2027-01-01', last: 2 }], 'number 1 of 2026 is left as a gap');
+});

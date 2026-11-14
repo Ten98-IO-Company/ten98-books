@@ -123,10 +123,11 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- Voucher lifecycle (M1's rules from 0004, plus the period): a number is set together with the period of the voucher's date, to
--- the value that period's counter issued in this same transaction. Inside its period a numbered voucher keeps its
--- number; a date moved into another period takes that period's next number in the same statement, and the old number
--- stays a gap. A number is never removed.
+-- Voucher lifecycle (M1's rules from 0004, plus the period): a number is set together with the period of the voucher's
+-- date, to the value that period's counter issued in this same transaction. Inside its period a numbered voucher keeps
+-- its number; a voucher whose date moved into another period takes that period's next number later in the same
+-- transaction (after its bill rows, which follow the new date), and the old number stays a gap. A number is never
+-- removed. That a numbered voucher's period is its date's period is checked at commit (voucher_number_period below).
 CREATE OR REPLACE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   PERFORM ledger_assert_scope(NEW.company_id);
@@ -136,10 +137,6 @@ BEGIN
     END IF;
     IF OLD.number IS NOT NULL AND (NEW.number IS NULL OR (NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.number <> OLD.number)) THEN
       RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
-    END IF;
-    IF OLD.number IS NOT NULL AND NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.date IS DISTINCT FROM OLD.date
-        AND ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) IS DISTINCT FROM OLD.number_period THEN
-      RAISE EXCEPTION 'a voucher moved to another numbering period takes that period''s next number' USING ERRCODE = '23514', CONSTRAINT = 'voucher_number_period';
     END IF;
     IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
       RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
@@ -153,6 +150,20 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+
+-- Checked at commit for every voucher whose date changed: a numbered voucher holds a number of its date's period, so a
+-- date moved into another period must have taken that period's number in the same transaction.
+CREATE FUNCTION voucher_assert_number_period() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF EXISTS (SELECT 1 FROM voucher v WHERE v.company_id = NEW.company_id AND v.id = NEW.id AND v.number IS NOT NULL
+      AND v.number_period IS DISTINCT FROM ledger_numbering_period(v.company_id, v.voucher_type_id, v.date)) THEN
+    RAISE EXCEPTION 'a voucher moved to another numbering period takes that period''s next number' USING ERRCODE = '23514', CONSTRAINT = 'voucher_number_period';
+  END IF;
+  RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER voucher_number_period AFTER UPDATE ON voucher DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW WHEN (OLD.date IS DISTINCT FROM NEW.date) EXECUTE FUNCTION voucher_assert_number_period();
 
 -- ---- Existing data ----
 

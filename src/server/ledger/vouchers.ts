@@ -165,9 +165,8 @@ async function insertLines(context: LedgerContext, voucherId: string, lines: Pre
 
 /**
  * Issues the next number of the voucher's type and series in the numbering period of its date (the voucher type's
- * restart rule in force on the date decides, `ledger_numbering_rule` in the database), then stores the number, the
- * period and the date on the voucher in one statement, so a date moved into another period arrives with that period's
- * number. A period's counter starts at the rule's starting number. The counter row stays locked until commit, so
+ * restart rule in force on the date decides, `ledger_numbering_rule` in the database), then stores the number and
+ * the period on the voucher. A period's counter starts at the rule's starting number. The counter row stays locked until commit, so
  * concurrent postings of the same series and period queue here, and only here; a rolled back posting returns its
  * number. The counter never rewinds: a number deleted at the end of a period stays used, and the next voucher dated in
  * that period, entered whenever, takes the number after it. Two statements, so the database's number check sees the
@@ -180,8 +179,8 @@ async function issueNumber(context: LedgerContext, voucher: { id: string; date: 
      SELECT $1, $2, $3, r.period_start, r.starting_number FROM ledger_numbering_rule($1, $2, $4::date) r
      ON CONFLICT (company_id, voucher_type_id, series, period_start) DO UPDATE SET last_number = voucher_counter.last_number + 1
      RETURNING last_number, to_char(period_start, 'YYYY-MM-DD') AS period_start`, [company.companyId, voucher.typeId, voucher.series, voucher.date]);
-  await client.query('UPDATE voucher SET number = $3, number_period = $4, date = $5 WHERE company_id = $1 AND id = $2',
-    [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start, voucher.date]);
+  await client.query('UPDATE voucher SET number = $3, number_period = $4 WHERE company_id = $1 AND id = $2',
+    [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start]);
   return rows[0].last_number;
 }
 
@@ -254,7 +253,8 @@ async function changeable(context: LedgerContext, voucherId: string, revision: n
 /**
  * Replaces a voucher's date, narration, reference, flags, lines and bill rows. The type and series never change; the
  * number stays while the date stays in its numbering period, and a date moved into another period takes that period's
- * next number (the date is written with it, last, by `issueNumber`). An optional voucher made regular takes the next
+ * next number at the counter step (the database checks at commit that the number is of its date's period). An
+ * optional voucher made regular takes the next
  * number of the period of its (new) date, and a numbered voucher cannot become optional again. Each row finds its bill
  * by name again, so an unchanged name keeps the bill; a renamed reference or a changed
  * party leaves other vouchers' rows on the old bill, which then stands on its own (observed; answered with
@@ -275,7 +275,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   await client.query(
     `UPDATE voucher SET date = $3, narration = $4, status = $5, post_dated = $6, reference = $7, reference_date = $8, revision = revision + 1, updated_at = now()
      WHERE company_id = $1 AND id = $2`,
-    [company.companyId, voucherId, crossing ? before.date : input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate]);
+    [company.companyId, voucherId, input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate]);
   await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
   await insertLines(context, voucherId, lines);
   const numbering = (before.status === 'optional' && input.status === 'regular') || crossing;
