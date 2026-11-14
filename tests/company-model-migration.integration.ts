@@ -206,6 +206,11 @@ test('keys, guards, policies and grants are back as before; company now referenc
   assert.match(companyKey(keysBefore)!.definition, /REFERENCES project\(id\) ON DELETE CASCADE/);
   assert.equal(companyKey(keysAfter)!.definition, 'FOREIGN KEY (company_id) REFERENCES workspace(id) ON DELETE CASCADE');
   assert.deepEqual(keysAfter.filter(key => key !== companyKey(keysAfter)), keysBefore.filter(key => key !== companyKey(keysBefore)));
+  // The dormant project table is closed to the application role; the key table is open for reads and inserts only.
+  assert.deepEqual((await admin.query(`SELECT has_table_privilege('books_app', 'project', 'SELECT') AS project,
+    has_table_privilege('books_app', 'company_creation', 'SELECT,INSERT') AS keys, has_table_privilege('books_app', 'company_creation', 'UPDATE') AS rewrite`)).rows,
+    [{ project: false, keys: true, rewrite: false }]);
+  await assert.rejects(getDatabase().pool.query('SELECT * FROM project'), (error: unknown) => (error as { code?: string }).code === '42501');
   assert.deepEqual((await admin.query(`SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal AND t.tgenabled <> 'O'`)).rows, [], 'every guard trigger is enabled');
   // A guard still fires: a counter cannot jump.
   await assert.rejects(scoped(companies.b1, () => admin.query('UPDATE voucher_counter SET last_number = last_number + 5 WHERE company_id = $1', [companies.b1])),

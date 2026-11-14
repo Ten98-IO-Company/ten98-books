@@ -10,6 +10,7 @@ import { KeyboardShell } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
+import { sectionPath } from '../lib/company'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
 export const Route = createFileRoute('/app')({ component: AppLayout })
@@ -93,7 +94,7 @@ function AppLayout() {
     : pathname.startsWith('/app/companies/new') ? 'Create company' : company ? 'Set up the company' : 'Companies')
   // Escape goes back one level, from a company page to the company menu. The menu is the top level: /app only reopens a company.
   const back = ready && pathname.toLowerCase().replace(/\/$/, '') !== base ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } }) : undefined
-  const openCompany = (id: string) => void navigate({ to: '/app/c/$companyId', params: { companyId: id } })
+  const openCompany = (id: string) => void navigate({ href: `/app/c/${id}${ready ? sectionPath(pathname, base) : ''}` })
 
   return <AppContext value={state}><PresentationProvider userId={me.user.id} onUnauthorized={unauthorized}>
     <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} onSwitchCompany={companies ? () => setPickerOpen(true) : undefined}>

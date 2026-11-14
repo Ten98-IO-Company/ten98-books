@@ -337,7 +337,7 @@ const everyRoute = (company: string) => {
 };
 
 test('another workspace\'s user gets "not found" for every report and export; a stranger is asked to sign in; a viewer reads', async () => {
-  const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
+  const other = await createCompany(owner.browser, { name: 'Elsewhere' });
   const intruder = await invite(owner.browser, other, 'admin');
   const own = await createCompany(intruder.browser, { name: 'Intruder Books' });
   assert.equal((await intruder.browser.call(`/api/companies/${own}/reports/defaults`)).status, 200, 'the intruder reads their own company');

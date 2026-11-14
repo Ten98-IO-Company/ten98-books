@@ -88,3 +88,19 @@ export function financialYearOf(start: { month: number; day: number }, date: str
   const to = new Date(Date.UTC(startYear + 1, start.month - 1, start.day - 1));
   return { from: iso(from), to: iso(to) };
 }
+
+/** Pages that show one record of the company they were opened in; changing company opens their section instead. */
+const recordPages: readonly string[] = ['/masters/edit', '/reports/voucher', '/reports/ledger-vouchers', '/reports/ledger-monthly'];
+const uuidSegment = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where changing company lands: the same page under the other company (`/reports/trial-balance` stays the trial balance),
+ * without record ids or search parameters, so nothing of the company left behind is carried over. A page that only
+ * shows one record falls back to its section.
+ */
+export function sectionPath(pathname: string, companyBase: string): string {
+  const rest = companyBase && pathname.toLowerCase().startsWith(companyBase.toLowerCase()) ? pathname.slice(companyBase.length) : '';
+  const kept = rest.split('/').filter(segment => segment && !uuidSegment.test(segment));
+  const path = kept.length ? `/${kept.join('/')}` : '';
+  return recordPages.some(page => path === page || path.startsWith(`${page}/`)) ? `/${kept[0]}` : path;
+}

@@ -18,6 +18,8 @@ export type CompanyAccess = { companyId: string; name: string; role: WorkspaceRo
 
 /** One answer for a missing company and for a company the user may not reach, so ids reveal nothing. */
 export const companyNotFound = 'Company not found or unavailable.';
+/** A member's answer while the company (workspace) has no books settings yet; non-members still get `companyNotFound`. */
+export const companyNotSetUp = 'This company is not set up yet. An owner or admin enters its books settings first.';
 const writers: readonly string[] = ['owner', 'admin', 'editor'];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

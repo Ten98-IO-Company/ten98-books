@@ -64,7 +64,7 @@ test('revision rows name the actor inside the company, never by email, and null 
   assert.deepEqual(orphan.map((row: { actorId: string; actorName: string | null }) => [row.actorId, row.actorName]), [[leaver.userId, null]]);
 
   // Another company's user gets the same answer as for a missing company, with no name in it.
-  const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
+  const other = await createCompany(owner.browser, { name: 'Elsewhere' });
   const intruder = await invite(owner.browser, other, 'admin');
   const foreign = await intruder.browser.call(`${base()}/ledgers/${ids.rent}/revisions`);
   const missing = await intruder.browser.call(`/api/companies/${randomUUID()}/ledgers/${ids.rent}/revisions`);

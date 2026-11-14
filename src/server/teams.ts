@@ -7,7 +7,6 @@ import { team, teamFailure, transaction } from './workspace-team.ts';
 // Thin adapters over the shared controller (@ten98/runtime createWorkspaceTeam): the app keeps its routes, transactions
 // and FoundationError responses; every decision, lock and validation lives in the package.
 
-export const createWorkspace = (userId: string, input: unknown) => transaction(client => team.createWorkspace(client, userId, input));
 export const renameWorkspace = (workspaceId: string, userId: string, input: unknown) => transaction(client => team.renameWorkspace(client, workspaceId, userId, input));
 export const getTeam = (workspaceId: string, userId: string) => transaction(client => team.getTeam(client, workspaceId, userId));
 export const setTwoFactorRequirement = (workspaceId: string, userId: string, input: unknown) => transaction(client => team.setTwoFactorRequirement(client, workspaceId, userId, input));
@@ -32,7 +31,7 @@ export const rotateInvitation = (workspaceId: string, userId: string, invitation
 const factorGatedPath = /^\/api\/(?:workspaces|companies)\/([0-9a-f-]{36})(?:\/|$)/i;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// ponytail: point-in-time check before each service transaction (the projectAccess class); a request already past it when the
+// ponytail: point-in-time check before each service transaction (Discover's access-check class); a request already past it when the
 // requirement turns on or the member disables their factor can finish. Soundness relies on verify/disable revoking other sessions
 // (keepResponseSession in account-security.ts). Upgrade path: carry the predicate into withCompany.
 /**

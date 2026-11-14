@@ -65,7 +65,7 @@ export function TeamPanel({ workspaceId, userId, onChanged, onUnauthorized }: { 
       // The flow confirms the choice; the server rechecks it against the member's saved email.
       onTransfer: ({ userId: target }) => run(async () => {
         const member = team.members.find(item => item.userId === target)
-        if (!member) throw new Error('That member is no longer in the workspace. Reload the team.')
+        if (!member) throw new Error('That member is no longer in the company. Reload the team.')
         await post('/transfer-ownership', { targetUserId: member.userId, confirmationEmail: member.email.toLowerCase() })
         setInviteLink(undefined)
         return `Ownership moved to ${member.name}. You are now an admin.`

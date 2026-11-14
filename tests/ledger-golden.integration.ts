@@ -117,7 +117,7 @@ test('a three-decimal company keeps exact amounts and refuses a fourth decimal p
 
 test('another workspace\'s user gets "not found" from every handler module and writes nothing', async () => {
   // The intruder is an admin of a second workspace only, with a company of their own.
-  const other = (await owner.browser.call('/api/workspaces', { name: 'Elsewhere' })).body.workspace.id;
+  const other = await createCompany(owner.browser, { name: 'Elsewhere' });
   const intruder = await invite(owner.browser, other, 'admin');
   const own = await createCompany(intruder.browser, { name: 'Intruder Books' });
   assert.equal((await intruder.browser.call(`/api/companies/${own}/groups`)).status, 200, 'the intruder reads their own company');

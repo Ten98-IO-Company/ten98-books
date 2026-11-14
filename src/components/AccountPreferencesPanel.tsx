@@ -66,7 +66,7 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
   return <Stack as="section" ref={root} gap={4}>
     {account?.loading&&<StatusLine busy>Loading saved preferences…</StatusLine>}
     {account?.error&&<Alert tone="danger" title={account.error}/>}
-    <AccountProfileFlow key={generation} title="Your account" description="Personal settings follow your account across workspaces. Changes apply after Save changes. Email and sign-in security are managed separately."
+    <AccountProfileFlow key={generation} title="Your account" description="Personal settings follow your account across companies. Changes apply after Save changes. Email and sign-in security are managed separately."
       email={data?.user.email??''} defaultValues={baseline} initialValues={staged??saved??undefined} onValuesChange={onValuesChange}
       localeOptions={localeOptions} timeZones={zones} onDetectTimeZone={detectTimeZone} preview={preview}
       messages={{locale:'Date and number format'}} onSubmit={save} busy={busy} disabled={blocked||reloadRequired} error={error||undefined} notice={notice}

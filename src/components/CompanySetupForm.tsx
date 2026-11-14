@@ -1,5 +1,5 @@
 import { Alert, Button, Field, Form, FormActions, FormGrid, Input, PageHeader, Select, Stack } from '@ten98/ui'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError, errMsg } from '../lib/api'
 import { baseCurrencies, companyCreateInput, type CompanyCreateInput } from '../lib/company'
 
@@ -22,8 +22,11 @@ export function CompanySetupForm({ title, eyebrow, description, defaultName = ''
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  // One request at a time: a second Enter or click while the first is out is ignored, not sent again.
+  const inFlight = useRef(false)
 
   async function submit(data: FormData) {
+    if (inFlight.current) return
     const text = (name: string) => String(data.get(name) ?? '')
     const value = {
       name: text('name'), baseCurrency: text('baseCurrency') as CompanyCreateInput['baseCurrency'],
@@ -39,12 +42,13 @@ export function CompanySetupForm({ title, eyebrow, description, defaultName = ''
       }
       setFieldErrors(errors); setError(''); return
     }
+    inFlight.current = true
     setBusy(true); setError(''); setFieldErrors({})
     try { await onSubmit(value) }
     catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) { onUnauthorized(); return }
       setError(errMsg(cause))
-    } finally { setBusy(false) }
+    } finally { inFlight.current = false; setBusy(false) }
   }
 
   return <Stack gap={6}>

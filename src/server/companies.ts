@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
+import { z } from 'zod';
 import { baseCurrencies, companyCreateInput, type BaseCurrency, type Company, type CompanySummary } from '../lib/company.ts';
 import { FoundationError } from './auth.ts';
 import { getDatabase } from './db.ts';
 import { seedCompanyLedger } from './ledger/seed.ts';
-import { withCompanies, withCompany } from './tenancy.ts';
+import { companyNotFound, companyNotSetUp, withCompanies, withCompany } from './tenancy.ts';
 import { team, transaction } from './workspace-team.ts';
 
 /**
@@ -15,8 +17,6 @@ const companyColumns = `c.company_id AS id, w.name, c.second_language_name AS "s
   c.base_currency AS "baseCurrency", c.currency_minor_units AS "currencyMinorUnits",
   json_build_object('month', c.fy_start_month, 'day', c.fy_start_day) AS "financialYearStart",
   c.books_beginning AS "booksBeginning", c.time_zone AS "timeZone", c.locked_through AS "lockedThrough"`;
-
-export const notSetUp = 'This company is not set up yet. An owner or admin enters its books settings first.';
 
 async function readCompany(client: PoolClient, companyId: string): Promise<Company | undefined> {
   const { rows } = await client.query<Company>(`SELECT ${companyColumns} FROM company c JOIN workspace w ON w.id = c.company_id WHERE c.company_id = $1`, [companyId]);
@@ -51,7 +51,7 @@ export function getCompany(userId: string, companyId: string): Promise<Company> 
   // The scope and the read use the canonical id withCompany authorized, never the raw route text.
   return withCompany(userId, companyId, 'read', async (client, access) => {
     const company = await readCompany(client, access.companyId);
-    if (!company) throw new FoundationError(409, notSetUp, 'not_set_up');
+    if (!company) throw new FoundationError(409, companyNotSetUp, 'not_set_up');
     return company;
   });
 }
@@ -76,16 +76,39 @@ async function insertSettings(client: PoolClient, companyId: string, input: Retu
   return (await readCompany(client, companyId))!;
 }
 
+/** An optional key that makes a repeated create (a double submit, a retry after a lost response) return the first company. */
+const idempotencyKey = z.string().regex(/^[A-Za-z0-9_.:-]{8,100}$/);
+
 /**
- * Any signed-in user may create a company and becomes its owner, as any signed-in user may create a workspace (no
- * instance-level restriction exists for either). The workspace, the owner membership, the books settings and the seeded
- * chart commit together or not at all.
+ * Any signed-in user may create a company and becomes its owner; with first-user setup it is the only way a company
+ * (workspace) comes into being. The workspace, the owner membership, the books settings and the seeded chart commit
+ * together or not at all. With an `idempotencyKey`, the same key and body from the same user return the first company
+ * (`replayed`), and the same key with a different body is refused; a transaction-scoped lock on the key makes a
+ * concurrent duplicate wait for the first attempt.
  */
-export function createCompany(userId: string, value: unknown): Promise<Company> {
-  const input = parseCompany(value);
+export function createCompany(userId: string, value: unknown): Promise<{ company: Company; replayed: boolean }> {
+  const object = value !== null && typeof value === 'object' && !Array.isArray(value);
+  const { idempotencyKey: rawKey, ...fields } = (object ? value : {}) as Record<string, unknown>;
+  const key = rawKey === undefined ? undefined : idempotencyKey.safeParse(rawKey);
+  if (key && !key.success) throw new FoundationError(400, 'Check the request key and try again.');
+  const input = parseCompany(object ? fields : value);
+  const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
   return transaction(async client => {
+    if (key) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`company-create:${userId}:${key.data}`]);
+      const prior = (await client.query<{ company_id: string; request_hash: string }>(
+        'SELECT company_id, request_hash FROM company_creation WHERE user_id = $1 AND idempotency_key = $2', [userId, key.data])).rows[0];
+      if (prior) {
+        if (prior.request_hash !== requestHash) throw new FoundationError(409, 'This request key was already used for a different company. Send a new key for a new company.', 'idempotency_mismatch');
+        const company = await withCompany(userId, prior.company_id, 'read', scoped => readCompany(scoped, prior.company_id), client);
+        if (!company) throw new FoundationError(404, companyNotFound);
+        return { company, replayed: true };
+      }
+    }
     const { workspace } = await team.createWorkspace(client, userId, { name: input.name });
-    return withCompany(userId, workspace.id, 'write', scoped => insertSettings(scoped, workspace.id, input), client);
+    const company = await withCompany(userId, workspace.id, 'write', scoped => insertSettings(scoped, workspace.id, input), client);
+    if (key) await client.query('INSERT INTO company_creation (user_id, idempotency_key, request_hash, company_id) VALUES ($1, $2, $3, $4)', [userId, key.data, requestHash, workspace.id]);
+    return { company, replayed: false };
   });
 }
 
@@ -96,9 +119,12 @@ export function createCompany(userId: string, value: unknown): Promise<Company> 
 export function setUpCompany(userId: string, companyId: string, value: unknown): Promise<Company> {
   const input = parseCompany(value);
   return transaction(async client => {
-    // The team controller's lock order: the workspace row first, then memberships (withCompany share-locks the caller's).
-    if (/^[0-9a-f-]{36}$/i.test(companyId)) await client.query('SELECT 1 FROM workspace WHERE id = $1 FOR UPDATE', [companyId.toLowerCase()]);
-    return withCompany(userId, companyId, 'write', async (scoped, access) => {
+    // Membership first, without a lock, so a non-member never takes a lock on someone else's workspace. Then the team
+    // controller's lock order: the workspace row, then memberships (withCompany share-locks the caller's and checks again).
+    const id = /^[0-9a-f-]{36}$/i.test(companyId) ? companyId.toLowerCase() : '';
+    if (!(await client.query('SELECT 1 FROM membership WHERE workspace_id = $1 AND user_id = $2', [id, userId])).rowCount) throw new FoundationError(404, companyNotFound);
+    await client.query('SELECT 1 FROM workspace WHERE id = $1 FOR UPDATE', [id]);
+    return withCompany(userId, id, 'write', async (scoped, access) => {
       if (access.role !== 'owner' && access.role !== 'admin') throw new FoundationError(403, 'Only an owner or admin can set up the company.');
       if (await readCompany(scoped, access.companyId)) throw new FoundationError(409, 'This company is already set up.', 'already_set_up');
       await scoped.query('UPDATE workspace SET name = $1 WHERE id = $2', [input.name, access.companyId]);

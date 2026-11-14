@@ -8,7 +8,8 @@
 --   - a workspace without a company stays as it is: a company that is not set up yet;
 --   - pending invitations stay with the workspace they were sent for (the company that kept its id).
 -- Project rows meant companies under the old model, so none of them is an accounting project: they are removed with
--- the company-project link. The project table stays for accounting projects (M2).
+-- the company-project link. The project table stays, dormant, for accounting projects (M2). The migration also adds
+-- company_creation, the idempotency keys of "create company" requests.
 -- Row-level security policies, FORCE, ownership and grants are untouched. Safe on an empty database: every step is
 -- set-based or loops over catalog rows that exist either way.
 
@@ -76,3 +77,20 @@ ALTER TABLE company ADD CONSTRAINT company_company_id_fkey FOREIGN KEY (company_
 DELETE FROM project;
 DROP TABLE company_move;
 SELECT set_config('app.company_ids', '', true);
+
+-- The project table is dormant until accounting projects (M2), which add a company_id and forced row-level security to
+-- it; until then the application role may not touch it.
+REVOKE ALL ON project FROM books_app;
+
+-- Idempotency keys of "create company" requests, per user: a repeated request with the same key and body returns the
+-- company the first one created. It holds ids only (no company data), like membership, so it stays outside row-level
+-- security; the application reads and adds rows, and removing the user or the workspace removes them.
+CREATE TABLE company_creation (
+  user_id text NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  idempotency_key text NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9_.:-]{8,100}$'),
+  request_hash text NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+  company_id text NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, idempotency_key)
+);
+GRANT SELECT, INSERT ON company_creation TO books_app;

@@ -14,7 +14,8 @@ export const companiesApi: SignedInArea = async ({ request, path, user }) => {
     if (request.method === 'GET') return json({ companies: await listCompanies(user.id) });
     if (request.method === 'POST') {
       await limit(`companies:${user.id}`, 20);
-      return json({ company: await createCompany(user.id, await readJson(request)) }, 201);
+      const { company, replayed } = await createCompany(user.id, await readJson(request));
+      return json({ company, replayed }, replayed ? 200 : 201);
     }
     return json({ error: 'Method not allowed.' }, 405, { allow: 'GET, POST' });
   }

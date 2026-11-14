@@ -6,8 +6,7 @@ import { handleApi } from '../src/server/api.ts';
 import { getConfig } from '../src/server/config.ts';
 import { createPool, getDatabase } from '../src/server/db.ts';
 import { assertApplicationRole } from '../src/server/startup-migrate.ts';
-import { notSetUp } from '../src/server/companies.ts';
-import { assertDatabaseRoles, companyNotFound, DatabaseRoleError, withCompany } from '../src/server/tenancy.ts';
+import { assertDatabaseRoles, companyNotFound, companyNotSetUp, DatabaseRoleError, withCompany } from '../src/server/tenancy.ts';
 import { Browser, freshDatabase, type TestDatabase } from './helpers/database.ts';
 
 let database: TestDatabase;
@@ -174,8 +173,19 @@ test('a used invitation cannot be accepted again', async () => {
 test('a company without books settings reports that it is not set up; an owner or admin sets it up once', async () => {
   const listed = (await a.call('/api/companies')).body.companies.find((item: { id: string }) => item.id === fixture.w1);
   assert.deepEqual(listed, { id: fixture.w1, name: 'W1', role: 'owner', twoFactorLocked: false, company: null });
-  assert.deepEqual(await a.call(`/api/companies/${fixture.w1}`), { status: 409, body: { error: notSetUp, code: 'not_set_up' } });
-  assert.equal((await a.call(`/api/companies/${fixture.w1}/groups`)).status, 404, 'the books do not exist before setup');
+  // Members are told the company is not set up on every books route; a non-member gets the answer for a missing company.
+  const notSetUp = { status: 409, body: { error: companyNotSetUp, code: 'not_set_up' } };
+  const period = 'from=2026-01-01&to=2026-01-31';
+  const bookRoutes = (id: string) => [`/api/companies/${id}`, `/api/companies/${id}/groups`, `/api/companies/${id}/ledgers`, `/api/companies/${id}/voucher-types`,
+    `/api/companies/${id}/vouchers?${period}`, `/api/companies/${id}/trial-balance?${period}`, `/api/companies/${id}/reports/defaults`,
+    `/api/companies/${id}/reports/trial-balance?${period}`, `/api/companies/${id}/reports/trial-balance/export?${period}`];
+  for (const path of bookRoutes(fixture.w1)) {
+    assert.deepEqual(await a.call(path), notSetUp, path);
+    const missing = path.replace(fixture.w1, randomUUID());
+    assert.deepEqual(await b.call(path), await b.call(missing), `${path}: a non-member's answer is the missing company's`);
+    assert.equal((await b.call(path)).status, 404, path);
+  }
+  assert.deepEqual(await a.call(`/api/companies/${fixture.w1}/vouchers`, { idempotencyKey: `x-${randomUUID()}`, voucherTypeId: randomUUID(), date: '2026-01-02', lines: [] }), notSetUp, 'writes too');
 
   // An editor of the company may not set it up; the refusal writes nothing.
   const editorEmail = `editor-${randomUUID()}@books.test`;
@@ -222,6 +232,42 @@ test('a company that requires two-factor lists its name only to a member without
     assert.equal((await b.call(`/api/companies/${fixture.c2}/groups`)).status, 403);
   } finally { await asAdmin(admin => admin.query('DELETE FROM workspace_two_factor_requirement WHERE workspace_id = $1', [fixture.c2])); }
   assert.equal((await b.call(`/api/companies/${fixture.c2}`)).status, 200);
+});
+
+test('companies come only from first-user setup and create company; a repeated create with one key makes one company', async () => {
+  const workspaces = async () => Number((await asAdmin(admin => admin.query('SELECT count(*) FROM workspace'))).rows[0].count);
+  const start = await workspaces();
+  assert.equal((await a.call('/api/workspaces', { name: 'Bare workspace' })).status, 404, 'no workspace without books settings');
+  assert.equal(await workspaces(), start);
+
+  // A double submit: both requests carry the form's key and arrive together.
+  const body = { name: 'Twice Submitted', ...books, idempotencyKey: `create-${randomUUID()}` };
+  const [first, second] = await Promise.all([a.call('/api/companies', body), a.call('/api/companies', body)]);
+  assert.deepEqual([first.status, second.status].sort(), [200, 201]);
+  assert.equal(first.body.company.id, second.body.company.id);
+  assert.deepEqual([first.body.replayed, second.body.replayed].sort(), [false, true]);
+  assert.equal(await workspaces(), start + 1);
+  assert.deepEqual(await a.call('/api/companies', { ...body, name: 'Something Else' }), { status: 409,
+    body: { error: 'This request key was already used for a different company. Send a new key for a new company.', code: 'idempotency_mismatch' } });
+  // The key is the caller's own: another user with the same key creates their own company.
+  const other = await b.call('/api/companies', body);
+  assert.equal(other.status, 201);
+  assert.notEqual(other.body.company.id, first.body.company.id);
+  assert.equal((await a.call('/api/companies', { ...body, idempotencyKey: 'short' })).status, 400);
+  assert.equal(await workspaces(), start + 2);
+});
+
+test('setting up a company never makes a non-member wait on, or lock, its workspace row', async () => {
+  const holder = new pg.Client({ connectionString: database.adminUrl });
+  await holder.connect();
+  try {
+    await holder.query('BEGIN');
+    await holder.query('SELECT 1 FROM workspace WHERE id = $1 FOR UPDATE', [fixture.w1]);
+    const started = Date.now();
+    const refused = await b.call(`/api/companies/${fixture.w1}/setup`, { name: 'Intruder', ...books });
+    assert.deepEqual(refused, { status: 404, body: { error: companyNotFound } });
+    assert.ok(Date.now() - started < 2000, 'answered while the row stayed locked');
+  } finally { await holder.query('ROLLBACK').catch(() => undefined); await holder.end(); }
 });
 
 // Last: these change B's membership.

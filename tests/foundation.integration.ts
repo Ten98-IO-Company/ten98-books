@@ -80,7 +80,8 @@ test('creating a company persists its books settings; invalid currency, time zon
     [{ name: company.name, role: 'owner' }]);
   const read = await session.call(`/api/companies/${created.body.company.id}`);
   assert.equal(read.status, 200);
-  assert.deepEqual(read.body, created.body);
+  assert.deepEqual(read.body, { company: created.body.company });
+  assert.equal(created.body.replayed, false);
   assert.deepEqual(await session.call(`/api/companies/${created.body.company.id.toUpperCase()}`), read, 'an uppercase id reads the same company');
   assert.deepEqual((await session.call('/api/companies')).body, { companies: [
     { id: setupCompany, name: owner.workspaceName, role: 'owner', twoFactorLocked: false, company: null },

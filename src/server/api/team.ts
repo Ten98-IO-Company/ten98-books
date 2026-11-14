@@ -5,7 +5,7 @@ import { getConfig } from '../config.ts';
 import { emailLimitKey } from '../client-rate-limit.ts';
 import { getDatabase } from '../db.ts';
 import { getEmailStatus, sendTransactionalEmail } from '../email.ts';
-import { changeRole, createWorkspace, getTeam, inviteMember, removeMember, renameWorkspace, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
+import { changeRole, getTeam, inviteMember, removeMember, renameWorkspace, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
 import { team } from '../workspace-team.ts';
 import { readJson } from '../validation.ts';
 import { json, limit, limitWindow, type SignedInArea } from './http.ts';
@@ -20,11 +20,8 @@ function sendInvitationEmail(to: string, role: string, inviteUrl: string) {
 /** The signed-in account, its workspaces (each one company, D-03), members, roles and invitations. */
 export const teamApi: SignedInArea = async ({ request, path, user }) => {
   const config = getConfig();
-  if (path === '/api/workspaces' && request.method === 'POST') {
-    await limit(`workspaces:${user.id}`, 10);
-    const result = await createWorkspace(user.id, await readJson(request));
-    return json({ workspace: { ...result.workspace, role: result.role } }, 201);
-  }
+  // No POST /api/workspaces: a workspace is a company (D-03), so companies come only from first-user setup and
+  // POST /api/companies, never without their books settings.
   if (path === '/api/me' && request.method === 'GET') {
     const { pool } = getDatabase();
     const { rows } = await pool.query(
