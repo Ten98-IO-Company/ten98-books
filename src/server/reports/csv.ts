@@ -92,7 +92,7 @@ export function dayBookCsv(report: DayBookReport, exponent: MoneyExponent): stri
   const money: Money = amount => formatMoney(amount, exponent);
   return [
     ['Date', 'Particulars', 'Voucher type', 'Number', 'Status', 'Post-dated', 'Debit', 'Credit', 'Narration'],
-    ...report.rows.map(row => [row.date, row.particulars, row.voucherTypeName, row.number === null ? '' : String(row.number), row.status,
+    ...report.rows.map(row => [row.date, row.particulars ?? '', row.voucherTypeName, row.number === null ? '' : String(row.number), row.status,
       row.postDated ? 'yes' : 'no', row.side === 'Dr' ? money(row.amount) : '', row.side === 'Cr' ? money(row.amount) : '', row.narration ?? '']),
     ['', 'Total of regular vouchers', '', '', '', '', money(report.totals.debit), money(report.totals.credit), ''],
   ];

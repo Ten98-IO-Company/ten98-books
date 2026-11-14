@@ -31,13 +31,11 @@ type Expectation = {
   /** Bill rows: opening bills set, rows posted, rows left out (foreign-currency lines) and the ledger module's warnings by code. */
   bills: { opening: number; posted: number; foreign: number; warnings: Record<string, number> };
 };
-/** The reference lists the three customer advances (credit-side bills on receivable ledgers) among its payable bills; ten98-books lists the bills of the payable ledgers. */
-const payableByLedgers = ['Pending payable bills (count)', 'Pending payable bills (total)'];
 const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 };
 const expectations: Expectation[] = [
-  { slug: 'gulfline', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [62, 2, 1], differs: payableByLedgers,
+  { slug: 'gulfline', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [64, 0, 1], differs: [],
     bills: { opening: 3, posted: 244, foreign: 0, warnings: {} } },
-  { slug: 'najd', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [62, 2, 1], differs: payableByLedgers,
+  { slug: 'najd', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [64, 0, 1], differs: [],
     bills: { opening: 3, posted: 244, foreign: 0, warnings: {} } },
   // 93 harbourview numbers are shifted by four sales, receipt and payment vouchers cancelled without lines.
   { slug: 'harbourview', created: 188, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: { receipt: 2, sales: 1, payment: 1 }, numbers: { checked: 185, matched: 92 }, counts: [66, 0, 13], differs: [],
@@ -128,12 +126,10 @@ test('bills: every pending bill and due date of the parties ten98-books can hold
 
   for (const slug of ['gulfline', 'najd']) {
     const lines = (await compareDataset(owner.userId, await loadDataset(join(demoRoot, slug)))).lines.filter(line => line.block.startsWith('Bills '));
-    assert.deepEqual(lines.filter(line => line.ok).map(line => line.label), ['Pending receivable bills (count)', 'Pending receivable bills (total)']);
-    const payable = lines.filter(line => !line.ok);
-    assert.deepEqual(payable.map(line => [line.label, line.expected, line.actual]), slug === 'gulfline'
-      ? [['Pending payable bills (count)', '5', '2'], ['Pending payable bills (total)', '82415.06', '73415.06']]
-      : [['Pending payable bills (count)', '5', '2'], ['Pending payable bills (total)', '89406.97', '80406.97']]);
-    // The three customer advances (receipt-100 to receipt-102) account for the whole difference; it stays a difference, with that cause.
-    for (const line of payable) assert.match(line.note!, /exactly 3 pending payable bill\(s\) lying on ledgers below receivables \(9000\.00\): .*ADV-PDC-1.*receipt-100/);
+    // Each list holds the bills lying on its side (observed): the three customer advances (receipt-100 to receipt-102) are
+    // payables, so the five expected payable bills match.
+    assert.deepEqual(lines.map(line => [line.label, line.ok]), [['Pending receivable bills (count)', true], ['Pending receivable bills (total)', true],
+      ['Pending payable bills (count)', true], ['Pending payable bills (total)', true]]);
+    assert.deepEqual(lines.filter(line => line.label.startsWith('Pending payable')).map(line => line.actual), slug === 'gulfline' ? ['5', '82415.06'] : ['5', '89406.97']);
   }
 });

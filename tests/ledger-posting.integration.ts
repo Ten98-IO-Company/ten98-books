@@ -98,7 +98,7 @@ test('the database itself refuses an unbalanced or single-line voucher and a cha
   await assert.rejects(asApp(client => client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2 AND line_no = 2', [companyId, valid.id])), balanceRefusal);
   await assert.rejects(asApp(client => client.query('UPDATE voucher SET number = 77 WHERE company_id = $1 AND id = $2', [companyId, valid.id])), /voucher number cannot change/);
   await assert.rejects(asApp(client => client.query('UPDATE voucher SET series = $3 WHERE company_id = $1 AND id = $2', [companyId, valid.id, 'other'])),
-    (error: unknown) => (error as { code?: string }).code === '42501', 'the series is not writable by the application role');
+    (error: unknown) => (error as { constraint?: string }).constraint === 'voucher_numbered', 'the series changes only with a number its new counter issued (migration 0009)');
   await assert.rejects(asApp(client => client.query('DELETE FROM voucher WHERE company_id = $1', [companyId])), (error: unknown) => (error as { code?: string }).code === '42501', 'vouchers are never hard-deleted');
   await assert.rejects(asApp(client => line(client, valid.id, 3, ids.rent, 'Dr', 0)), (error: unknown) => (error as { code?: string }).code === '23514', 'amounts are positive');
   const lines = await asAdmin(database.adminUrl, admin => admin.query('SELECT count(*) FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [companyId, valid.id]));

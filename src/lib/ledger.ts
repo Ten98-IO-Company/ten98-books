@@ -74,6 +74,10 @@ export type CreditPeriod = { count: number; unit: CreditUnit } | { dueDate: stri
  */
 export const billKinds = ['new_ref', 'advance', 'against_ref', 'on_account'] as const;
 export type BillKind = (typeof billKinds)[number];
+/**
+ * A bill name: a non-space character after trimming (observed: spaces only are refused). A name of other ignored
+ * characters only ("-", "( )") is valid; its match key is empty, and all such names of one party are one bill (observed).
+ */
 const billName = z.string().trim().min(1).max(100).refine(clean);
 const billRowShape = {
   kind: z.enum(billKinds), name: billName.optional(), billId: id.optional(), creditPeriod: creditPeriod.optional(),
@@ -127,6 +131,8 @@ const voucherLine = z.object({
 const reference = z.string().trim().max(100).refine(clean);
 const narration = z.string().max(2000);
 const voucherStatus = z.enum(['regular', 'optional']);
+/** A voucher may be created cancelled, without lines (a void that keeps its number); it is never altered into one. */
+const createStatus = z.enum(['regular', 'optional', 'cancelled']);
 const lines = z.array(voucherLine).max(500);
 /** Creating a voucher. The idempotency key makes a retried request return the first result instead of posting twice. */
 export const voucherCreateInput = z.object({
@@ -134,18 +140,20 @@ export const voucherCreateInput = z.object({
   voucherTypeId: id,
   date: calendarDate,
   narration: narration.nullish().transform(value => value?.trim() || null),
-  status: voucherStatus.default('regular'),
+  status: createStatus.default('regular'),
   postDated: z.boolean().default(false),
   reference: reference.nullish().transform(value => value || null),
   referenceDate: calendarDate.nullish().transform(value => value ?? null),
   lines,
 }).strict();
 /**
- * Altering replaces the whole voucher body except its type and number, so every field is stated: an omitted status or
+ * Altering replaces the whole voucher body except its number (and its type, unless `voucherTypeId` names another), so every field is stated: an omitted status or
  * post-dated flag must never fall back to a default (that would post an optional voucher). `revision` is the one the
  * editor last read; `narration` may be null to clear it.
  */
 export const voucherAlterInput = z.object({
+  /** Another voucher type to move the voucher to (its rules and its numbering then apply); the stored type when left out. */
+  voucherTypeId: id.optional(),
   date: calendarDate,
   narration: narration.nullable().transform(value => value?.trim() || null),
   status: voucherStatus,

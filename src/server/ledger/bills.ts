@@ -15,12 +15,13 @@ import { ledgerError, parseAmount, type LedgerContext } from './context.ts';
 /**
  * Live bill rows matching `filter` (SQL over `a`, a bill_allocation row; $1 is the company): rows of regular,
  * undeleted vouchers, each with its voucher looked up by key, plus opening rows, with their date. The two parts keep
- * each read on the row indexes instead of a scan of every voucher.
+ * each read on the row indexes instead of a scan of every voucher. The voucher part states no `voucher_id IS NOT NULL`
+ * (the voucher lookup implies it): as an index condition it let the planner read the line index whole.
  */
 export const liveBillRowsSql = (filter: string) => `SELECT a.*, v.date AS row_date, false AS opening
     FROM bill_allocation a CROSS JOIN LATERAL (SELECT x.date FROM voucher x WHERE x.company_id = a.company_id AND x.id = a.voucher_id
       AND x.status = 'regular' AND x.deleted_at IS NULL) v
-    WHERE a.company_id = $1 AND a.voucher_id IS NOT NULL AND ${filter}
+    WHERE a.company_id = $1 AND ${filter}
   UNION ALL
   SELECT a.*, a.bill_date AS row_date, true AS opening FROM bill_allocation a WHERE a.company_id = $1 AND a.voucher_id IS NULL AND ${filter}`;
 /**
@@ -80,7 +81,7 @@ async function billsByName(context: LedgerContext, keys: { ledgerId: string; nam
   if (!keys.length) return [];
   const { rows } = await context.client.query<{ ord: string; id: string | null }>(
     `SELECT t.ord, b.id FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
-       LEFT JOIN bill b ON b.company_id = $1 AND b.ledger_id = t.ledger_id AND lower(b.name) = lower(t.name) ORDER BY t.ord`,
+       LEFT JOIN bill b ON b.company_id = $1 AND b.ledger_id = t.ledger_id AND b.name_key = name_match_key(t.name) ORDER BY t.ord`,
     [context.company.companyId, keys.map(key => key.ledgerId), keys.map(key => key.name)]);
   return rows.map(row => row.id);
 }
@@ -214,10 +215,10 @@ export async function writeBills(context: LedgerContext, voucher: { id: string; 
     await client.query(
       `INSERT INTO bill (company_id, ledger_id, name, currency)
        SELECT $1, d.ledger_id, d.name, $4 FROM (
-         SELECT DISTINCT ON (t.ledger_id, lower(t.name)) t.ledger_id, t.name FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
-         ORDER BY t.ledger_id, lower(t.name), t.ord) d
-       ORDER BY d.ledger_id, lower(d.name)
-       ON CONFLICT (company_id, ledger_id, (lower(name))) DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency]);
+         SELECT DISTINCT ON (t.ledger_id, name_match_key(t.name)) t.ledger_id, t.name FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
+         ORDER BY t.ledger_id, name_match_key(t.name), t.ord) d
+       ORDER BY d.ledger_id, name_match_key(d.name) COLLATE "C"
+       ON CONFLICT (company_id, ledger_id, name_key) DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency]);
     const found = await billsByName(context, creating.map(row => ({ ledgerId: row.ledgerId, name: row.name! })));
     creating.forEach((row, index) => { row.billId = found[index]; });
   }

@@ -199,16 +199,17 @@ test('masters only: the company, groups and ledgers with their bill settings and
 test('the receivable and payable summaries are not yet comparable only when a row left out lies below that side\'s group', async () => {
   const user = await invite(owner.browser, owner.workspaceId, 'viewer');
   // The only rows left out are on Debtor USD and Debtor (receivables), so a wrong payable summary is a difference, and a wrong receivable one is explained.
-  const wrongBoth = { receivables: { pendingBills: 4, pendingTotal: '5517.00' }, payables: { pendingBills: 2, pendingTotal: '300.00' } };
+  // A list holds the bills lying on its side, so the debtor's pending credit bill (3,000.00) is a payable.
+  const wrongBoth = { receivables: { pendingBills: 4, pendingTotal: '5517.00' }, payables: { pendingBills: 3, pendingTotal: '300.00' } };
   await seedDataset(user.userId, billsDataset(pendingDebtor));
   const result = await compareDataset(user.userId, billsDataset(pendingDebtor, { summary: wrongBoth }));
   const summary = (label: string) => result.lines.find(item => item.label === label)!;
   assert.deepEqual([summary('Pending payable bills (count)').ok, summary('Pending payable bills (count)').reason], [false, undefined]);
-  assert.deepEqual([summary('Pending payable bills (total)').expected, summary('Pending payable bills (total)').actual], ['300.00', '200.00']);
+  assert.deepEqual([summary('Pending payable bills (total)').expected, summary('Pending payable bills (total)').actual], ['300.00', '3200.00']);
   assert.match(summary('Pending receivable bills (total)').reason!, /3 bill row\(s\) on ledgers below receivables were left out/);
   assert.equal(summary('Pending receivable bills (total)').actual, '5150.00');
   // With the figures the books really hold, both sides match.
-  const right = await compareDataset(user.userId, billsDataset(pendingDebtor, { summary: { receivables: { pendingBills: 3, pendingTotal: '5150.00' }, payables: { pendingBills: 1, pendingTotal: '200.00' } } }));
+  const right = await compareDataset(user.userId, billsDataset(pendingDebtor, { summary: { receivables: { pendingBills: 3, pendingTotal: '5150.00' }, payables: { pendingBills: 2, pendingTotal: '3200.00' } } }));
   assert.deepEqual(right.lines.filter(item => item.label.startsWith('Pending ') && item.label.includes('bills (')).map(item => item.ok), [true, true, true, true]);
 });
 

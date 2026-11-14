@@ -177,15 +177,19 @@ async function insertLines(context: LedgerContext, voucherId: string, lines: Pre
  * that period, entered whenever, takes the number after it. Two statements, so the database's number check sees the
  * counter row this transaction has just written.
  */
-async function issueNumber(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }): Promise<number> {
+async function issueNumber(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string; moved?: boolean }): Promise<number> {
   const { client, company } = context;
   const { rows } = await client.query<{ last_number: number; period_start: string }>(
     `INSERT INTO voucher_counter (company_id, voucher_type_id, series, period_start, last_number)
      SELECT $1, $2, $3, r.period_start, r.starting_number FROM ledger_numbering_rule($1, $2, $4::date) r
      ON CONFLICT (company_id, voucher_type_id, series, period_start) DO UPDATE SET last_number = voucher_counter.last_number + 1
      RETURNING last_number, to_char(period_start, 'YYYY-MM-DD') AS period_start`, [company.companyId, voucher.typeId, voucher.series, voucher.date]);
-  await client.query('UPDATE voucher SET number = $3, number_period = $4 WHERE company_id = $1 AND id = $2',
-    [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start]);
+  // A voucher moved to another type takes that type's number here, written together with the type and series (the
+  // database refuses a numbered voucher's type change without its new number).
+  await client.query(voucher.moved
+    ? 'UPDATE voucher SET number = $3, number_period = $4, voucher_type_id = $5, series = $6 WHERE company_id = $1 AND id = $2'
+    : 'UPDATE voucher SET number = $3, number_period = $4 WHERE company_id = $1 AND id = $2',
+  [company.companyId, voucher.id, rows[0].last_number, rows[0].period_start, ...voucher.moved ? [voucher.typeId, voucher.series] : []]);
   return rows[0].last_number;
 }
 
@@ -208,7 +212,7 @@ export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };
  * number, then the rows named by that number (a new reference left unnamed on a voucher numbered now). The number is
  * issued through `issueNumber` only; `numbering` is false when the voucher keeps the number it has or stays optional.
  */
-async function writeVoucherBills(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string }, plan: BillPlan, numbering: boolean, number: number | null): Promise<number | null> {
+async function writeVoucherBills(context: LedgerContext, voucher: { id: string; date: string; typeId: string; series: string; moved?: boolean }, plan: BillPlan, numbering: boolean, number: number | null): Promise<number | null> {
   const later = plan.rows.filter(row => row.auto);
   await writeBills(context, voucher, plan.rows.filter(row => !row.auto));
   const issued = numbering ? await issueNumber(context, voucher) : number;
@@ -232,6 +236,7 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
     return { voucher: await readVoucher(context, prior.rows[0].id), replayed: true, warnings: [] };
   }
   const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found')));
+  if (body.status === 'cancelled') return createVoid(context, type, idempotencyKey, hash, body);
   const lines = await prepareLines(context, type.kind, body);
   const cost = await planCost(context, lines);
   const plan = await planBills(context, { kind: type.kind, reference: body.reference, optional: body.status === 'optional' }, lines);
@@ -249,6 +254,26 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows), ...cost.warnings] };
 }
 
+/**
+ * A voucher created cancelled, without lines (a void): it takes the next number of its type in its date's period, has no
+ * accounting effect and is listed as cancelled. Like any cancelled voucher it is never altered or made regular again;
+ * it may be deleted. The database exempts it, and only it, from the two-balanced-lines check (`created_cancelled`).
+ */
+async function createVoid(context: LedgerContext, type: VoucherType, idempotencyKey: string, hash: string,
+  body: { date: string; narration: string | null; postDated: boolean; reference: string | null; referenceDate: string | null; lines: unknown[] }): Promise<VoucherResult & { replayed: boolean }> {
+  const { client, company, userId } = context;
+  if (body.lines.length) throw ledgerError(400, 'A voucher entered as cancelled has no lines.', 'validation');
+  assertDateOpen(context, body.date);
+  const { rows } = await client.query<{ id: string }>(
+    `INSERT INTO voucher (company_id, voucher_type_id, series, date, narration, status, post_dated, reference, reference_date, idempotency_key, request_hash, created_by)
+     VALUES ($1, $2, $3, $4, $5, 'cancelled', $6, $7, $8, $9, $10, $11) RETURNING id`,
+    [company.companyId, type.id, type.numberingSeries, body.date, body.narration, body.postDated, body.reference, body.referenceDate, idempotencyKey, hash, userId]);
+  await issueNumber(context, { id: rows[0].id, date: body.date, typeId: type.id, series: type.numberingSeries });
+  const voucher = await readVoucher(context, rows[0].id);
+  await logRevision(context, 'voucher', voucher.id, 'create', null, voucher);
+  return { voucher, replayed: false, warnings: [] };
+}
+
 /** The voucher, locked, if it may still change: not deleted and at the revision the editor read. */
 async function changeable(context: LedgerContext, voucherId: string, revision: number): Promise<Voucher> {
   const before = await readVoucher(context, voucherId, true);
@@ -258,9 +283,11 @@ async function changeable(context: LedgerContext, voucherId: string, revision: n
 }
 
 /**
- * Replaces a voucher's date, narration, reference, flags, lines and bill rows. The type and series never change; the
- * number stays while the date stays in its numbering period, and a date moved into another period takes that period's
- * next number at the counter step (the database checks at commit that the number is of its date's period). An
+ * Replaces a voucher's date, narration, reference, flags, lines and bill rows, and with `voucherTypeId` its type: the new
+ * type's posting rules apply and a numbered voucher takes the new type's next number in its date's period (the old one
+ * stays a gap; an optional voucher stays unnumbered). Otherwise the number stays while the date stays in its numbering
+ * period, and a date moved into another period takes that period's next number at the counter step (the database
+ * checks at commit that the number is of its date's period). An
  * optional voucher made regular takes the next
  * number of the period of its (new) date, and a numbered voucher cannot become optional again. Each row finds its bill
  * by name again, so an unchanged name keeps the bill; a renamed reference or a changed
@@ -275,21 +302,27 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   if (before.status === 'cancelled') throw ledgerError(409, 'A cancelled voucher cannot be altered.', 'voucher_state');
   if (before.status !== 'optional' && input.status === 'optional') throw ledgerError(409, 'A numbered voucher cannot become optional. Cancel or delete it instead.', 'voucher_state');
   assertDateOpen(context, before.date);
+  // Another voucher type: its posting rules and its numbering apply (observed); the old number stays a gap.
+  const type = input.voucherTypeId && input.voucherTypeId !== before.voucherTypeId
+    ? await readVoucherType(context, input.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found'))) : null;
+  const kind = type?.kind ?? before.kind, typeId = type?.id ?? before.voucherTypeId, series = type?.numberingSeries ?? before.series;
   const crossing = await movesPeriod(context, before, input.date);
-  const lines = await prepareLines(context, before.kind, input);
+  const lines = await prepareLines(context, kind, input);
   const cost = await planCost(context, lines, await storedCostRows(context, voucherId));
   const stored = await storedBillRows(context, voucherId);
-  const plan = await planBills(context, { kind: before.kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
+  const plan = await planBills(context, { kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
   const created = await billsCreatedBy(context, voucherId);
+  // An unnumbered voucher changes type here; a numbered one with its new number, at the counter step.
   await client.query(
-    `UPDATE voucher SET date = $3, narration = $4, status = $5, post_dated = $6, reference = $7, reference_date = $8, revision = revision + 1, updated_at = now()
+    `UPDATE voucher SET date = $3, narration = $4, status = $5, post_dated = $6, reference = $7, reference_date = $8, revision = revision + 1, updated_at = now(),
+       voucher_type_id = CASE WHEN number IS NULL THEN $9 ELSE voucher_type_id END, series = CASE WHEN number IS NULL THEN $10 ELSE series END
      WHERE company_id = $1 AND id = $2`,
-    [company.companyId, voucherId, input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate]);
+    [company.companyId, voucherId, input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate, typeId, series]);
   await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
   await insertLines(context, voucherId, lines);
   await writeCost(context, voucherId, cost.rows);
-  const numbering = (before.status === 'optional' && input.status === 'regular') || crossing;
-  await writeVoucherBills(context, { id: voucherId, date: input.date, typeId: before.voucherTypeId, series: before.series }, plan, numbering, before.number);
+  const numbering = (before.status === 'optional' && input.status === 'regular') || crossing || (type !== null && before.number !== null);
+  await writeVoucherBills(context, { id: voucherId, date: input.date, typeId, series, moved: type !== null && before.number !== null }, plan, numbering, before.number);
   const after = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'alter', before, after);
   const held = new Set(stored.flatMap(row => row.billId ? [row.billId] : []));

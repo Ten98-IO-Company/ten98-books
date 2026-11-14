@@ -50,7 +50,8 @@ export type PendingBill = {
   method: 'new_ref' | 'advance'; pending: bigint; finalPending: bigint; overdueDays: number;
 };
 export type BillsOutstandingReport = {
-  asOf: string; side: BillSide; group: { id: string; name: string };
+  /** The groups covered: trade receivables and payables by default (a list holds the bills on its side), or the one asked for. */
+  asOf: string; side: BillSide; groups: { id: string; name: string }[];
   /** `amount` is the pending amount on the side's natural side (positive). */
   bills: (PendingBill & { amount: bigint })[];
   /** The total of every page, given with the first page (no `after`) and null on later ones. */
@@ -80,7 +81,7 @@ export type BillDetailReport = {
 };
 export type AgeingParty = { ledgerId: string; name: string; notDue: bigint | null; buckets: bigint[]; total: bigint };
 export type AgeingReport = {
-  asOf: string; side: BillSide; basis: AgeingBasis; group: { id: string; name: string };
+  asOf: string; side: BillSide; basis: AgeingBasis; groups: { id: string; name: string }[];
   /** The company's columns (none by default), always ending with an open-ended column, so the columns add up to the total. */
   buckets: AgeingBucket[];
   parties: AgeingParty[]; totals: { notDue: bigint | null; buckets: bigint[]; total: bigint };

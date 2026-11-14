@@ -121,8 +121,8 @@ export type LedgerVouchersReport = {
 export type DayBookRow = {
   voucherId: string; date: string; voucherTypeName: string; kind: VoucherKind; number: number | null;
   status: VoucherStatus; postDated: boolean; narration: string | null;
-  /** The first line's ledger; the voucher amount stands in that line's column. */
-  particulars: string; side: Side; amount: bigint;
+  /** The first line's ledger; the voucher amount stands in that line's column. Null for a voucher cancelled without lines (amount zero). */
+  particulars: string | null; side: Side | null; amount: bigint;
 };
 export type DayBookReport = {
   from: string; to: string; rows: DayBookRow[]; next: string | null;

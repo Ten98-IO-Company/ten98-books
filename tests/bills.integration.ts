@@ -104,7 +104,7 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
   assert.deepEqual(await g.listed('payable', '2026-02-28'), [['C-77', 'Creditor C', '3400.00', '2026-03-20']]);
   const receivable = await g.report('bills-outstanding?side=receivable&asOf=2026-02-28');
   assert.equal(receivable.total, '13925.00');
-  assert.equal(receivable.group.name, 'Trade Receivables');
+  assert.deepEqual(receivable.groups.map((group: any) => group.name), ['Trade Receivables', 'Trade Payables'], 'by default a list covers both trade groups');
 
   // Debtors 14,225.00 at 28 Feb: A 10,975 (bills 10,675 and 300 on account: 500 opening less 200 received), B 3,250.
   const partyA = await g.partyBills(a, '2026-02-28');
@@ -160,6 +160,63 @@ test('golden scenario: the analyst\'s receivables and payables lists, on account
       assert.equal(sum, Math.round(Number(read.balance) * 100), `${asOf} ${read.ledger.name}`);
     }
   }
+});
+
+test('each list holds the bills lying on its side: a customer advance is a payable, a supplier debit bill a receivable, ageing follows (observed)', async () => {
+  const g = await books('Bills By Side');
+  const bank = await g.ledger('Bank', 'bank_accounts'), sales = await g.ledger('Sales', 'sales'), costs = await g.ledger('Costs', 'purchases');
+  const customer = await g.ledger('Customer', 'receivables'), supplier = await g.ledger('Supplier', 'payables');
+  await g.voucher('sales', '2026-03-01', [[customer, 'Dr', '500', [newRef('INV-1', '500')]], [sales, 'Cr', '500']]);
+  await g.voucher('receipt', '2026-03-02', [[bank, 'Dr', '800'], [customer, 'Cr', '800', [{ kind: 'advance', name: 'ADV-C', amount: '800' }]]]);
+  await g.voucher('purchase', '2026-03-03', [[costs, 'Dr', '300'], [supplier, 'Cr', '300', [newRef('SUP-1', '300')]]]);
+  await g.voucher('payment', '2026-03-04', [[supplier, 'Dr', '200', [{ kind: 'advance', name: 'ADV-S', amount: '200' }]], [bank, 'Cr', '200']]);
+  assert.deepEqual(await g.listed('receivable', '2026-03-31'), [['INV-1', 'Customer', '500.00', '2026-03-01'], ['ADV-S', 'Supplier', '200.00', '2026-03-04']]);
+  assert.deepEqual(await g.listed('payable', '2026-03-31'), [['ADV-C', 'Customer', '800.00', '2026-03-02'], ['SUP-1', 'Supplier', '300.00', '2026-03-03']]);
+  const payables = await g.report('bills-outstanding?side=payable&asOf=2026-03-31');
+  assert.equal(payables.total, '1100.00');
+  const ageing = await g.report('ageing?side=payable&asOf=2026-03-31');
+  assert.deepEqual([ageing.parties.map((party: any) => [party.name, party.total]), ageing.totals.total], [[['Customer', '800.00'], ['Supplier', '300.00']], '1100.00']);
+  // A group asked for limits the list to that group's parties, on the list's side.
+  const onlyDebtors = await g.report(`bills-outstanding?side=payable&asOf=2026-03-31&groupId=${g.accounts.group('receivables')}`);
+  assert.deepEqual([onlyDebtors.groups.map((group: any) => group.name), onlyDebtors.bills.map((bill: any) => bill.name)], [['Trade Receivables'], ['ADV-C']]);
+  const csv = await (await raw(owner, `/api/companies/${g.companyId}/reports/bills-outstanding/export?side=payable&asOf=2026-03-31`)).text();
+  assert.match(csv, /"2026-03-02","ADV-C","Customer","800.00"/);
+});
+
+test('a bill is its name by the match key: four spellings make one bill, a settlement in another finds it, other characters stay apart (observed)', async () => {
+  const g = await books('Bill Key');
+  const sales = await g.ledger('Sales', 'sales'), bank = await g.ledger('Bank', 'bank_accounts'), party = await g.ledger('Key Party', 'receivables');
+  for (const name of ['ab1', 'AB-1', 'A-B1', 'Ab-1']) await g.voucher('sales', '2026-03-01', [[party, 'Dr', '20', [newRef(name, '20')]], [sales, 'Cr', '20']]);
+  assert.deepEqual(Object.entries(await g.pending(party, '2026-03-31')), [['ab1', '80.00']], 'one bill, 80.00, shown with its first spelling');
+  // Observed on screen: a bill settled against a typed "a.b 1" stays one bill and nothing new is created.
+  await g.voucher('receipt', '2026-03-05', [[bank, 'Dr', '30'], [party, 'Cr', '30', [against('a.b 1', '30')]]]);
+  assert.deepEqual(Object.entries(await g.pending(party, '2026-03-31')), [['ab1', '50.00']], 'settled under another spelling');
+  for (const name of ['AB_1', 'AB:1', 'AB01']) await g.voucher('sales', '2026-03-06', [[party, 'Dr', '10', [newRef(name, '10')]], [sales, 'Cr', '10']]);
+  await g.voucher('sales', '2026-03-07', [[party, 'Dr', '10', [newRef(' (a&b) 1 ', '10')]], [sales, 'Cr', '10']]);
+  assert.deepEqual(Object.entries(await g.pending(party, '2026-03-31')).sort(), [['AB01', '10.00'], ['AB:1', '10.00'], ['AB_1', '10.00'], ['ab1', '60.00']],
+    'underscore, colon and a leading zero keep bills apart; spaces, parentheses and an ampersand do not');
+});
+
+test('bills are listed by name as text, ignoring case and punctuation: the ten observed names in their observed order', async () => {
+  const g = await books('Bills By Name');
+  const sales = await g.ledger('Sales', 'sales'), party = await g.ledger('Ten Bills', 'receivables');
+  const observed = ['10', '9', 'A-020', 'A-100', 'a2', 'B-050', 'B1', 'b3', 'B-300', 'C-200'];
+  for (const name of ['B-300', 'a2', 'C-200', '9', 'B1', 'A-100', '10', 'b3', 'A-020', 'B-050']) {
+    await g.voucher('sales', '2026-03-01', [[party, 'Dr', '10', [newRef(name, '10')]], [sales, 'Cr', '10']]);
+  }
+  const picker = async (direction: string) => ((await g.call(`/ledgers/${party}/bills?asOf=2026-03-31&sort=name&direction=${direction}`)).body.bills as any[]).map(bill => bill.name);
+  assert.deepEqual(await picker('asc'), observed, 'the pending list for entry');
+  assert.deepEqual(await picker('desc'), [...observed].reverse());
+  assert.deepEqual((await g.listed('receivable', '2026-03-31')).map((bill: any) => bill[0]), observed, 'the bills receivable list, in the database order');
+  // Paged one bill at a time, the list keeps the order (the cursor carries the bill id: names may compare equal).
+  const walked: string[] = [];
+  let after: string | null = null;
+  do {
+    const page: any = await g.report(`bills-outstanding?side=receivable&asOf=2026-03-31&limit=1${after ? `&after=${after}` : ''}`);
+    walked.push(...page.bills.map((bill: any) => bill.name));
+    after = page.next;
+  } while (after);
+  assert.deepEqual(walked, observed);
 });
 
 test('a bill is the party\'s name ignoring case: reuse attaches, also after settlement or deletion; another party has its own', async () => {
