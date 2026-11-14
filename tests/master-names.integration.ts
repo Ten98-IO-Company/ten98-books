@@ -96,3 +96,22 @@ test('the five name indexes keep their names, use the key in plain-text order, a
   for (const index of indexes) assert.match(index.definition, /UNIQUE INDEX .* \(company_id, name_match_key\(name\) COLLATE "C"\)$/, index.name);
   await assert.doesNotReject(assertDatabaseRoles(getDatabase().pool));
 });
+
+test('a name made only of ignored characters has an empty key: one per kind, spaces only are refused, an underscore is its own key', async () => {
+  const b = await books('Empty Keys');
+  const ledger = (name: string) => b.call('/ledgers', { name, groupId: b.accounts.group('indirect_expenses') });
+  assert.equal((await ledger('-')).status, 201, 'a hyphen only is accepted');
+  assert.deepEqual(code(await ledger('.')), [409, 'duplicate_name'], 'a full stop only has the same empty key');
+  assert.deepEqual(code(await ledger('   ')), [400, 'validation'], 'spaces only are no name');
+  assert.equal((await ledger('_')).status, 201, 'an underscore is not ignored');
+});
+
+test('concurrent creates of names equal under the key: one is created, every other is duplicate_name', async () => {
+  const b = await books('Concurrent Names');
+  const names = ['Shared-Name', 'SharedName', 'shared name', 'SHARED.NAME', '(Shared) Name'];
+  const answers = await Promise.all(names.map(name => b.call('/ledgers', { name, groupId: b.accounts.group('indirect_expenses') })));
+  const outcomes = answers.map(code).map(([status, refusal]) => status === 201 ? 'created' : `${status} ${refusal}`).sort();
+  assert.deepEqual(outcomes, ['409 duplicate_name', '409 duplicate_name', '409 duplicate_name', '409 duplicate_name', 'created']);
+  const ledgers = (await b.call('/ledgers')).body.ledgers as { name: string }[];
+  assert.equal(ledgers.filter(row => names.includes(row.name)).length, 1);
+});
