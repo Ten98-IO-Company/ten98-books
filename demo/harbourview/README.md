@@ -16,4 +16,4 @@ Conventions (everything below sits under `extras`, which ten98-books keeps untou
 
 Not covered, on purpose: interest calculation, budgets, projects as a separate concept, ageing buckets, bank reconciliation beyond the bank dates, and adjustment vouchers for unrealised gains.
 
-One entry would be refused by a rule ten98-books applied at the time: `journal-002` is an optional journal that credits a bank ledger. The system the figures come from saves it.
+`journal-002` is an optional journal that credits a bank ledger. The system the figures come from saves it, and ten98-books now posts it too (a journal accepts cash and bank ledgers).

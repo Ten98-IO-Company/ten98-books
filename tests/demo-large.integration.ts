@@ -12,9 +12,9 @@ import { setupOwner, type Member } from './helpers/ledger.ts';
  * opening stock; harbourview: bills, cost centres, foreign currencies; sunrise: item invoices, bills of materials,
  * manufacturing stock journals) seeded as books_app and compared with their expected.json.
  *
- * Every remaining difference is asserted by name, not hidden, so a change in the data or the tools fails here on purpose:
- * the journal that ten98-books' posting rule refuses (a rule another change is removing), and the voucher numbers, which
- * differ while numbering is one running counter per voucher type and not per financial year.
+ * Every remaining difference is asserted by name, not hidden, so a change in the data or the tools fails here on purpose.
+ * Journals may use cash and bank ledgers and numbers restart each financial year, so no comparable line differs; the
+ * numbers that differ are all shifted by vouchers cancelled without lines, which ten98-books cannot post yet.
  */
 let database: TestDatabase;
 let owner: Member & { workspaceId: string };
@@ -26,19 +26,17 @@ before(async () => {
 after(async () => { await database?.drop(); });
 
 type Expectation = {
-  slug: string; created: number; unsupported: Record<string, number>; noEntries: Record<string, number>; refused: string;
+  slug: string; created: number; unsupported: Record<string, number>; noEntries: Record<string, number>;
   numbers: { checked: number; matched: number }; counts: [matches: number, differences: number, pending: number]; differs: string[];
 };
 const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 };
 const expectations: Expectation[] = [
-  { slug: 'gulfline', created: 300, unsupported: tradingUnsupported, noEntries: { journal: 2 }, refused: 'journal-001', numbers: { checked: 300, matched: 265 }, counts: [57, 3, 1],
-    differs: ['Voucher count (types ten98-books has)', 'Voucher numbers equal to expectedNumber (confirmed against the reference)', 'Vouchers of type journal'] },
-  { slug: 'najd', created: 300, unsupported: tradingUnsupported, noEntries: { journal: 2 }, refused: 'journal-001', numbers: { checked: 300, matched: 265 }, counts: [57, 3, 1],
-    differs: ['Voucher count (types ten98-books has)', 'Voucher numbers equal to expectedNumber (confirmed against the reference)', 'Vouchers of type journal'] },
-  { slug: 'harbourview', created: 187, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: { receipt: 2, sales: 1, payment: 1 }, refused: 'journal-002', numbers: { checked: 185, matched: 92 }, counts: [36, 2, 8],
-    differs: ['Voucher count (types ten98-books has)', 'Vouchers of type journal'] },
-  { slug: 'sunrise', created: 213, unsupported: { stock_journal: 36, sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: { journal: 1, receipt: 1 },
-    refused: 'journal-002', numbers: { checked: 212, matched: 198 }, counts: [42, 2, 1], differs: ['Voucher count (types ten98-books has)', 'Vouchers of type journal'] },
+  { slug: 'gulfline', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [60, 0, 1], differs: [] },
+  { slug: 'najd', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [60, 0, 1], differs: [] },
+  // 93 harbourview numbers are shifted by four sales, receipt and payment vouchers cancelled without lines.
+  { slug: 'harbourview', created: 188, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: { receipt: 2, sales: 1, payment: 1 }, numbers: { checked: 185, matched: 92 }, counts: [38, 0, 8], differs: [] },
+  { slug: 'sunrise', created: 214, unsupported: { stock_journal: 36, sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: { journal: 1, receipt: 1 },
+    numbers: { checked: 212, matched: 198 }, counts: [44, 0, 1], differs: [] },
 ];
 
 for (const expectation of expectations) {
@@ -51,8 +49,7 @@ for (const expectation of expectations) {
     assert.deepEqual(first.vouchers, { created: expectation.created, present: 0, cancelled: 0 });
     assert.deepEqual(first.unsupportedTypes, expectation.unsupported);
     assert.deepEqual(first.noEntries, expectation.noEntries);
-    assert.equal(first.refused.length, 1);
-    assert.match(first.refused[0], new RegExp(`^voucher "${expectation.refused}" \\(journal, 2026-0[56]-\\d\\d, optional\\): A journal cannot use a cash or bank ledger`));
+    assert.deepEqual(first.refused, [], 'a journal may use cash and bank ledgers, so nothing is refused');
     assert.deepEqual(first.numbers, { ...expectation.numbers, unnumbered: 0, kind: 'confirmed against the reference' });
     assert.ok(first.skipped.some(line => line.includes('not yet supported') || line.includes('not modelled')));
 
@@ -61,14 +58,14 @@ for (const expectation of expectations) {
     t.diagnostic(`second seed (nothing to do): ${Date.now() - started} ms`);
     assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: expectation.created, cancelled: 0 }, 0, 0]);
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
+    assert.ok(first.numberDifferences.every(line => line.includes('which accounts for the whole difference')), 'every differing number is shifted by vouchers cancelled without lines');
 
     const result = await compareDataset(owner.userId, dataset);
     t.diagnostic(`${result.lines.length} lines compared: ${result.matches} match, ${result.differences} differ, ${result.pending} not yet comparable`);
     const text = formatCompareResult(result).join('\n');
     assert.deepEqual([result.matches, result.differences, result.pending], expectation.counts, text);
     assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(), expectation.differs, text);
-    const journals = result.lines.find(line => line.label === 'Vouchers of type journal')!;
-    assert.ok(journals.note!.includes(`${expectation.refused} (journal, optional)`), 'the count names the refused journal');
+    assert.equal(result.lines.find(line => line.label === 'Vouchers of type journal')!.ok, true, 'every journal is posted');
     assert.match(text, /MATCHES \(\d+\)[^]*DIFFERS \(\d+\)[^]*NOT YET COMPARABLE \(\d+ line\(s\)/);
     assert.ok(result.notComparable.some(line => line.startsWith('voucher types ten98-books does not have, left out of the voucher counts')));
   });

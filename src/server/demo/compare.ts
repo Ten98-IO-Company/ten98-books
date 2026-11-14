@@ -128,10 +128,10 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     const real = numbered.differences.filter(difference => !difference.explained);
     const examples = (list: typeof real) => list.slice(0, 3).map(difference => `${difference.key} (${difference.date}): expected ${difference.expected}, assigned ${difference.assigned}`).join('; ');
     if (numbered.checked > 0) {
-      const years = [...real.reduce((counts, difference) => counts.set(difference.date.slice(0, 4), (counts.get(difference.date.slice(0, 4)) ?? 0) + 1), new Map<string, number>())].sort().map(([year, count]) => `${year}: ${count}`).join(', ');
+      const years = [...real.reduce((counts, difference) => counts.set(difference.year, (counts.get(difference.year) ?? 0) + 1), new Map<string, number>())].sort().map(([year, count]) => `from ${year}: ${count}`).join(', ');
       const comparableCount = numbered.checked - shifted.length;
       push('Voucher numbers', `Voucher numbers equal to expectedNumber (${numbersKind(dataset)})`, String(comparableCount), String(numbered.matched), String(numbered.matched - comparableCount), real.length === 0,
-        real.length ? `${real.length} voucher(s) differ (by year: ${years}); examples: ${examples(real)}` : undefined);
+        real.length ? `${real.length} voucher(s) differ (by financial year ${years}); examples: ${examples(real)}` : undefined);
     }
     if (shifted.length) {
       lines.push({ block: 'Voucher numbers', label: 'Voucher numbers shifted by vouchers ten98-books does not post', expected: String(shifted.length), actual: 'not compared', difference: 'n/a', ok: false,

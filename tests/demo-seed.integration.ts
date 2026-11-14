@@ -201,7 +201,7 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.deepEqual(differing, ['Voucher numbers equal to expectedNumber (dataset sequence (not yet verified against the reference))', 'Closing balance of Cash', 'Total capital and liabilities', 'Total assets']);
   const wrongNumber = result.lines.find(line => line.label.startsWith('Voucher numbers equal'))!;
   assert.deepEqual([wrongNumber.expected, wrongNumber.actual, wrongNumber.difference], ['2', '1', '-1']);
-  assert.match(wrongNumber.note!, /^1 voucher\(s\) differ \(by year: 2026: 1\); examples: rent-wrong \(2026-04-03\): expected 5, assigned 2$/);
+  assert.match(wrongNumber.note!, /^1 voucher\(s\) differ \(by financial year from 2026-04-01: 1\); examples: rent-wrong \(2026-04-03\): expected 5, assigned 2$/);
   const cash = result.lines.find(line => line.label === 'Closing balance of Cash')!;
   assert.deepEqual([cash.expected, cash.actual, cash.difference], ['20.000 Dr', '30.000 Dr', '10.000 Dr'], 'exact on three-decimal minor units');
   assert.equal(result.differences, 4, 'the count a non-zero exit code is based on');
@@ -338,11 +338,13 @@ const stockDataset = (): Dataset => parseDataset({
       lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
     { key: 'payment-1', type: 'payment', date: '2026-01-08', status: 'optional', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
-    { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 2,
+    { key: 'payment-2', type: 'payment', date: '2026-01-09', status: 'optional', postDated: false,
+      lines: [{ ledger: 'bank', side: 'Dr', amount: '5.00' }, { ledger: 'capital', side: 'Cr', amount: '5.00' }] },
+    { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'cash', side: 'Dr', amount: '50.00' }, { ledger: 'sales', side: 'Cr', amount: '50.00' }] },
   ],
   expected: {
-    period: { from: '2026-01-01', to: '2026-12-31' }, voucherCount: 7, vouchersByType: { receipt: 1, sales_order: 1, journal: 3, memorandum: 1, payment: 1 },
+    period: { from: '2026-01-01', to: '2026-12-31' }, voucherCount: 8, vouchersByType: { receipt: 1, sales_order: 1, journal: 3, memorandum: 1, payment: 2 },
     trialBalance: {
       totalDebit: '1120.00', totalCredit: '1120.00',
       ledgers: { cash: { closing: '100.00', side: 'Dr' }, bank: { closing: '500.00', side: 'Dr' }, capital: { closing: '1020.00', side: 'Cr' }, sales: { closing: '100.00', side: 'Cr' }, promo: { closing: '20.00', side: 'Dr' } },
@@ -358,35 +360,36 @@ const stockDataset = (): Dataset => parseDataset({
 
 test('vouchers ten98-books cannot post are skipped, counted by type and never dropped silently', async () => {
   const report = await seedDataset(owner.userId, stockDataset());
-  assert.deepEqual(report.vouchers, { created: 4, present: 0, cancelled: 0 }, 'receipt-1, journal-3, the optional payment and the 2027 receipt');
+  assert.deepEqual(report.vouchers, { created: 5, present: 0, cancelled: 0 }, 'receipt-1, the optional journal with a bank ledger, journal-3, the optional payment and the 2027 receipt');
   assert.deepEqual(report.unsupportedTypes, { sales_order: 1, memorandum: 1 });
   assert.deepEqual(report.noEntries, { journal: 1 });
   assert.equal(report.refused.length, 1);
-  assert.match(report.refused[0], /^voucher "journal-1" \(journal, 2026-01-04, optional\): A journal cannot use a cash or bank ledger/);
-  assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 1, kind: 'dataset sequence (not yet verified against the reference)' });
+  assert.match(report.refused[0], /^voucher "payment-2" \(payment, 2026-01-09, optional\): A payment must credit at least one cash or bank ledger/);
+  assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 2, kind: 'dataset sequence (not yet verified against the reference)' });
   assert.ok(formatCompareResult(await compareDataset(owner.userId, stockDataset())).includes('  Voucher numbers (expectedNumber, checked when seeding): dataset sequence (not yet verified against the reference)'));
-  assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (refused by a posting rule), journal-2 (cancelled without lines)']);
+  assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (cancelled without lines)']);
   assert.ok(report.skipped.includes('items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)'));
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
   assert.match(printed, /no entries to post .*: 1 journal/);
   assert.match(printed, /vouchers refused by ten98-books posting rules and not posted/);
-  assert.match(printed, /voucher numbers, dataset sequence \(not yet verified against the reference\): 2 of 3 checked match expectedNumber; 1 optional voucher\(s\) hold a number in the dataset but take none until regular/);
-  assert.deepEqual(await seedDataset(owner.userId, stockDataset()).then(again => [again.vouchers, again.refused.length]), [{ created: 0, present: 4, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
+  assert.match(printed, /voucher numbers, dataset sequence \(not yet verified against the reference\): 2 of 3 checked match expectedNumber; 2 optional voucher\(s\) hold a number in the dataset but take none until regular/);
+  assert.deepEqual(await seedDataset(owner.userId, stockDataset()).then(again => [again.vouchers, again.refused.length]), [{ created: 0, present: 5, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
 });
 
 test('the comparison leaves skipped vouchers and stock out of the counts, checks the opening stock difference and names what it cannot compare', async () => {
   const result = await compareDataset(owner.userId, stockDataset());
   const byLabel = Object.fromEntries(result.lines.map(line => [line.label, line]));
-  // Seven vouchers expected in the period; three are never posted (an order, a memorandum, a cancelled voucher without lines).
-  assert.deepEqual([byLabel['Voucher count (types ten98-books has)'].expected, byLabel['Voucher count (types ten98-books has)'].actual], ['4', '3'], 'the refused journal is the one missing');
-  assert.deepEqual([byLabel['Vouchers of type journal'].expected, byLabel['Vouchers of type journal'].actual], ['2', '1']);
+  // Eight vouchers expected in the period; three are never posted (an order, a memorandum, a cancelled voucher without lines).
+  assert.deepEqual([byLabel['Voucher count (types ten98-books has)'].expected, byLabel['Voucher count (types ten98-books has)'].actual], ['5', '4'], 'the refused payment is the one missing');
+  assert.deepEqual([byLabel['Vouchers of type payment'].expected, byLabel['Vouchers of type payment'].actual], ['2', '1']);
+  assert.deepEqual([byLabel['Vouchers of type journal'].expected, byLabel['Vouchers of type journal'].actual, byLabel['Vouchers of type journal'].ok], ['2', '2', true], 'a journal may use a bank ledger');
   assert.ok(!('Vouchers of type sales_order' in byLabel) && !('Vouchers of type memorandum' in byLabel));
-  assert.deepEqual([byLabel['Vouchers of type receipt'].ok, byLabel['Vouchers of type payment'].ok], [true, true], 'the 2027 receipt is outside the period');
+  assert.equal(byLabel['Vouchers of type receipt'].ok, true, 'the 2027 receipt is outside the period');
   const stock = byLabel['Opening-balance difference (equals the opening stock value)'];
   assert.deepEqual([stock.expected, stock.actual, stock.ok], ['500.00 Cr', '500.00 Cr', true]);
   assert.deepEqual([byLabel['Total debit'].ok, byLabel['Total credit'].ok, byLabel['Gross profit (excluding stock)'].ok, byLabel['Net profit (excluding stock)'].ok], [true, true, true, true]);
-  assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type journal'], 'the number line agrees: the shifted number is explained');
+  assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type payment'], 'the number line agrees: the shifted number is explained');
   const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
   assert.deepEqual([shifted.expected, shifted.ok], ['1', false]);
   assert.match(shifted.reason!, /examples: journal-3 \(2026-01-06\): expected 3, assigned 1/);
@@ -444,7 +447,7 @@ test('a ledger expected.json lists at zero is not yet comparable only when its o
   const unexplained = await compareDataset(user.userId, wrongToo);
   assert.equal(unexplained.lines.find(line => line.label === 'Closing balance of Bank')!.reason, undefined);
   assert.deepEqual(unexplained.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(),
-    ['Closing balance of Bank', 'Closing balance of Promo', 'Voucher count (types ten98-books has)', 'Vouchers of type journal']);
+    ['Closing balance of Bank', 'Closing balance of Promo', 'Voucher count (types ten98-books has)', 'Vouchers of type payment']);
 });
 
 /** A foreign-currency invoice the reference restates at the year-end rate: 100 USD booked at 3.67 and restated at 3.70. */

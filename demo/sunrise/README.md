@@ -15,4 +15,4 @@ Conventions: the bill-wise, cost-centre and bank shapes under `extras` are those
 
 Not covered: payroll (salaries are ordinary expense vouchers), job work orders, cost tracking, interest, batches, multi-currency, budgets and ageing buckets.
 
-One entry would be refused by a rule ten98-books applied at the time: `journal-002` is an optional journal that credits a bank ledger. The system the figures come from saves it.
+`journal-002` is an optional journal that credits a bank ledger. The system the figures come from saves it, and ten98-books now posts it too (a journal accepts cash and bank ledgers).
