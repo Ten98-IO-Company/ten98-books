@@ -15,6 +15,10 @@ import { addAmounts, rollUp, statementTree, subtree, totalOf, zeroAmounts } from
  * Trial balance, profit and loss, balance sheet and group summary. Each reads the read model's ledger rows and the group
  * list once and derives its lines from that one hierarchy, so a statement line, its group summary and the group's
  * ledgers always agree. Statements get a 30-second budget of their own (D-02).
+ *
+ * Stock (M2b slice a) is valued at the opening rows until valuation arrives (slice c): the trial balance shows it as
+ * "Opening stock" in current assets, the profit and loss puts it in the cost of sales as opening and closing stock
+ * (equal, so profit is unchanged), and the balance sheet shows it as "Closing stock" in current assets.
  */
 
 const budgetSeconds = 30;
@@ -22,10 +26,10 @@ const periodFields = (path: readonly PropertyKey[]) => ({ from: 'the start date'
 
 export const parsePeriod = (query: unknown) => parseInput(reportPeriodQuery, query, periodFields);
 
-async function hierarchy(context: LedgerContext, from: string, to: string) {
+async function hierarchy(context: LedgerContext, from: string, to: string, stockName = 'Opening stock') {
   await reportBudget(context, budgetSeconds);
   const read = await ledgerRows(context, from, to);
-  const nodes = statementTree(await listGroups(context), read.rows);
+  const nodes = statementTree(await listGroups(context), read.rows, read.openingStock === null ? null : { name: stockName, value: read.openingStock });
   return { ...read, nodes, ledgers: new Map(read.rows.map(row => [row.ledgerId, row])) };
 }
 
@@ -48,7 +52,7 @@ export async function trialBalanceReport(context: LedgerContext, query: unknown)
 }
 
 const targetOf = (node: StatementNode): StatementLine['target'] => node.kind === 'group'
-  ? { report: 'group-summary', groupId: node.id } : { report: 'ledger-monthly', ledgerId: node.id };
+  ? { report: 'group-summary', groupId: node.id } : node.kind === 'ledger' ? { report: 'ledger-monthly', ledgerId: node.id } : null;
 
 /** Lines for `primaries` and everything below them, each amount from `value` with its sign set for the section. */
 function sectionLines(nodes: readonly StatementNode[], primaries: readonly StatementNode[], value: Map<string, bigint>, credit: boolean): { lines: StatementLine[]; total: bigint } {
@@ -75,14 +79,15 @@ const primariesOf = (nodes: readonly StatementNode[], nature: Nature, grossProfi
  * gives gross profit or loss, then the other income and expenses give the net result. A ledger's figure is its
  * movement in the period, plus its opening balance when the books begin on or after the period's start (that opening
  * belongs to this year's result, and a period before the books begin shows the opening balances, as the balance sheet
- * and the trial balance do). Stock is not valued in M1, so there is no opening or closing stock line.
+ * and the trial balance do). Opening and closing stock stand first and last in the cost of sales (closing stock against
+ * it), at the opening rows' value until valuation arrives (slice c).
  */
 export async function profitAndLossReport(context: LedgerContext, query: unknown): Promise<ProfitAndLossReport> {
   const period = parsePeriod(query);
   if (financialYearOf(context.company.financialYearStart, period.from).to < period.to) {
     throw new FoundationError(400, 'A profit and loss statement covers one financial year at most. Choose an end date in the same financial year.');
   }
-  const { from, to, nodes, ledgers } = await hierarchy(context, period.from, period.to);
+  const { from, to, nodes, ledgers, openingStock } = await hierarchy(context, period.from, period.to);
   // Same rule as the read model, which keeps an income or expense opening in its ledger for a period starting on or
   // before the books begin and closes it into the profit and loss ledger otherwise: so the balance sheet's current
   // period and this statement agree for any date.
@@ -92,6 +97,13 @@ export async function profitAndLossReport(context: LedgerContext, query: unknown
 
   const tradingIncome = sectionLines(nodes, primariesOf(nodes, 'income', true), value, true);
   const tradingCosts = sectionLines(nodes, primariesOf(nodes, 'expense', true), value, false);
+  const stock = openingStock === null ? null : { opening: openingStock, closing: openingStock };
+  if (stock) {
+    const line = (key: string, label: string, amount: bigint): StatementLine => ({ key, kind: 'stock', label, depth: 0, amount, target: null });
+    tradingCosts.lines.unshift(line('s:opening', 'Opening stock', stock.opening));
+    tradingCosts.lines.push(line('s:closing', 'Closing stock', subtractMoney(0n, stock.closing)));
+    tradingCosts.total = subtractMoney(addMoney(tradingCosts.total, stock.opening), stock.closing);
+  }
   const otherIncome = sectionLines(nodes, primariesOf(nodes, 'income', false), value, true);
   const otherCosts = sectionLines(nodes, primariesOf(nodes, 'expense', false), value, false);
   const grossProfit = subtractMoney(tradingIncome.total, tradingCosts.total);
@@ -107,7 +119,7 @@ export async function profitAndLossReport(context: LedgerContext, query: unknown
     heading('h:other-costs', 'Other expenses'), ...otherCosts.lines, subtotal('t:other-costs', 'Total other expenses', otherCosts.total),
     result('r:net', 'Net profit', 'Net loss', netProfit),
   ];
-  return { from, to, lines, grossProfit, netProfit };
+  return { from, to, lines, grossProfit, netProfit, stock };
 }
 
 /**
@@ -119,11 +131,8 @@ export async function profitAndLossReport(context: LedgerContext, query: unknown
 export async function balanceSheetReport(context: LedgerContext, query: unknown): Promise<BalanceSheetReport> {
   const { date } = parseInput(balanceSheetQuery, query, periodFields);
   const yearStart = financialYearOf(context.company.financialYearStart, date).from;
-  const { nodes, ledgers, openingDifference } = await hierarchy(context, yearStart, date);
-  const value = rollUp(nodes, node => {
-    const row = ledgers.get(node.id)!;
-    return subtractMoney(row.closingDebit, row.closingCredit);
-  });
+  const { nodes, ledgers, openingStock, openingDifference } = await hierarchy(context, yearStart, date, 'Closing stock');
+  const value = rollUp(nodes, node => subtractMoney(node.closingDebit, node.closingCredit));
   const liabilities = sectionLines(nodes, primariesOf(nodes, 'liability'), value, true);
   const assets = sectionLines(nodes, primariesOf(nodes, 'asset'), value, false);
 
@@ -150,7 +159,7 @@ export async function balanceSheetReport(context: LedgerContext, query: unknown)
     heading('h:assets', 'Assets'), ...assets.lines, ...loss ? profitLines : [], ...openingDifference.side === 'Cr' ? difference : [],
     subtotal('t:assets', 'Total assets', assetTotal),
   ];
-  return { date, from: yearStart, lines, totals: { liabilities: liabilityTotal, assets: assetTotal }, profitAndLoss: { broughtForward, currentPeriod }, openingDifference };
+  return { date, from: yearStart, lines, totals: { liabilities: liabilityTotal, assets: assetTotal }, profitAndLoss: { broughtForward, currentPeriod }, closingStock: openingStock, openingDifference };
 }
 
 /** One group's sub-groups and ledgers for the period, or with no group the primary groups and ungrouped ledgers. */
