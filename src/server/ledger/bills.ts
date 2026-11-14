@@ -15,12 +15,13 @@ import { ledgerError, parseAmount, type LedgerContext } from './context.ts';
 /**
  * Live bill rows matching `filter` (SQL over `a`, a bill_allocation row; $1 is the company): rows of regular,
  * undeleted vouchers, each with its voucher looked up by key, plus opening rows, with their date. The two parts keep
- * each read on the row indexes instead of a scan of every voucher.
+ * each read on the row indexes instead of a scan of every voucher. The voucher part states no `voucher_id IS NOT NULL`
+ * (the voucher lookup implies it): as an index condition it let the planner read the line index whole.
  */
 export const liveBillRowsSql = (filter: string) => `SELECT a.*, v.date AS row_date, false AS opening
     FROM bill_allocation a CROSS JOIN LATERAL (SELECT x.date FROM voucher x WHERE x.company_id = a.company_id AND x.id = a.voucher_id
       AND x.status = 'regular' AND x.deleted_at IS NULL) v
-    WHERE a.company_id = $1 AND a.voucher_id IS NOT NULL AND ${filter}
+    WHERE a.company_id = $1 AND ${filter}
   UNION ALL
   SELECT a.*, a.bill_date AS row_date, true AS opening FROM bill_allocation a WHERE a.company_id = $1 AND a.voucher_id IS NULL AND ${filter}`;
 /**

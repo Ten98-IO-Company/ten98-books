@@ -90,6 +90,11 @@ DROP INDEX bill_identity_idx;
 -- In plain-text order (COLLATE "C"), the order the lists read a party's bills in, so a page reads only its own bills.
 -- An empty key (a name of ignored characters only) sorts first.
 CREATE UNIQUE INDEX bill_identity_idx ON bill (company_id, ledger_id, name_match_key(name) COLLATE "C");
+-- A party's bills in list order, led by the ledger without company_id: the lists read a party's bills through it (a
+-- ledger belongs to one company, so the ledger implies the company; the row-level policy filters as everywhere). Led
+-- by company_id, the identity index lost to the primary key whenever the joined tables had statistics and bill had
+-- none, and a page then read every bill of the company for each party it looked at.
+CREATE INDEX bill_ledger_order_idx ON bill (ledger_id, name_match_key(name) COLLATE "C", id);
 
 -- ---- Vouchers created cancelled, without lines ----
 

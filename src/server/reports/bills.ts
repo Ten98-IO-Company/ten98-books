@@ -42,7 +42,9 @@ type StateOptions = {
 async function billStates(context: LedgerContext, ledgerIds: string[], asOf: string, keep: 'pending' | 'final' | 'all', options: StateOptions = {}): Promise<BillState[]> {
   if (!ledgerIds.length) return [];
   const { rows } = await context.client.query<BillState>(
-    `WITH live AS (${liveBillRowsSql('a.bill_id IS NOT NULL AND a.ledger_id = ANY($2::uuid[]) AND ($7::uuid[] IS NULL OR a.bill_id = ANY($7::uuid[]))')}),
+    // Given bills are read by their ids alone (an optional condition inside an OR is no index condition, and the planner
+    // then read every bill row of the ledgers); otherwise every bill row of the ledgers.
+    `WITH live AS (${liveBillRowsSql(options.billIds ? 'a.bill_id = ANY($7::uuid[]) AND a.ledger_id = ANY($2::uuid[])' : 'a.bill_id IS NOT NULL AND a.ledger_id = ANY($2::uuid[]) AND $7::uuid[] IS NULL')}),
      sums AS (
        SELECT bill_id, coalesce(sum(${signedSql('live')}) FILTER (WHERE opening OR row_date <= $3), 0)::bigint AS pending,
          sum(${signedSql('live')})::bigint AS final_pending
@@ -83,7 +85,8 @@ function decodeKey(cursor: string | undefined): PageKey | undefined {
 
 /**
  * One page of the bills pending on `side` at `asOf`, in list order (party name, party, bill name), without reading the
- * bills before or after it: parties are taken in order, and each party's bills in key order (bill_identity_idx), each with its pending
+ * bills before or after it: parties are taken in order, and each party's bills in key order (bill_ledger_order_idx, by
+ * ledger alone: the ledger implies the company), each with its pending
  * summed from its own rows, until the page is full. A page costs the bills it returns plus the settled ones it passes.
  */
 async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: string, side: 'Dr' | 'Cr', after: PageKey | undefined, limit: number) {
@@ -99,7 +102,7 @@ async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: st
       `SELECT b.id AS "billId", name_match_key(b.name) AS name FROM bill b
          CROSS JOIN LATERAL (SELECT coalesce(sum(${signedSql('r')}) FILTER (WHERE r.opening OR r.row_date <= $4), 0) AS pending
            FROM (${liveBillRowsSql('a.bill_id = b.id')}) r) s
-       WHERE b.company_id = $1 AND b.ledger_id = $2
+       WHERE b.ledger_id = $2
          AND ($3::text IS NULL OR (name_match_key(b.name) COLLATE "C", b.id) > ($3::text COLLATE "C", $7::uuid))
          AND (($5 = 'Dr' AND s.pending > 0) OR ($5 = 'Cr' AND s.pending < 0))
        ORDER BY name_match_key(b.name) COLLATE "C", b.id LIMIT $6`,
@@ -153,11 +156,10 @@ async function scope(context: LedgerContext, groupId: string | undefined): Promi
   const { rows } = await context.client.query<{ id: string }>(
     `WITH RECURSIVE below(id) AS (SELECT unnest($2::uuid[]) UNION SELECT g.id FROM account_group g JOIN below b ON g.company_id = $1 AND g.parent_id = b.id)
      SELECT l.id FROM ledger l WHERE l.company_id = $1 AND l.group_id IN (SELECT id FROM below)
-       -- One probe of bill_identity_idx per ledger, ordered by the key alone: company and ledger are fixed, so only that index
-       -- gives the order and it is the cheap path on any statistics (unordered, or ordered from company_id, the planner read
-       -- the company's bills through the primary key, or scanned the table, for every ledger).
-       AND (SELECT true FROM bill b WHERE b.company_id = l.company_id AND b.ledger_id = l.id
-            ORDER BY name_match_key(b.name) COLLATE "C" LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
+       -- One probe of bill_ledger_order_idx per ledger, by ledger alone (the ledger implies the company): with a company
+       -- condition the planner read the company's bills through the primary key for every ledger whenever bill had no
+       -- statistics and the joined tables had.
+       AND (SELECT true FROM bill b WHERE b.ledger_id = l.id LIMIT 1)`, [context.company.companyId, groups.map(group => group.id)]);
   return { groups, ledgerIds: rows.map(row => row.id) };
 }
 
