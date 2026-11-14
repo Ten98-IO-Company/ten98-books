@@ -14,7 +14,7 @@ const pageLines = 10
  * Focus on a row lets screen readers read the line moved to; the row header names it.
  * Must be rendered inside the report's ShortcutScope. Each row needs a stable key; the highlight is that key.
  */
-export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, focusOnLoad = true }: {
+export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, pageBusy = false, focusOnLoad = true }: {
   caption: string
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
@@ -28,6 +28,8 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   footerCells?: readonly ReactNode[]
   page?: TableCursorPage
   onPage?: (direction: 'previous' | 'next') => void
+  /** A page is loading: paging keys are ignored until it arrives, so a held or repeated key moves one page only. */
+  pageBusy?: boolean
   /** Moves focus to the highlighted line once the rows arrive, so the keys work at once. */
   focusOnLoad?: boolean
 }) {
@@ -49,8 +51,9 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   }
   const step = (by: number) => {
     const target = position.current + by
-    if (onPage && page && target >= rows.length && page.cursor.hasNext) onPage('next')
-    else if (onPage && page && target < 0 && page.cursor.hasPrevious) onPage('previous')
+    const pages = onPage && page ? page.cursor : null
+    if (pages && target >= rows.length && pages.hasNext) { if (!pageBusy) onPage!('next') }
+    else if (pages && target < 0 && pages.hasPrevious) { if (!pageBusy) onPage!('previous') }
     else move(target)
   }
 
@@ -63,16 +66,18 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   const openable = current !== undefined && (canOpen?.(current) ?? true)
   useAppCommand('report.drill', () => { if (current) onOpen(current) }, { enabled: openable })
 
-  // Once rows arrive (and after each page), the highlighted row takes focus unless the user is typing somewhere.
+  // Once rows arrive (and after each page), the highlighted row takes focus unless the user is typing somewhere. With no
+  // rows the table frame takes it, so focus is inside the report rather than on the page body.
   const signature = keys.join('|')
   useEffect(() => {
-    if (!focusOnLoad || !rows.length) return
+    if (!focusOnLoad) return
     const active = document.activeElement
     if (active && active !== document.body && !frame.current?.contains(active) && active.closest('input, textarea, select, dialog')) return
-    rowElements()[position.current]?.focus({ preventScroll: false })
+    if (rows.length) rowElements()[position.current]?.focus({ preventScroll: false })
+    else frame.current?.focus()
   }, [signature, focusOnLoad])
 
-  return <Stack ref={frame} gap={2} onFocusCapture={event => {
+  return <Stack ref={frame} gap={2} tabIndex={-1} aria-label={caption} onFocusCapture={event => {
     // A row focused by the table's own arrow keys, or by a click, becomes the highlight.
     const at = rowElements().indexOf(event.target as HTMLElement)
     if (at >= 0 && at !== position.current) { position.current = at; onHighlight(keys[at]) }

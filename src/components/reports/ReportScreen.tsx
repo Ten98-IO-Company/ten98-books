@@ -1,9 +1,9 @@
 import { Button, DateRangeField, Dialog, Field, Inline, Input, KeyHint, ReportPanel, ReportToolbar, saveFile, ShortcutScope, Stack, Switch, Text } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
-import { useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
-import { longDate, periodText, type ReportPeriod } from '../../lib/reports'
+import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
 import { useAppCommand, useBackOverride } from '../KeyboardShell'
 import { periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
@@ -27,9 +27,11 @@ export type PeriodControl =
  * period and status, the view switches, the period dialog, the "open another report" menu, CSV export and print.
  * Escape goes back one level through `back` (nav.back). The table inside registers the movement and drill commands.
  */
-export function ReportScreen({ title, search, period, detail, zeros, exportPath, back, summary, status, error, onRetry, children }: {
+export function ReportScreen({ title, search, periodKind = 'statement', period, detail, zeros, exportPath, back, summary, status, error, onRetry, children }: {
   title: string
   search: ReportSearch
+  /** Only a statement's period carries into another report; the day book's day and the voucher view do not. */
+  periodKind?: PeriodKind
   /** Omitted where the report has no period (the voucher view). */
   period?: PeriodControl
   detail?: { on: boolean; toggle: () => void }
@@ -47,6 +49,8 @@ export function ReportScreen({ title, search, period, detail, zeros, exportPath,
   const navigate = useNavigate()
   const [periodOpen, setPeriodOpen] = useState(false)
   const [goToOpen, setGoToOpen] = useState(false)
+  const [menuFocus, setMenuFocus] = useState(0)
+  useFocusOnOpen(goToOpen, () => setMenuFocus(request => request + 1))
   const [exportState, setExportState] = useState<{ busy: boolean; message: string; failed: boolean }>({ busy: false, message: '', failed: false })
 
   async function exportCsv() {
@@ -90,9 +94,9 @@ export function ReportScreen({ title, search, period, detail, zeros, exportPath,
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description='The period carries over. Use the arrow keys and Enter, or press a report’s letter.'>
-      {goToOpen && <KeyboardMenu label='Reports' focusRequest={0} active={destinations[0].command} onActiveChange={() => undefined}
-        groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodSearch(search) } as never) })} />}
+    <Dialog open={goToOpen} onOpenChange={setGoToOpen} title='Open another report' description={`${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
+      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={destinations[0].command} onActiveChange={() => undefined}
+        groups={reportMenuGroups(report => { setGoToOpen(false); void navigate({ to: reportRoutes[report], params: { companyId: company.id }, search: periodKind === 'statement' ? periodSearch(search) : {} } as never) })} />}
     </Dialog>
   </ShortcutScope>
 }
@@ -117,7 +121,23 @@ function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, goTo 
   return null
 }
 
-/** The period (or the as-at date) of a report: a small form; Enter in a date field applies it. */
+/**
+ * Moves focus into a dialog once it has opened (the dialog itself starts on its close button). A stand-in for the
+ * initial-focus option the design system is adding to Dialog: replace each use with that prop when it ships.
+ */
+function useFocusOnOpen(open: boolean, focus: () => void) {
+  const latest = useRef(focus)
+  latest.current = focus
+  useEffect(() => {
+    if (!open) return
+    // Two frames, so this runs after the dialog has placed focus on its close button.
+    let second = 0
+    const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => latest.current()) })
+    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second) }
+  }, [open])
+}
+
+/** The period (or the as-at date) of a report: a small form that opens on its first date field; Enter applies it. */
 function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenChange: (open: boolean) => void; control: PeriodControl }) {
   const id = useId()
   const initial = control.kind === 'range' ? control.period : null
@@ -125,6 +145,8 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
   const [date, setDate] = useState(control.kind === 'date' ? control.date ?? '' : '')
   const [problem, setProblem] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(false)
+  const body = useRef<HTMLElement>(null)
+  useFocusOnOpen(open, () => body.current?.querySelector<HTMLInputElement>('input')?.focus())
   if (open !== shownFor) {
     // Each time the dialog opens it starts from the report's current period.
     setShownFor(open)
@@ -139,8 +161,8 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
       onOpenChange(false)
     }}
     footer={<Inline gap={2}><Button type='submit'>Show the report</Button><Button type='button' variant='ghost' onClick={() => onOpenChange(false)}>Cancel</Button></Inline>}>
-    {control.kind === 'range'
+    <Stack ref={body}>{control.kind === 'range'
       ? <DateRangeField label='Period' start={range.start} end={range.end} maxDays={3660} onChange={(next, issue) => { setRange(next); setProblem(issue) }} />
-      : <Field label='As at' htmlFor={`${id}date`}><Input id={`${id}date`} type='date' value={date} required onChange={event => setDate(event.target.value)} /></Field>}
+      : <Field label='As at' htmlFor={`${id}date`}><Input id={`${id}date`} type='date' value={date} required onChange={event => setDate(event.target.value)} /></Field>}</Stack>
   </Dialog>
 }

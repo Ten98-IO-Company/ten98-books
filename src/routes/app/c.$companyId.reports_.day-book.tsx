@@ -31,7 +31,7 @@ function DayBookScreen() {
   const pages = useCursorPages(`${search.from}|${search.to}`)
   const screen = useReportScreen<Wire<DayBookReport>>(search, 'day', (period, companyId) => `/api/companies/${companyId}/reports/day-book?${query({ ...period, after: pages.after })}`)
   const data = screen.report.data
-  return <ReportScreen title='Day book' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/day-book/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}
@@ -40,7 +40,7 @@ function DayBookScreen() {
       highlight={screen.highlight} onHighlight={screen.setHighlight}
       onOpen={row => screen.open({ report: 'voucher', search: { voucher: row.voucherId } })}
       page={{ cursor: { hasPrevious: pages.hasPrevious, hasNext: data.next !== null } }}
-      onPage={direction => { if (direction === 'next' && data.next) pages.next(data.next); else if (direction === 'previous') pages.previous() }}
+      pageBusy={screen.report.status === 'loading'} onPage={direction => { if (direction === 'next' && data.next) pages.next(data.next); else if (direction === 'previous') pages.previous() }}
       footerCells={['', 'Total of regular vouchers', '', '', <Amount key='debit' value={data.totals.debit} strong />, <Amount key='credit' value={data.totals.credit} strong />]} />}
   </ReportScreen>
 }

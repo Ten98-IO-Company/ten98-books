@@ -4,7 +4,7 @@ import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { isCalendarDate } from '../../lib/company'
 import type { Wire } from '../../lib/money'
-import type { ReportDefaults, ReportPeriod } from '../../lib/reports'
+import { recordPeriod, rememberedPeriod, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
 
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
@@ -32,7 +32,7 @@ export function reportSearch(search: Record<string, unknown>): ReportSearch {
   return Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined)) as ReportSearch
 }
 
-/** The period last shown per company in this tab: a report opened without one carries it on (it is sticky). */
+/** The statement period last shown per company in this tab: a statement opened without one carries it on (it is sticky). */
 const lastPeriod = new Map<string, ReportPeriod>()
 const defaults = new Map<string, Promise<Wire<ReportDefaults>>>()
 
@@ -49,17 +49,19 @@ export function loadDefaults(companyId: string): Promise<Wire<ReportDefaults>> {
 
 /**
  * The period of the report on screen. With none in the address it fills one in (replacing the history entry): the day
- * book its last voucher date, statements the period shown last in this tab or the financial-year start through the
- * last voucher date. Returns null until a period is in the address.
+ * book its last voucher date, statements the statement period shown last in this tab or the financial-year start
+ * through the last voucher date. Only statement periods are remembered (recordPeriod); `none` (the voucher view) keeps
+ * whatever the address carries and fills nothing in. Returns null until a period is in the address.
  */
-export function useReportPeriod(companyId: string, search: ReportSearch, kind: 'statement' | 'day'): { period: ReportPeriod | null; error: string } {
+export function useReportPeriod(companyId: string, search: ReportSearch, kind: PeriodKind): { period: ReportPeriod | null; error: string } {
   const navigate = useNavigate()
   const [error, setError] = useState('')
   const period = search.from && search.to && search.from <= search.to ? { from: search.from, to: search.to } : null
   useEffect(() => {
-    if (period) { lastPeriod.set(companyId, period); return }
+    if (period) { recordPeriod(lastPeriod, companyId, kind, period); return }
+    if (kind === 'none') return
     let live = true
-    const remembered = kind === 'statement' ? lastPeriod.get(companyId) : undefined
+    const remembered = rememberedPeriod(lastPeriod, companyId, kind)
     const fill = (chosen: ReportPeriod) => { if (live) void navigate({ to: '.', search: (previous: ReportSearch) => ({ ...previous, ...chosen }), replace: true }) }
     if (remembered) fill(remembered)
     else loadDefaults(companyId).then(found => fill(kind === 'day' ? { from: found.dayBookDate, to: found.dayBookDate } : found.period))

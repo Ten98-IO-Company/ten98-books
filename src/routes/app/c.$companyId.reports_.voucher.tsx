@@ -25,14 +25,14 @@ const columns: DataColumn<Line>[] = [
 
 function VoucherScreen() {
   const search = Route.useSearch()
-  const screen = useReportScreen<never>(search, 'statement', () => null)
+  const screen = useReportScreen<never>(search, 'none', () => null)
   const voucher = useReport<Wire<Voucher>>(search.voucher ? `/api/companies/${screen.company.id}/vouchers/${search.voucher}` : null, 'voucher')
   const data = voucher.data
   const title = data ? `${data.voucherTypeName} ${data.number ?? '(optional)'}` : 'Voucher'
   const back = () => screen.back(!data ? null : search.ledger
     ? { report: 'ledger-vouchers', search: { from: search.from, to: search.to, ledger: search.ledger } }
     : { report: 'day-book', search: { from: data.date, to: data.date } })
-  return <ReportScreen title={title} search={search} back={back} onRetry={voucher.reload}
+  return <ReportScreen title={title} search={search} periodKind='none' back={back} onRetry={voucher.reload}
     status={search.voucher ? voucher.status : 'error'} error={search.voucher ? voucher.error : 'Choose a voucher first.'}>
     {data && <Stack gap={4}>
       <DescriptionList columns={2} items={[

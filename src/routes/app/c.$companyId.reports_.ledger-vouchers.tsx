@@ -44,7 +44,7 @@ function LedgerVouchersScreen() {
       highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={row => row.entry !== null}
       onOpen={row => { if (row.entry) screen.open({ report: 'voucher', search: { voucher: row.entry.voucherId, ledger: data.ledger.id } }) }}
       page={{ cursor: { hasPrevious: pages.hasPrevious, hasNext: data.next !== null } }}
-      onPage={direction => { if (direction === 'next' && data.next) pages.next(data.next); else if (direction === 'previous') pages.previous() }}
+      pageBusy={screen.report.status === 'loading'} onPage={direction => { if (direction === 'next' && data.next) pages.next(data.next); else if (direction === 'previous') pages.previous() }}
       footerCells={['', 'Total for the period', '', '', <Amount key='debit' value={data.totals.debit} strong />, <Amount key='credit' value={data.totals.credit} strong />,
         <Balance key='closing' value={data.totals.closing} strong />]} />}
   </ReportScreen>

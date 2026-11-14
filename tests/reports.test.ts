@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, reportPageQuery, reportPeriodQuery, splitBalance } from '../src/lib/reports.ts';
+import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -48,4 +48,25 @@ test('the statement tree is pre-order, sums every ledger into each group above i
   assert.equal(values.get('g:a1'), 300n);
   assert.equal(isZeroNode(nodes.at(-1)!), true);
   assert.equal(isZeroNode({ openingDebit: '0.00', openingCredit: '0.00', debit: '0.00', credit: '0.00', closingDebit: '0.000', closingCredit: '1.000' }), false);
+});
+
+test('only statement periods are remembered: the day book keeps its day to itself', () => {
+  const memory = new Map<string, { from: string; to: string }>();
+  recordPeriod(memory, 'c1', 'statement', { from: '2026-01-01', to: '2026-02-03' });
+  recordPeriod(memory, 'c1', 'day', { from: '2026-02-03', to: '2026-02-03' });
+  recordPeriod(memory, 'c1', 'none', { from: '2026-02-03', to: '2026-02-03' });
+  assert.deepEqual(rememberedPeriod(memory, 'c1', 'statement'), { from: '2026-01-01', to: '2026-02-03' }, 'opening the day book does not narrow the trial balance');
+  assert.equal(rememberedPeriod(memory, 'c1', 'day'), undefined, 'the day book opens on its own default day');
+  assert.equal(rememberedPeriod(memory, 'c2', 'statement'), undefined);
+});
+
+test('page cursors: a repeated push of the cursor on top is ignored, so PageUp still returns to the first page', () => {
+  let stack: readonly string[] = [];
+  // Three quick PageDowns while page 2 loads: the old page's next cursor is pushed each time.
+  for (let press = 0; press < 3; press++) stack = pushCursor(stack, 'page-2');
+  assert.deepEqual(stack, ['page-2']);
+  stack = pushCursor(stack, 'page-3');
+  assert.deepEqual(stack, ['page-2', 'page-3']);
+  stack = popCursor(popCursor(stack));
+  assert.deepEqual(stack, [], 'two PageUps return to the first page');
 });

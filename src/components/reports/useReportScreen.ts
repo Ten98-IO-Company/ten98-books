@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useState } from 'react'
 import { useCompany } from '../../lib/app-context'
-import type { ReportPeriod } from '../../lib/reports'
+import { popCursor, pushCursor, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { periodSearch, useReport, useReportNavigation, useReportPeriod, type ReportLink, type ReportSearch } from './navigation'
 
 /**
@@ -9,7 +9,7 @@ import { periodSearch, useReport, useReportNavigation, useReportPeriod, type Rep
  * line (restored from `hl` when coming back), drill-down and back, and setters for the view switches and the period,
  * which replace the history entry because they change this level rather than open a new one.
  */
-export function useReportScreen<T>(search: ReportSearch, kind: 'statement' | 'day', path: (period: ReportPeriod, companyId: string) => string | null) {
+export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path: (period: ReportPeriod, companyId: string) => string | null) {
   const company = useCompany()
   const navigate = useNavigate()
   const { period, error: periodError } = useReportPeriod(company.id, search, kind)
@@ -31,15 +31,18 @@ export function useReportScreen<T>(search: ReportSearch, kind: 'statement' | 'da
 
 /**
  * Keyset pages of a register (day book, ledger vouchers): the cursors of the pages before this one are kept so PageUp
- * past the first line can go back. `reset` (the period and subject) starts again from the first page.
+ * past the first line can go back. `reset` (the period and subject) starts again from the first page. The screen also
+ * ignores paging keys while a page loads (ReportTable `pageBusy`); pushCursor ignores a repeat of the cursor on top.
  */
 export function useCursorPages(reset: string) {
-  const [state, setState] = useState<{ reset: string; cursors: string[] }>({ reset, cursors: [] })
+  const [state, setState] = useState<{ reset: string; cursors: readonly string[] }>({ reset, cursors: [] })
   const cursors = state.reset === reset ? state.cursors : []
+  const change = (next: (cursors: readonly string[]) => readonly string[]) =>
+    setState(previous => ({ reset, cursors: next(previous.reset === reset ? previous.cursors : []) }))
   return {
     after: cursors.at(-1),
     hasPrevious: cursors.length > 0,
-    next: (cursor: string) => setState({ reset, cursors: [...cursors, cursor] }),
-    previous: () => setState({ reset, cursors: cursors.slice(0, -1) }),
+    next: (cursor: string) => change(current => pushCursor(current, cursor)),
+    previous: () => change(popCursor),
   }
 }

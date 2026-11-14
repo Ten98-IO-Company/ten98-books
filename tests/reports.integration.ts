@@ -317,6 +317,16 @@ test('queries are checked at the boundary', async () => {
   assert.equal((await owner.browser.call(`/api/companies/${companyId}/reports/trial-balance`, {})).status, 405);
 });
 
+test('exports are limited per user per minute with a plain message; reading reports is not limited', async () => {
+  const { exportsPerMinute } = await import('../src/server/api/reports.ts');
+  const reader = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const path = `/api/companies/${companyId}/reports/trial-balance/export?${period}`;
+  for (let index = 0; index < exportsPerMinute; index++) assert.equal((await rawGet(reader.browser, path)).status, 200, `export ${index + 1}`);
+  assert.deepEqual(await reader.browser.call(path), { status: 429, body: { error: 'Too many requests. Wait a minute and try again.' } });
+  for (let index = 0; index < exportsPerMinute + 5; index++) assert.equal((await reader.browser.call(`/api/companies/${companyId}/reports/trial-balance?${period}`)).status, 200);
+  assert.equal((await rawGet(owner.browser, path)).status, 200, 'the limit is per user');
+});
+
 /** Every report route and its export, for one company. */
 const everyRoute = (company: string) => {
   const ledger = books.ledger('Cash'), group = books.group('current_assets');

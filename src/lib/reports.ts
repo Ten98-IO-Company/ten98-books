@@ -180,3 +180,27 @@ export const longDate = (date: string) => dates.format(new Date(`${date}T00:00:0
 export const monthText = (month: string) => months.format(new Date(`${month}-01T00:00:00Z`));
 /** A period for reading: one day, or "1 January 2026 to 3 February 2026". */
 export const periodText = (period: ReportPeriod) => period.from === period.to ? longDate(period.from) : `${longDate(period.from)} to ${longDate(period.to)}`;
+
+/**
+ * Which period a report screen uses and remembers: statements share one remembered period (it carries from report to
+ * report), the day book opens on its own day and never changes the statements' period, and the voucher view has none.
+ */
+export type PeriodKind = 'statement' | 'day' | 'none';
+
+/** Records the period shown on a screen of `kind`; only statement periods are remembered for the next report. */
+export function recordPeriod(memory: Map<string, ReportPeriod>, companyId: string, kind: PeriodKind, period: ReportPeriod): void {
+  if (kind === 'statement') memory.set(companyId, period);
+}
+
+/** The remembered period a screen of `kind` opens on when its address has none. */
+export function rememberedPeriod(memory: ReadonlyMap<string, ReportPeriod>, companyId: string, kind: PeriodKind): ReportPeriod | undefined {
+  return kind === 'statement' ? memory.get(companyId) : undefined;
+}
+
+/**
+ * The cursors of the pages before the one shown, newest last. Pushing the cursor already on top changes nothing, so a
+ * key repeated while the next page loads (when the old page and its `next` are still on screen) cannot record the same
+ * page twice and break the way back.
+ */
+export const pushCursor = (stack: readonly string[], cursor: string): readonly string[] => stack.at(-1) === cursor ? stack : [...stack, cursor];
+export const popCursor = (stack: readonly string[]): readonly string[] => stack.slice(0, -1);

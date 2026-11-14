@@ -5,11 +5,13 @@ import { balanceSheetCsv, csvDocument, dayBookCsv, groupSummaryCsv, ledgerMonthl
 import { dayBookReport, reportDefaults } from '../reports/day-book.ts';
 import { ledgerMonthlyReport, ledgerVouchersReport } from '../reports/ledger.ts';
 import { balanceSheetReport, groupSummaryReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
-import { json, type SignedInArea } from './http.ts';
+import { json, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const route = new RegExp(`^/api/companies/(${uuid})/reports/(defaults|${reportNames.join('|')})(?:/(${uuid}))?(/export)?$`, 'i');
 const notAllowed = () => json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
+/** Exports per user per minute. An export reads a whole period (up to 100,000 lines) on the 30-second budget. */
+export const exportsPerMinute = 20;
 
 type Report = {
   /** Whether the path names a group or ledger: required, optional or refused. */
@@ -54,7 +56,7 @@ function csvResponse(name: string, body: string): Response {
  * The M1 reports (D-09), read-only: GET /api/companies/<id>/reports/<report>[/<group or ledger id>][/export]. Every
  * route runs through withCompany in read mode via runLedger, so viewers read and a company the user cannot reach
  * answers "not found", the export included. Queries are checked by zod in the report modules; amounts are decimal
- * strings in JSON and plain decimals in CSV.
+ * strings in JSON and plain decimals in CSV. Exports alone are rate-limited per user (`exportsPerMinute`).
  */
 export const reportsApi: SignedInArea = async ({ request, url, path, user }) => {
   const match = path.match(route);
@@ -72,6 +74,7 @@ export const reportsApi: SignedInArea = async ({ request, url, path, user }) => 
   if ((report.subject === 'required' && !subject) || (report.subject === 'none' && subject)) return null;
   const query = queryOf(url, report.keys);
   if (!exported) return json({ report: await runLedger(user.id, companyId, 'read', context => report.read(context, subject, query, false)) });
+  await limit(`reports-export:${user.id}`, exportsPerMinute);
   const body = await runLedger(user.id, companyId, 'read', async context =>
     csvDocument(report.csv(await report.read(context, subject, query, true) as never, context.company.exponent)));
   const dates = [query.from ?? query.date, query.to].filter(Boolean).join('-to-');
