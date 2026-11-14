@@ -1,5 +1,5 @@
 {
-  "source": "Figures for Gulfline Trading LLC (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet is as at 2026-12-31. They were not produced by ten98-books.",
+  "source": "Figures for Gulfline Trading LLC (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet and pending bills are as at 2026-12-31. They were not produced by ten98-books.",
   "period": {
     "from": "2026-01-01",
     "to": "2026-12-31"
@@ -27,8 +27,28 @@
     "totalDebit": "2289180.93",
     "totalCredit": "2289180.93",
     "ledgers": {
+      "zephyr-gulf-bank-savings": {
+        "closing": "461701.38",
+        "side": "Dr"
+      },
+      "saffron-shore-bank-current": {
+        "closing": "8948.40",
+        "side": "Dr"
+      },
       "share-capital": {
         "closing": "886440.00",
+        "side": "Cr"
+      },
+      "petty-cash-showroom": {
+        "closing": "6000.00",
+        "side": "Cr"
+      },
+      "vat-input-5": {
+        "closing": "37416.72",
+        "side": "Dr"
+      },
+      "vat-output-5": {
+        "closing": "50620.35",
         "side": "Cr"
       },
       "accumulated-depreciation": {
@@ -45,14 +65,6 @@
       },
       "warehouse-equipment": {
         "closing": "90000.00",
-        "side": "Dr"
-      },
-      "sales-local": {
-        "closing": "1012405.52",
-        "side": "Cr"
-      },
-      "purchases-local": {
-        "closing": "748333.90",
         "side": "Dr"
       },
       "bank-charges": {
@@ -87,40 +99,56 @@
         "closing": "72000.00",
         "side": "Dr"
       },
+      "staff-gratuity-provision": {
+        "closing": "12800.00",
+        "side": "Cr"
+      },
+      "purchases-local": {
+        "closing": "748333.90",
+        "side": "Dr"
+      },
+      "sales-local": {
+        "closing": "1012405.52",
+        "side": "Cr"
+      },
+      "term-loan-saffron-shore-bank": {
+        "closing": "200000.00",
+        "side": "Cr"
+      },
+      "lumina-industries-co-ltd": {
+        "closing": "40270.44",
+        "side": "Cr"
+      },
+      "palmgate-cable-works": {
+        "closing": "33144.62",
+        "side": "Cr"
+      },
       "al-reem-contracting-llc": {
-        "closing": "0.00",
+        "closing": "17489.59",
         "side": "Dr"
       },
       "bluewave-interiors-fze": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "falcon-facilities-mgmt": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "marina-lighting-gallery": {
-        "closing": "0.00",
+        "closing": "48053.00",
         "side": "Dr"
       },
       "desert-rose-hospitality": {
-        "closing": "0.00",
+        "closing": "3163.86",
         "side": "Dr"
       },
-      "skyline-developers-llc": {
-        "closing": "0.00",
+      "falcon-facilities-mgmt": {
+        "closing": "5889.24",
+        "side": "Dr"
+      },
+      "marina-lighting-gallery": {
+        "closing": "29380.00",
         "side": "Dr"
       },
       "noor-electrical-works": {
-        "closing": "0.00",
-        "side": "Dr"
+        "closing": "3000.00",
+        "side": "Cr"
       },
-      "lumina-industries-co-ltd": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "palmgate-cable-works": {
-        "closing": "0.00",
+      "skyline-developers-llc": {
+        "closing": "7454.16",
         "side": "Dr"
       },
       "gulf-switchgear-trading": {
@@ -132,26 +160,6 @@
         "side": "Dr"
       },
       "prime-packaging-llc": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "saffron-shore-bank-current": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "zephyr-gulf-bank-savings": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "petty-cash-showroom": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "term-loan-saffron-shore-bank": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "staff-gratuity-provision": {
         "closing": "0.00",
         "side": "Dr"
       },
@@ -202,14 +210,6 @@
       "round-off": {
         "closing": "0.00",
         "side": "Dr"
-      },
-      "vat-output-5": {
-        "closing": "0.00",
-        "side": "Dr"
-      },
-      "vat-input-5": {
-        "closing": "0.00",
-        "side": "Dr"
       }
     },
     "note": "stock value is not a ledger: opening stock 369440.0 is carried by items.json only"
@@ -219,7 +219,7 @@
     "grossProfit": "402044.76",
     "netProfit": "85134.08",
     "grossProfitExcludingStock": "264071.62",
-    "netProfitExcludingStock": "52839.06"
+    "netProfitExcludingStock": "-52839.06"
   },
   "balanceSheet": {
     "report": "Balance sheet as at 2026-12-31",

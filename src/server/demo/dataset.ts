@@ -81,6 +81,10 @@ const expectedFile = z.looseObject({
     grossProfitExcludingStock: signedAmount.optional(), netProfitExcludingStock: signedAmount.optional(),
   }).optional(),
   balanceSheet: z.looseObject({ total: signedAmount, closingStockInAssets: amount.optional() }).optional(),
+  /** Exchange differences of foreign-currency bills: `realised` (a ledger's closing) and `unrealised` (a separate trial-balance row). */
+  exchangeDifferences: z.looseObject({
+    realised: z.looseObject({ amount, side }).optional(), unrealised: z.looseObject({ amount, side }).optional(),
+  }).optional(),
 });
 /**
  * items.json (units, locations, stock groups, items with opening stock per location): ten98-books does not model stock
@@ -96,6 +100,21 @@ const itemsFile = z.looseObject({
   })).optional(),
 });
 export type ItemsFile = z.infer<typeof itemsFile>;
+
+/**
+ * Further feature files whose shape and references are checked and whose content is kept as it is, because ten98-books
+ * does not model them yet: cost categories and centres, currencies with their rates, and checkpoint figures.
+ */
+const costCategoriesFile = z.array(z.looseObject({ key: slug, name: text }));
+const costCentresFile = z.array(z.looseObject({ key: slug, name: text, category: z.string().min(1) }));
+const currenciesFile = z.array(z.looseObject({
+  code: z.string().regex(/^[A-Z]{3}$/, 'must be a three-letter currency code'), name: text,
+  rates: z.array(z.looseObject({ kind: z.string().min(1), date, rate: amount })).optional(),
+}));
+const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({})).optional() });
+const extraFileSchemas: Record<string, z.ZodType> = {
+  'items.json': itemsFile, 'costCategories.json': costCategoriesFile, 'costCentres.json': costCentresFile, 'currencies.json': currenciesFile, 'checkpoints.json': checkpointsFile,
+};
 
 export type CompanyFile = z.infer<typeof companyFile>;
 export type GroupEntry = z.infer<typeof groupsFile>[number];
@@ -211,9 +230,16 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   const ledgers = structural(ledgersFile, raw.ledgers, `${label}/ledgers.json`, issues);
   const vouchers = structural(vouchersFile, raw.vouchers, `${label}/vouchers.json`, issues);
   const expected = structural(expectedFile, raw.expected, `${label}/expected.json`, issues);
-  const itemsRaw = raw.extraFiles?.['items.json'];
-  const items = itemsRaw === undefined ? undefined : structural(itemsFile, itemsRaw, `${label}/items.json`, issues);
-  if (!company || !groups || !ledgers || !vouchers || !expected || (itemsRaw !== undefined && !items)) throw new DatasetError(issues);
+  const extras: Record<string, any> = {};
+  let extraFailed = false;
+  for (const [name, schema] of Object.entries(extraFileSchemas)) {
+    const content = raw.extraFiles?.[name];
+    if (content === undefined) continue;
+    const parsed = structural(schema, content, `${label}/${name}`, issues);
+    if (parsed === undefined) extraFailed = true; else extras[name] = parsed;
+  }
+  const items = extras['items.json'] as ItemsFile | undefined;
+  if (!company || !groups || !ledgers || !vouchers || !expected || extraFailed) throw new DatasetError(issues);
 
   const problem = (file: string, at: string, message: string) => issues.push(`${label}/${file}.json: ${at}${message}`);
   const exponent = company.minorUnits;
@@ -304,6 +330,53 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     }
   }
 
+  // Cost categories and centres, currencies and checkpoints: references, and the lines that use them.
+  const categories = extras['costCategories.json'] as { key: string }[] | undefined;
+  const centres = extras['costCentres.json'] as { key: string; category: string }[] | undefined;
+  const currencies = extras['currencies.json'] as { code: string }[] | undefined;
+  if (categories) duplicates('costCategories', 'cost category', categories.map(category => category.key));
+  if (centres) {
+    duplicates('costCentres', 'cost centre', centres.map(centre => centre.key));
+    const categoryKeys = new Set((categories ?? []).map(category => category.key));
+    for (const centre of centres) if (!categoryKeys.has(centre.category)) problem('costCentres', `centre "${centre.key}": `, `category "${centre.category}" is not a cost category key in costCategories.json`);
+  }
+  if (currencies) duplicates('currencies', 'currency', currencies.map(currency => currency.code));
+  for (const day of Object.keys((extras['checkpoints.json'] as { dates?: object } | undefined)?.dates ?? {})) if (!isCalendarDate(day)) problem('checkpoints', `dates "${day}": `, 'is not a real date written YYYY-MM-DD');
+  const centreKeys = new Map((centres ?? []).map(centre => [centre.key, centre.category]));
+  const currencyCodes = new Set((currencies ?? []).map(currency => currency.code));
+  for (const voucher of vouchers) {
+    const party = voucher.extras?.party;
+    if (typeof party === 'string' && !ledgerKeys.has(party)) problem('vouchers', `voucher "${voucher.key}": `, `extras.party "${party}" is not a ledger key in ledgers.json`);
+    voucher.lines.forEach((line, index) => {
+      const at = `voucher "${voucher.key}": lines[${index}]: `;
+      const detail = line.extras as { costCentres?: unknown; currency?: unknown; currencyAmount?: unknown; rate?: unknown } | undefined;
+      if (Array.isArray(detail?.costCentres) && centres) {
+        const perCategory = new Map<string, bigint>();
+        for (const allocation of detail.costCentres as { centre?: unknown; amount?: unknown }[]) {
+          const centre = allocation?.centre;
+          if (typeof centre !== 'string' || !centreKeys.has(centre)) { problem('vouchers', at, `cost centre "${String(centre)}" is not a centre key in costCentres.json`); continue; }
+          if (typeof allocation.amount !== 'string' || !/^\d+(?:\.\d+)?$/.test(allocation.amount) || (allocation.amount.split('.')[1] ?? '').length > exponent) { problem('vouchers', at, `cost centre "${centre}" needs a plain decimal amount with at most ${exponent} decimal places`); continue; }
+          perCategory.set(centreKeys.get(centre)!, (perCategory.get(centreKeys.get(centre)!) ?? 0n) + toMinor(allocation.amount, exponent));
+        }
+        const lineAmount = /^\d+(?:\.\d+)?$/.test(line.amount) && (line.amount.split('.')[1] ?? '').length <= exponent ? toMinor(line.amount, exponent) : undefined;
+        for (const [category, total] of perCategory) if (lineAmount !== undefined && total !== lineAmount) problem('vouchers', at, `the cost centre amounts of category "${category}" add up to ${total} but the line is ${lineAmount} (minor units)`);
+      }
+      if (typeof detail?.currency === 'string') {
+        if (currencies && !currencyCodes.has(detail.currency)) problem('vouchers', at, `currency "${detail.currency}" is not a currency code in currencies.json`);
+        for (const field of ['currencyAmount', 'rate'] as const) {
+          const value = detail[field];
+          if (value !== undefined && (typeof value !== 'string' || !/^\d+(?:\.\d+)?$/.test(value))) problem('vouchers', at, `${field} must be a plain decimal string`);
+        }
+      }
+    });
+  }
+  for (const item of items?.items ?? []) {
+    const components = (item as { extras?: { billOfMaterials?: unknown } }).extras?.billOfMaterials;
+    if (Array.isArray(components)) for (const component of components as { item?: unknown }[]) {
+      if (typeof component?.item !== 'string' || !itemKeys.has(component.item)) problem('items', `item "${item.key}": `, `billOfMaterials names "${String(component?.item)}", which is not an item key`);
+    }
+  }
+
   // Expected figures.
   const period = expected.period;
   if (period.from > period.to) problem('expected', 'period: ', 'from must not be after to');
@@ -326,6 +399,10 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   if (expected.profitAndLoss) for (const name of ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'] as const) {
     const value = expected.profitAndLoss[name];
     if (value !== undefined) fits('expected', `profitAndLoss.${name}: `, value);
+  }
+  for (const name of ['realised', 'unrealised'] as const) {
+    const figure = expected.exchangeDifferences?.[name];
+    if (figure) fits('expected', `exchangeDifferences.${name}: `, figure.amount);
   }
   if (expected.balanceSheet) {
     fits('expected', 'balanceSheet.total: ', expected.balanceSheet.total);

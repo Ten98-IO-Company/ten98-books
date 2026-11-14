@@ -1,0 +1,63 @@
+[
+  {
+    "code": "USD",
+    "name": "US Dollar",
+    "symbol": "USD",
+    "minorUnits": 2,
+    "rates": [
+      {
+        "kind": "standard",
+        "date": "2026-01-01",
+        "rate": "3.6725"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-03-01",
+        "rate": "3.70"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-06-01",
+        "rate": "3.68"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-09-01",
+        "rate": "3.6725"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-12-01",
+        "rate": "3.67"
+      }
+    ]
+  },
+  {
+    "code": "EUR",
+    "name": "Euro",
+    "symbol": "EUR",
+    "minorUnits": 2,
+    "rates": [
+      {
+        "kind": "standard",
+        "date": "2026-01-01",
+        "rate": "4.00"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-04-01",
+        "rate": "4.10"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-07-01",
+        "rate": "4.05"
+      },
+      {
+        "kind": "standard",
+        "date": "2026-10-01",
+        "rate": "4.20"
+      }
+    ]
+  }
+]

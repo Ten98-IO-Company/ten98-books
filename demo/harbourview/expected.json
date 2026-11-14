@@ -1,0 +1,392 @@
+{
+  "source": "Figures for Harbourview Consulting FZ-LLC (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet and pending bills are as at 2026-12-31. They were not produced by ten98-books.",
+  "numbersVerified": true,
+  "period": {
+    "from": "2026-01-01",
+    "to": "2026-12-31"
+  },
+  "voucherCount": 195,
+  "vouchersByType": {
+    "payment": 66,
+    "sales": 44,
+    "purchase": 23,
+    "receipt": 39,
+    "contra": 9,
+    "credit_note": 3,
+    "journal": 6,
+    "memorandum": 2,
+    "reversing_journal": 1,
+    "debit_note": 2
+  },
+  "trialBalance": {
+    "report": "Trial balance by ledger, 2026-01-01 to 2026-12-31; its totals include a separate debit row for unrealised exchange differences on open foreign-currency bills",
+    "totalDebit": "587116.25",
+    "totalCredit": "587116.25",
+    "ledgers": {
+      "harbour-current-account": {
+        "closing": "96861.50",
+        "side": "Dr"
+      },
+      "opening-capital": {
+        "closing": "65000.00",
+        "side": "Cr"
+      },
+      "petty-cash": {
+        "closing": "7500.00",
+        "side": "Dr"
+      },
+      "input-tax": {
+        "closing": "4017.50",
+        "side": "Dr"
+      },
+      "output-tax": {
+        "closing": "16380.00",
+        "side": "Cr"
+      },
+      "accumulated-depreciation": {
+        "closing": "12000.00",
+        "side": "Cr"
+      },
+      "computers": {
+        "closing": "24000.00",
+        "side": "Dr"
+      },
+      "bank-charges": {
+        "closing": "322.00",
+        "side": "Dr"
+      },
+      "depreciation": {
+        "closing": "6000.00",
+        "side": "Dr"
+      },
+      "forex-gain-loss": {
+        "closing": "354.00",
+        "side": "Dr"
+      },
+      "office-rent": {
+        "closing": "36000.00",
+        "side": "Dr"
+      },
+      "salaries": {
+        "closing": "79100.00",
+        "side": "Dr"
+      },
+      "software-subscriptions": {
+        "closing": "2280.00",
+        "side": "Dr"
+      },
+      "travel": {
+        "closing": "3720.00",
+        "side": "Dr"
+      },
+      "utilities": {
+        "closing": "2270.00",
+        "side": "Dr"
+      },
+      "interest-income": {
+        "closing": "120.00",
+        "side": "Cr"
+      },
+      "project-costs": {
+        "closing": "69300.00",
+        "side": "Dr"
+      },
+      "subcontractors": {
+        "closing": "53740.00",
+        "side": "Dr"
+      },
+      "consulting-revenue": {
+        "closing": "434548.75",
+        "side": "Cr"
+      },
+      "training-revenue": {
+        "closing": "14600.00",
+        "side": "Cr"
+      },
+      "creditor-c": {
+        "closing": "20580.00",
+        "side": "Cr"
+      },
+      "creditor-e": {
+        "closing": "8767.50",
+        "side": "Cr"
+      },
+      "creditor-g": {
+        "closing": "15120.00",
+        "side": "Cr"
+      },
+      "debtor-a": {
+        "closing": "47045.00",
+        "side": "Dr"
+      },
+      "debtor-b": {
+        "closing": "40272.50",
+        "side": "Dr"
+      },
+      "debtor-d": {
+        "closing": "53400.00",
+        "side": "Dr"
+      },
+      "debtor-f": {
+        "closing": "60555.00",
+        "side": "Dr"
+      },
+      "accrued-expenses": {
+        "closing": "0.00",
+        "side": "Dr"
+      }
+    }
+  },
+  "profitAndLoss": {
+    "report": "Profit and loss: the balance sheet's profit line and the sales and purchase groups of the trial balance",
+    "grossProfit": "326108.75",
+    "netProfit": "196182.75"
+  },
+  "balanceSheet": {
+    "report": "Balance sheet as at 2026-12-31",
+    "total": "318012.75",
+    "unadjustedForexGainLoss": "378.75",
+    "note": "liabilities side total; the unrealised exchange row is on the assets side"
+  },
+  "outstanding": {
+    "report": "Pending bills as at 2026-12-31 (debit amounts are shown with their side)",
+    "asOf": "2026-12-31",
+    "ledgers": {
+      "creditor-c": {
+        "bills": {
+          "bills": {
+            "SI-C-09": {
+              "pending": "5355.00",
+              "side": "Cr",
+              "dueDate": "21-Oct-26"
+            },
+            "SI-C-10": {
+              "pending": "4410.00",
+              "side": "Cr",
+              "dueDate": "20-Nov-26"
+            },
+            "SI-C-11": {
+              "pending": "6720.00",
+              "side": "Cr",
+              "dueDate": "21-Dec-26"
+            },
+            "SI-C-12": {
+              "pending": "4095.00",
+              "side": "Cr",
+              "dueDate": "20-Jan-27"
+            }
+          }
+        }
+      },
+      "creditor-e": {
+        "bills": {
+          "bills": {
+            "SI-E-07": {
+              "pending": "3570.00",
+              "side": "Cr",
+              "dueDate": "8-Feb-26"
+            },
+            "SI-E-05": {
+              "pending": "2730.00",
+              "side": "Cr",
+              "dueDate": "9-Nov-26"
+            },
+            "SI-E-06": {
+              "pending": "2467.50",
+              "side": "Cr",
+              "dueDate": "9-Jan-27"
+            }
+          }
+        }
+      },
+      "creditor-g": {
+        "bills": {
+          "bills": {
+            "SI-G-03": {
+              "pending": "7560.00",
+              "side": "Cr",
+              "dueDate": "15-Nov-26"
+            },
+            "SI-G-04": {
+              "pending": "7560.00",
+              "side": "Cr",
+              "dueDate": "14-Feb-27"
+            }
+          }
+        }
+      },
+      "debtor-a": {
+        "bills": {
+          "bills": {
+            "INV-023": {
+              "pending": "8450.00",
+              "side": "Dr",
+              "dueDate": "3-Sep-26"
+            },
+            "INV-027": {
+              "pending": "8610.00",
+              "side": "Dr",
+              "dueDate": "4-Oct-26"
+            },
+            "INV-030": {
+              "pending": "9450.00",
+              "side": "Dr",
+              "dueDate": "3-Nov-26"
+            },
+            "INV-034": {
+              "pending": "7875.00",
+              "side": "Dr",
+              "dueDate": "4-Dec-26"
+            },
+            "INV-038": {
+              "pending": "12390.00",
+              "side": "Dr",
+              "dueDate": "3-Jan-27"
+            },
+            "INT-26": {
+              "pending": "120.00",
+              "side": "Dr",
+              "dueDate": "30-Jan-27"
+            }
+          }
+        }
+      },
+      "debtor-b": {
+        "bills": {
+          "bills": {
+            "INV-020": {
+              "pending": "2307.50",
+              "side": "Dr",
+              "dueDate": "7-Aug-26"
+            },
+            "INV-024": {
+              "pending": "7455.00",
+              "side": "Dr",
+              "dueDate": "7-Sep-26"
+            },
+            "INV-025": {
+              "pending": "3360.00",
+              "side": "Dr",
+              "dueDate": "13-Sep-26"
+            },
+            "INV-028": {
+              "pending": "5040.00",
+              "side": "Dr",
+              "dueDate": "8-Oct-26"
+            },
+            "INV-031": {
+              "pending": "5880.00",
+              "side": "Dr",
+              "dueDate": "7-Nov-26"
+            },
+            "INV-035": {
+              "pending": "7455.00",
+              "side": "Dr",
+              "dueDate": "8-Dec-26"
+            },
+            "INV-036": {
+              "pending": "4305.00",
+              "side": "Dr",
+              "dueDate": "14-Dec-26"
+            },
+            "INV-039": {
+              "pending": "4620.00",
+              "side": "Dr",
+              "dueDate": "7-Jan-27"
+            }
+          }
+        }
+      },
+      "debtor-d": {
+        "bills": {
+          "bills": {
+            "INV-029": {
+              "pending": "19950.00",
+              "side": "Dr",
+              "dueDate": "27-Oct-26"
+            },
+            "INV-032": {
+              "pending": "19950.00",
+              "side": "Dr",
+              "dueDate": "26-Nov-26"
+            },
+            "INV-040": {
+              "pending": "13650.00",
+              "side": "Dr",
+              "dueDate": "26-Jan-27"
+            }
+          }
+        }
+      },
+      "debtor-f": {
+        "bills": {
+          "bills": {
+            "INV-022": {
+              "pending": "16515.00",
+              "side": "Dr",
+              "dueDate": "17-Aug-26"
+            },
+            "INV-026": {
+              "pending": "16515.00",
+              "side": "Dr",
+              "dueDate": "17-Sep-26"
+            },
+            "INV-033": {
+              "pending": "16515.00",
+              "side": "Dr",
+              "dueDate": "17-Nov-26"
+            },
+            "INV-037": {
+              "pending": "11010.00",
+              "side": "Dr",
+              "dueDate": "18-Dec-26"
+            }
+          }
+        }
+      }
+    }
+  },
+  "costCentres": {
+    "report": "Cost category summary, 2026-01-01 to 2026-12-31",
+    "from": "2026-01-01",
+    "to": "2026-12-31",
+    "centres": {
+      "online": {
+        "debit": "400.00",
+        "credit": "214830.50"
+      },
+      "showroom": {
+        "debit": "1500.00",
+        "credit": "236218.25"
+      },
+      "p-east": {
+        "debit": "45960.00",
+        "credit": "51140.43"
+      },
+      "p-north": {
+        "debit": "41140.00",
+        "credit": "203840.82"
+      },
+      "p-south": {
+        "debit": "38390.00",
+        "credit": "196617.50"
+      }
+    }
+  },
+  "exchangeDifferences": {
+    "report": "realised: the closing of the exchange gain and loss ledger (settlements at a rate other than the bill's); unrealised: a separate row for open foreign-currency bills restated at the rates in force",
+    "date": "2026-12-31",
+    "rates": {
+      "USD": "3.67",
+      "EUR": "4.20"
+    },
+    "realised": {
+      "amount": "354.00",
+      "side": "Dr"
+    },
+    "unrealised": {
+      "amount": "378.75",
+      "side": "Dr"
+    }
+  }
+}

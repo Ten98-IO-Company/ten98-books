@@ -1,0 +1,252 @@
+[
+  {
+    "key": "cash",
+    "name": "Cash",
+    "standard": "cash"
+  },
+  {
+    "key": "profit-and-loss",
+    "name": "Profit and Loss",
+    "standard": "profit_and_loss"
+  },
+  {
+    "key": "debtor-a",
+    "name": "Debtor A",
+    "group": "receivables",
+    "opening": {
+      "amount": "5000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "opening": {
+        "bills": [
+          {
+            "kind": "new",
+            "name": "OB-1",
+            "billDate": "2025-12-16",
+            "creditDays": 30,
+            "amount": "3000.00",
+            "side": "Dr"
+          },
+          {
+            "kind": "new",
+            "name": "OB-2",
+            "billDate": "2025-12-20",
+            "creditDays": 30,
+            "amount": "1500.00",
+            "side": "Dr"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "key": "debtor-b",
+    "name": "Debtor B",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30
+    }
+  },
+  {
+    "key": "debtor-d",
+    "name": "Debtor D",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 45
+    }
+  },
+  {
+    "key": "debtor-f",
+    "name": "Debtor F Overseas",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "note": "invoiced in USD"
+    }
+  },
+  {
+    "key": "creditor-c",
+    "name": "Creditor C",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 45
+    }
+  },
+  {
+    "key": "creditor-e",
+    "name": "Creditor E",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30
+    }
+  },
+  {
+    "key": "creditor-g",
+    "name": "Creditor G Overseas",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 60,
+      "note": "invoiced in EUR"
+    }
+  },
+  {
+    "key": "petty-cash",
+    "name": "Petty Cash",
+    "group": "cash_in_hand",
+    "opening": {
+      "amount": "2000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "harbour-current-account",
+    "name": "Harbour Current Account",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "40000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "AE210260000123456789012",
+        "bankName": "Coralwind Bank (UAE)"
+      }
+    }
+  },
+  {
+    "key": "computers",
+    "name": "Computers",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "24000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "accumulated-depreciation",
+    "name": "Accumulated Depreciation",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "6000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "consulting-revenue",
+    "name": "Consulting Revenue",
+    "group": "sales",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "training-revenue",
+    "name": "Training Revenue",
+    "group": "sales",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "project-costs",
+    "name": "Project Costs",
+    "group": "purchases",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "subcontractors",
+    "name": "Subcontractors",
+    "group": "purchases",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "office-rent",
+    "name": "Office Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "salaries",
+    "name": "Salaries",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "utilities",
+    "name": "Utilities",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "software-subscriptions",
+    "name": "Software Subscriptions",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "travel",
+    "name": "Travel",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "bank-charges",
+    "name": "Bank Charges",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "depreciation",
+    "name": "Depreciation",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "forex-gain-loss",
+    "name": "Forex Gain and Loss",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "interest-income",
+    "name": "Interest Income",
+    "group": "indirect_income"
+  },
+  {
+    "key": "output-tax",
+    "name": "Output Tax",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others",
+      "taxRate": "5"
+    }
+  },
+  {
+    "key": "input-tax",
+    "name": "Input Tax",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others",
+      "taxRate": "5"
+    }
+  },
+  {
+    "key": "accrued-expenses",
+    "name": "Accrued Expenses",
+    "group": "current_liabilities"
+  },
+  {
+    "key": "opening-capital",
+    "name": "Opening Capital",
+    "group": "capital",
+    "opening": {
+      "amount": "65000.00",
+      "side": "Cr"
+    }
+  }
+]

@@ -1,0 +1,18 @@
+# sunrise
+
+Sunrise Fabrication Works LLC is an invented UAE steel fabrication workshop (AED) with raw materials, finished goods built from a bill of materials, manufacturing stock journals, job cost centres and bill-wise customers and suppliers. 261 vouchers dated 2026-01-02 to 2026-12-31. Every name is invented; any resemblance to a real business is accidental. The figures describe no real business: the workshop makes a loss and its bank ledger ends in credit, because wages and rent are deliberately heavy; the dataset is for parity checks, not realism.
+
+Files: `company.json`, `groups.json` (empty), `ledgers.json`, `costCategories.json` (one category, Jobs), `costCentres.json` (JOB-101 to JOB-106), `items.json`, `vouchers.json` and `expected.json`.
+
+Conventions: the bill-wise, cost-centre and bank shapes under `extras` are those of `harbourview` (ledger `billWise`, `creditDays`, `costCentres`, `opening.bills`; line `bills`, `costCentres`, `bank`), plus the stock shapes of the trading datasets (`inventory` rows with `item`, `direction`, `quantity`, `unit`, `rate`, `amount`, `location`, `discountPercent`, `orderNo`, `orderDueDate` and `trackingNo`; orders and notes name their party in `extras.party`).
+
+- `items.json`: five raw materials (opening stock in the Raw Store) and three finished goods. Finished goods carry `extras.billOfMaterials` (component item and quantity per unit made) and `extras.standardPrice`; ten Steel Cabinets are in the Finished Goods Store at opening. The opening stock value (37,270.00) is not a ledger balance: the Share Capital opening already includes it, as in the trading datasets.
+- Manufacturing is 36 stock journals: components leave the Raw Store at their average cost and the finished goods enter the Finished Goods Store at the cost of the components consumed. They carry `extras.noAccountingEffect`.
+- Sales and purchases are item invoices with 5 % VAT in an ordinary duty ledger (there is no VAT return); job work is a service sale in the accounting view with the job cost centre on the revenue line; wages, repairs and freight carry job cost centres; a few sales have a 5 % line discount.
+- Types present: contra 4, credit_note 1, debit_note 1, delivery_note 2, journal 6, memorandum 2, payment 84, purchase 25, purchase_order 1, receipt 39, receipt_note 1, reversing_journal 1, sales 56, sales_order 2, stock_journal 36. Two sales orders and one purchase order each have a delivery or receipt note and an invoice naming the order and the note; one credit note (goods returned) and one debit note (short weight) carry stock; 3 post-dated receipts, 2 optional vouchers and 2 cancelled ones (no lines).
+- `expectedNumber` is the number each voucher holds in the system the figures were read from (`numbersVerified` is true); optional vouchers take no number.
+- `expected.json` was read from an independent system loaded with this dataset: trial balance, profit (including opening and closing stock and direct expenses in the cost of sales), the stock summary per item (quantity and value at that system's valuation), balance sheet, pending bills at year end and cost centre totals.
+
+Not covered: payroll (salaries are ordinary expense vouchers), job work orders, cost tracking, interest, batches, multi-currency, budgets and ageing buckets.
+
+One entry would be refused by a rule ten98-books applied at the time: `journal-002` is an optional journal that credits a bank ledger. The system the figures come from saves it.

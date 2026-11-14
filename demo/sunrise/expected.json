@@ -1,0 +1,492 @@
+{
+  "source": "Figures for Sunrise Fabrication Works LLC (generated data) as read from an independent accounting system loaded with this dataset, for 2026-01-01 to 2026-12-31; the balance sheet and pending bills are as at 2026-12-31. They were not produced by ten98-books.",
+  "numbersVerified": true,
+  "period": {
+    "from": "2026-01-01",
+    "to": "2026-12-31"
+  },
+  "voucherCount": 261,
+  "vouchersByType": {
+    "payment": 84,
+    "purchase": 25,
+    "stock_journal": 36,
+    "sales": 56,
+    "receipt": 39,
+    "sales_order": 2,
+    "contra": 4,
+    "delivery_note": 2,
+    "journal": 6,
+    "memorandum": 2,
+    "purchase_order": 1,
+    "receipt_note": 1,
+    "debit_note": 1,
+    "credit_note": 1,
+    "reversing_journal": 1
+  },
+  "trialBalance": {
+    "report": "Trial balance by ledger, 2026-01-01 to 2026-12-31",
+    "totalDebit": "1080785.59",
+    "totalCredit": "1080785.59",
+    "ledgers": {
+      "amber-dune-bank-current": {
+        "closing": "220529.54",
+        "side": "Cr"
+      },
+      "share-capital": {
+        "closing": "324670.00",
+        "side": "Cr"
+      },
+      "petty-cash-workshop": {
+        "closing": "14000.00",
+        "side": "Dr"
+      },
+      "freight-inward": {
+        "closing": "2280.00",
+        "side": "Dr"
+      },
+      "wages": {
+        "closing": "174000.00",
+        "side": "Dr"
+      },
+      "vat-input-5": {
+        "closing": "7874.30",
+        "side": "Dr"
+      },
+      "vat-output-5": {
+        "closing": "12054.25",
+        "side": "Cr"
+      },
+      "accumulated-depreciation": {
+        "closing": "90000.00",
+        "side": "Cr"
+      },
+      "machinery": {
+        "closing": "260000.00",
+        "side": "Dr"
+      },
+      "workshop-tools": {
+        "closing": "35000.00",
+        "side": "Dr"
+      },
+      "bank-charges": {
+        "closing": "351.00",
+        "side": "Dr"
+      },
+      "depreciation": {
+        "closing": "30000.00",
+        "side": "Dr"
+      },
+      "electricity": {
+        "closing": "14120.00",
+        "side": "Dr"
+      },
+      "factory-rent": {
+        "closing": "108000.00",
+        "side": "Dr"
+      },
+      "loan-interest": {
+        "closing": "7920.00",
+        "side": "Dr"
+      },
+      "office-salaries": {
+        "closing": "81600.00",
+        "side": "Dr"
+      },
+      "repairs": {
+        "closing": "6650.00",
+        "side": "Dr"
+      },
+      "purchases-raw-materials": {
+        "closing": "157486.00",
+        "side": "Dr"
+      },
+      "sales-job-work": {
+        "closing": "37000.00",
+        "side": "Cr"
+      },
+      "sales-products": {
+        "closing": "204084.50",
+        "side": "Cr"
+      },
+      "term-loan": {
+        "closing": "150000.00",
+        "side": "Cr"
+      },
+      "hueworks-paints": {
+        "closing": "4662.00",
+        "side": "Cr"
+      },
+      "fastener-house": {
+        "closing": "2079.00",
+        "side": "Cr"
+      },
+      "ironvale-trading": {
+        "closing": "35706.30",
+        "side": "Cr"
+      },
+      "alpha-builders-llc": {
+        "closing": "53832.70",
+        "side": "Dr"
+      },
+      "desert-contractors": {
+        "closing": "44341.75",
+        "side": "Dr"
+      },
+      "marina-interiors": {
+        "closing": "27834.99",
+        "side": "Dr"
+      },
+      "palm-joinery-co": {
+        "closing": "18224.85",
+        "side": "Dr"
+      },
+      "accrued-expenses": {
+        "closing": "0.00",
+        "side": "Dr"
+      }
+    }
+  },
+  "profitAndLoss": {
+    "report": "Profit and loss, 2026-01-01 to 2026-12-31, including opening and closing stock and direct expenses in the cost of sales; net profit from the balance sheet line",
+    "grossProfit": "-39380.26",
+    "netProfit": "-288021.26",
+    "grossProfitExcludingStock": "-92681.50",
+    "netProfitExcludingStock": "-341322.50"
+  },
+  "stockSummary": {
+    "report": "Stock summary by item, 2026-01-01 to 2026-12-31",
+    "closingValue": "90571.24",
+    "items": {
+      "metal-gate": {
+        "quantity": "10",
+        "unit": "Nos",
+        "value": "3002.98"
+      },
+      "steel-cabinet": {
+        "quantity": "4",
+        "unit": "Nos",
+        "value": "845.48"
+      },
+      "work-table": {
+        "quantity": "25",
+        "unit": "Nos",
+        "value": "4363.64"
+      },
+      "hinges": {
+        "quantity": "2960",
+        "unit": "Nos",
+        "value": "7104.00"
+      },
+      "paint-grey": {
+        "quantity": "302",
+        "unit": "Ltr",
+        "value": "5489.29"
+      },
+      "steel-rod-12mm": {
+        "quantity": "3740",
+        "unit": "Mtr",
+        "value": "24310.00"
+      },
+      "steel-sheet-2mm": {
+        "quantity": "10280",
+        "unit": "Kg",
+        "value": "43790.85"
+      },
+      "welding-wire": {
+        "quantity": "185",
+        "unit": "Kg",
+        "value": "1665.00"
+      }
+    }
+  },
+  "balanceSheet": {
+    "report": "Balance sheet as at 2026-12-31",
+    "total": "233275.99",
+    "closingStockInAssets": "90571.24",
+    "note": "liabilities side total (capital, loans, current liabilities and the profit line, which is negative for a loss)"
+  },
+  "outstanding": {
+    "report": "Pending bills as at 2026-12-31 (debit amounts are shown with their side)",
+    "asOf": "2026-12-31",
+    "ledgers": {
+      "alpha-builders-llc": {
+        "bills": {
+          "bills": {
+            "JW-0027": {
+              "pending": "5875.00",
+              "side": "Dr",
+              "dueDate": "18-Jul-26"
+            },
+            "INV-0028": {
+              "pending": "6104.70",
+              "side": "Dr",
+              "dueDate": "10-Aug-26"
+            },
+            "INV-0032": {
+              "pending": "6426.00",
+              "side": "Dr",
+              "dueDate": "10-Sep-26"
+            },
+            "JW-0036": {
+              "pending": "5040.00",
+              "side": "Dr",
+              "dueDate": "17-Sep-26"
+            },
+            "INV-0037": {
+              "pending": "6069.00",
+              "side": "Dr",
+              "dueDate": "11-Oct-26"
+            },
+            "INV-0041": {
+              "pending": "6426.00",
+              "side": "Dr",
+              "dueDate": "10-Nov-26"
+            },
+            "JW-0045": {
+              "pending": "5040.00",
+              "side": "Dr",
+              "dueDate": "17-Nov-26"
+            },
+            "INV-0046": {
+              "pending": "6426.00",
+              "side": "Dr",
+              "dueDate": "11-Dec-26"
+            },
+            "INV-0050": {
+              "pending": "6426.00",
+              "side": "Dr",
+              "dueDate": "10-Jan-27"
+            }
+          }
+        }
+      },
+      "hueworks-paints": {
+        "bills": {
+          "bills": {
+            "SI-COL-20": {
+              "pending": "2331.00",
+              "side": "Cr",
+              "dueDate": "6-Nov-26"
+            },
+            "SI-COL-24": {
+              "pending": "2331.00",
+              "side": "Cr",
+              "dueDate": "6-Jan-27"
+            }
+          }
+        }
+      },
+      "desert-contractors": {
+        "bills": {
+          "bills": {
+            "INV-0024": {
+              "pending": "3355.00",
+              "side": "Dr",
+              "dueDate": "31-Jul-26"
+            },
+            "INV-0029": {
+              "pending": "5355.00",
+              "side": "Dr",
+              "dueDate": "30-Aug-26"
+            },
+            "INV-0056": {
+              "pending": "1785.00",
+              "side": "Dr",
+              "dueDate": "1-Sep-26"
+            },
+            "INV-0033": {
+              "pending": "5087.25",
+              "side": "Dr",
+              "dueDate": "30-Sep-26"
+            },
+            "INV-0038": {
+              "pending": "5355.00",
+              "side": "Dr",
+              "dueDate": "31-Oct-26"
+            },
+            "INV-0042": {
+              "pending": "5355.00",
+              "side": "Dr",
+              "dueDate": "30-Nov-26"
+            },
+            "INV-0047": {
+              "pending": "5087.25",
+              "side": "Dr",
+              "dueDate": "31-Dec-26"
+            },
+            "INV-0051": {
+              "pending": "5087.25",
+              "side": "Dr",
+              "dueDate": "30-Jan-27"
+            },
+            "JW-0054": {
+              "pending": "7875.00",
+              "side": "Dr",
+              "dueDate": "1-Feb-27"
+            }
+          }
+        }
+      },
+      "fastener-house": {
+        "bills": {
+          "bills": {
+            "SI-FAS-22": {
+              "pending": "2079.00",
+              "side": "Cr",
+              "dueDate": "9-Dec-26"
+            }
+          }
+        }
+      },
+      "marina-interiors": {
+        "bills": {
+          "bills": {
+            "INV-0025": {
+              "pending": "3860.33",
+              "side": "Dr",
+              "dueDate": "21-Jul-26"
+            },
+            "INV-0030": {
+              "pending": "4063.50",
+              "side": "Dr",
+              "dueDate": "20-Aug-26"
+            },
+            "INV-0034": {
+              "pending": "4063.50",
+              "side": "Dr",
+              "dueDate": "20-Sep-26"
+            },
+            "INV-0039": {
+              "pending": "3860.33",
+              "side": "Dr",
+              "dueDate": "21-Oct-26"
+            },
+            "INV-0043": {
+              "pending": "3860.33",
+              "side": "Dr",
+              "dueDate": "20-Nov-26"
+            },
+            "INV-0048": {
+              "pending": "4063.50",
+              "side": "Dr",
+              "dueDate": "21-Dec-26"
+            },
+            "INV-0052": {
+              "pending": "4063.50",
+              "side": "Dr",
+              "dueDate": "20-Jan-27"
+            }
+          }
+        }
+      },
+      "palm-joinery-co": {
+        "bills": {
+          "bills": {
+            "INV-0022": {
+              "pending": "1356.60",
+              "side": "Dr",
+              "dueDate": "23-Jun-26"
+            },
+            "INV-0026": {
+              "pending": "2713.20",
+              "side": "Dr",
+              "dueDate": "24-Jul-26"
+            },
+            "INV-0031": {
+              "pending": "2499.00",
+              "side": "Dr",
+              "dueDate": "23-Aug-26"
+            },
+            "INV-0035": {
+              "pending": "2374.05",
+              "side": "Dr",
+              "dueDate": "23-Sep-26"
+            },
+            "INV-0040": {
+              "pending": "714.00",
+              "side": "Dr",
+              "dueDate": "24-Oct-26"
+            },
+            "INV-0044": {
+              "pending": "2856.00",
+              "side": "Dr",
+              "dueDate": "23-Nov-26"
+            },
+            "INV-0049": {
+              "pending": "2856.00",
+              "side": "Dr",
+              "dueDate": "24-Dec-26"
+            },
+            "INV-0053": {
+              "pending": "2856.00",
+              "side": "Dr",
+              "dueDate": "23-Jan-27"
+            }
+          }
+        }
+      },
+      "ironvale-trading": {
+        "bills": {
+          "bills": {
+            "SI-STE-11": {
+              "pending": "88.20",
+              "side": "Dr",
+              "dueDate": "18-Jul-26"
+            },
+            "SI-STE-25": {
+              "pending": "1365.00",
+              "side": "Cr",
+              "dueDate": "30-Jun-26"
+            },
+            "SI-STE-19": {
+              "pending": "11350.50",
+              "side": "Cr",
+              "dueDate": "17-Nov-26"
+            },
+            "SI-STE-21": {
+              "pending": "11539.50",
+              "side": "Cr",
+              "dueDate": "18-Dec-26"
+            },
+            "SI-STE-23": {
+              "pending": "11539.50",
+              "side": "Cr",
+              "dueDate": "17-Jan-27"
+            }
+          }
+        }
+      }
+    }
+  },
+  "costCentres": {
+    "report": "Cost category summary, 2026-01-01 to 2026-12-31",
+    "from": "2026-01-01",
+    "to": "2026-12-31",
+    "centres": {
+      "job-101": {
+        "debit": "28400.00",
+        "credit": "6200.00"
+      },
+      "job-102": {
+        "debit": "31620.00",
+        "credit": "6200.00"
+      },
+      "job-103": {
+        "debit": "30850.00",
+        "credit": "7500.00"
+      },
+      "job-104": {
+        "debit": "31020.00",
+        "credit": "4800.00"
+      },
+      "job-105": {
+        "debit": "30800.00",
+        "credit": "4800.00"
+      },
+      "job-106": {
+        "debit": "30240.00",
+        "credit": "7500.00"
+      }
+    }
+  }
+}

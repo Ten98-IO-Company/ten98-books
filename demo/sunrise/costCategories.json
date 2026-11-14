@@ -1,0 +1,8 @@
+[
+  {
+    "key": "jobs",
+    "name": "Jobs",
+    "allocateRevenue": true,
+    "allocateNonRevenue": true
+  }
+]

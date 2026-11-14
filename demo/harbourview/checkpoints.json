@@ -1,0 +1,195 @@
+{
+  "note": "Scenario checkpoints: pending bills and the cost category summary read with the report's end date set to each date (the period starts 2026-01-01). Foreign-currency bills (debtor-f, creditor-g) are shown restated at the standard rate in force at that date.",
+  "dates": {
+    "2026-02-28": {
+      "outstanding": {
+        "creditor-c": {
+          "bills": {
+            "C-77": {
+              "pending": "1360.00",
+              "side": "Cr",
+              "dueDate": "20-Mar-26"
+            }
+          }
+        },
+        "creditor-e": {
+          "bills": {
+            "SI-E-07": {
+              "pending": "3570.00",
+              "side": "Cr",
+              "dueDate": "8-Feb-26"
+            },
+            "SI-E-01": {
+              "pending": "2730.00",
+              "side": "Cr",
+              "dueDate": "12-Mar-26"
+            }
+          }
+        },
+        "debtor-a": {
+          "bills": {
+            "S-1": {
+              "pending": "4587.50",
+              "side": "Dr",
+              "dueDate": "4-Feb-26"
+            },
+            "INV-001": {
+              "pending": "7875.00",
+              "side": "Dr",
+              "dueDate": "6-Mar-26"
+            }
+          }
+        },
+        "debtor-b": {
+          "bills": {
+            "INV-002": {
+              "pending": "5040.00",
+              "side": "Dr",
+              "dueDate": "10-Mar-26"
+            },
+            "INV-003": {
+              "pending": "4305.00",
+              "side": "Dr",
+              "dueDate": "16-Mar-26"
+            }
+          }
+        },
+        "debtor-f": {
+          "bills": {
+            "INV-004": {
+              "pending": "22035.00",
+              "side": "Dr",
+              "dueDate": "20-Mar-26"
+            }
+          }
+        }
+      },
+      "costCentres": {
+        "online": {
+          "debit": "0.00",
+          "credit": "15020.00"
+        },
+        "showroom": {
+          "debit": "500.00",
+          "credit": "38415.00"
+        },
+        "p-east": {
+          "debit": "0.00",
+          "credit": "12811.67"
+        },
+        "p-north": {
+          "debit": "8100.00",
+          "credit": "35623.33"
+        },
+        "p-south": {
+          "debit": "11900.00",
+          "credit": "5000.00"
+        }
+      }
+    },
+    "2026-03-31": {
+      "outstanding": {
+        "creditor-c": {
+          "bills": {
+            "SI-C-03": {
+              "pending": "6720.00",
+              "side": "Cr",
+              "dueDate": "20-Apr-26"
+            }
+          }
+        },
+        "creditor-e": {
+          "bills": {
+            "SI-E-07": {
+              "pending": "3570.00",
+              "side": "Cr",
+              "dueDate": "8-Feb-26"
+            },
+            "SI-E-01": {
+              "pending": "1092.00",
+              "side": "Cr",
+              "dueDate": "12-Mar-26"
+            }
+          }
+        },
+        "creditor-g": {
+          "bills": {
+            "SI-G-01": {
+              "pending": "9600.00",
+              "side": "Cr",
+              "dueDate": "15-May-26"
+            }
+          }
+        },
+        "debtor-a": {
+          "bills": {
+            "INV-001": {
+              "pending": "3937.50",
+              "side": "Dr",
+              "dueDate": "6-Mar-26"
+            },
+            "INV-005": {
+              "pending": "12390.00",
+              "side": "Dr",
+              "dueDate": "3-Apr-26"
+            }
+          }
+        },
+        "debtor-b": {
+          "bills": {
+            "INV-003": {
+              "pending": "4305.00",
+              "side": "Dr",
+              "dueDate": "16-Mar-26"
+            },
+            "INV-006": {
+              "pending": "5880.00",
+              "side": "Dr",
+              "dueDate": "7-Apr-26"
+            }
+          }
+        },
+        "debtor-d": {
+          "bills": {
+            "INV-007": {
+              "pending": "19950.00",
+              "side": "Dr",
+              "dueDate": "26-Apr-26"
+            }
+          }
+        },
+        "debtor-f": {
+          "bills": {
+            "INV-004": {
+              "pending": "22200.00",
+              "side": "Dr",
+              "dueDate": "20-Mar-26"
+            }
+          }
+        }
+      },
+      "costCentres": {
+        "online": {
+          "debit": "0.00",
+          "credit": "26820.00"
+        },
+        "showroom": {
+          "debit": "500.00",
+          "credit": "63015.00"
+        },
+        "p-east": {
+          "debit": "0.00",
+          "credit": "12811.67"
+        },
+        "p-north": {
+          "debit": "24100.00",
+          "credit": "35623.33"
+        },
+        "p-south": {
+          "debit": "11900.00",
+          "credit": "41400.00"
+        }
+      }
+    }
+  }
+}
