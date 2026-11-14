@@ -1,8 +1,8 @@
 -- Voucher numbers restart each numbering period (D-04 as amended, observed numbering rules): every voucher type holds
--- stored restart rules (applicable from, starting number, periodicity), seeded with one row: the company's books
--- beginning, 1, yearly. The rule in force on a voucher's date gives its period; a counter is kept per company, voucher
--- type, series and period, and a number is unique only within its period. Only yearly restart is built; its periods
--- are the company's financial years, starting no earlier than the rule's date. Every existing voucher keeps its number
+-- stored restart rules (applicable from, starting number, periodicity), seeded with one row: the start of the financial
+-- year in which the books begin, 1, yearly. The rule in force on a voucher's date gives its period; a counter is kept
+-- per company, voucher type, series and period, and a number is unique only within its period. Only yearly restart is
+-- built; its periods are the company's financial years. Every existing voucher keeps its number
 -- and is filed under the period of its date; each period's counter continues from the highest number present in that
 -- period (deleted vouchers included, so a deleted number is still never reissued). Row-level security, FORCE, ownership
 -- and the existing grants are untouched; the application role may also set the new voucher column, through the same
@@ -43,11 +43,19 @@ BEGIN
 END $$;
 CREATE TRIGGER voucher_numbering_restart_guard BEFORE INSERT ON voucher_numbering_restart FOR EACH ROW EXECUTE FUNCTION voucher_numbering_restart_guard();
 
--- Every voucher type starts with the reference's default row: from the books beginning, starting at 1, yearly.
+-- The first day of the financial year (starting on month/day) that contains the date.
+CREATE FUNCTION ledger_financial_year_start(p_date date, p_month integer, p_day integer) RETURNS date
+  LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $$
+  SELECT CASE WHEN make_date(extract(year FROM p_date)::integer, p_month, p_day) <= p_date
+    THEN make_date(extract(year FROM p_date)::integer, p_month, p_day) ELSE make_date(extract(year FROM p_date)::integer - 1, p_month, p_day) END $$;
+
+-- Every voucher type starts with the reference's default row: from the start of the financial year in which the books
+-- begin (observed: books beginning 15 October in an April year hold the row 1 April), starting at 1, yearly.
 CREATE FUNCTION voucher_type_seed_restart() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity)
-  SELECT NEW.company_id, NEW.id, NEW.numbering_series, c.books_beginning, 1, 'yearly' FROM company c WHERE c.company_id = NEW.company_id;
+  SELECT NEW.company_id, NEW.id, NEW.numbering_series, ledger_financial_year_start(c.books_beginning, c.fy_start_month, c.fy_start_day), 1, 'yearly'
+  FROM company c WHERE c.company_id = NEW.company_id;
   RETURN NULL;
 END $$;
 CREATE TRIGGER voucher_type_seed_restart AFTER INSERT ON voucher_type FOR EACH ROW EXECUTE FUNCTION voucher_type_seed_restart();
@@ -61,20 +69,17 @@ ALTER TABLE voucher_counter DROP CONSTRAINT voucher_counter_pkey;
 
 -- The one place that says which numbering period a date falls in, and the period's first number: the rule in force on
 -- the date (the latest row applicable on or before it; the earliest row for a date before every row). A yearly period
--- is the company's financial year containing the date, starting no earlier than the rule's applicable-from date
--- (assumed: every observed company had its default row on both its books beginning and its financial year start).
+-- is the company's financial year containing the date.
 CREATE FUNCTION ledger_numbering_rule(p_company text, p_voucher_type uuid, p_date date, OUT period_start date, OUT starting_number integer)
   LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $$
 DECLARE
-  v_from date;
   v_periodicity text;
   v_month integer;
   v_day integer;
-  v_year_start date;
 BEGIN
   IF p_date IS NULL THEN RETURN; END IF;
-  SELECT r.applicable_from, r.starting_number, r.periodicity, c.fy_start_month, c.fy_start_day
-    INTO v_from, starting_number, v_periodicity, v_month, v_day
+  SELECT r.starting_number, r.periodicity, c.fy_start_month, c.fy_start_day
+    INTO starting_number, v_periodicity, v_month, v_day
   FROM voucher_type t
     JOIN company c ON c.company_id = t.company_id
     JOIN voucher_numbering_restart r ON r.company_id = t.company_id AND r.voucher_type_id = t.id AND r.series = t.numbering_series
@@ -83,9 +88,7 @@ BEGIN
   LIMIT 1;
   IF NOT FOUND THEN starting_number := NULL; RETURN; END IF;
   IF v_periodicity = 'yearly' THEN
-    v_year_start := make_date(extract(year FROM p_date)::integer, v_month, v_day);
-    IF v_year_start > p_date THEN v_year_start := make_date(extract(year FROM p_date)::integer - 1, v_month, v_day); END IF;
-    period_start := CASE WHEN v_from <= p_date THEN greatest(v_year_start, v_from) ELSE v_year_start END;
+    period_start := ledger_financial_year_start(p_date, v_month, v_day);
     RETURN;
   END IF;
   RAISE EXCEPTION 'only yearly restart of voucher numbering is available for now; % is not built yet', v_periodicity
@@ -162,7 +165,8 @@ DO $$
 BEGIN
   PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
   INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity)
-  SELECT t.company_id, t.id, t.numbering_series, c.books_beginning, 1, 'yearly' FROM voucher_type t JOIN company c ON c.company_id = t.company_id;
+  SELECT t.company_id, t.id, t.numbering_series, ledger_financial_year_start(c.books_beginning, c.fy_start_month, c.fy_start_day), 1, 'yearly'
+  FROM voucher_type t JOIN company c ON c.company_id = t.company_id;
   ALTER TABLE voucher DISABLE TRIGGER USER;
   ALTER TABLE voucher_counter DISABLE TRIGGER USER;
 
@@ -193,5 +197,5 @@ ALTER TABLE voucher ADD CONSTRAINT voucher_number_key UNIQUE (company_id, vouche
 
 GRANT UPDATE (number_period) ON voucher TO books_app;
 GRANT SELECT, INSERT ON voucher_numbering_restart TO books_app;
-REVOKE ALL ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date) TO books_app;
+REVOKE ALL ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date), ledger_financial_year_start(date, integer, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION ledger_numbering_rule(text, uuid, date), ledger_numbering_period(text, uuid, date), ledger_financial_year_start(date, integer, integer) TO books_app;

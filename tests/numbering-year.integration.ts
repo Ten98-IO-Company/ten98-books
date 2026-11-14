@@ -121,11 +121,11 @@ test('observed: a financial year from 1 April restarts on 1 April, not 1 January
   assert.deepEqual(await counters(books.id), [{ period: '2026-04-01', last: 5 }, { period: '2027-04-01', last: 3 }, { period: '2028-04-01', last: 1 }]);
 });
 
-test('every voucher type starts with one stored restart rule: the books beginning, 1, yearly; other rules are refused for now', async () => {
-  const books = await company('Rule Trading', { booksBeginning: '2026-03-01' });
+test('every voucher type starts with one stored restart rule: its financial year start, 1, yearly; other rules are refused for now', async () => {
+  const books = await company('Rule Trading', { financialYearStart: { month: 4, day: 1 }, booksBeginning: '2026-10-15' });
   const rules = await asAdmin(database.adminUrl, admin => admin.query(`SELECT to_char(applicable_from, 'YYYY-MM-DD') AS "from", starting_number AS start, periodicity, count(*) OVER () AS rows
     FROM voucher_numbering_restart WHERE company_id = $1 AND voucher_type_id = $2`, [books.id, books.books.type('payment')]));
-  assert.deepEqual(rules.rows, [{ from: '2026-03-01', start: 1, periodicity: 'yearly', rows: '1' }]);
+  assert.deepEqual(rules.rows, [{ from: '2026-04-01', start: 1, periodicity: 'yearly', rows: '1' }], 'the start of the financial year in which the books begin');
   assert.equal(Number((await asAdmin(database.adminUrl, admin => admin.query('SELECT count(*) FROM voucher_numbering_restart WHERE company_id = $1', [books.id]))).rows[0].count), 8, 'one per voucher type');
   const add = (periodicity: string, from: string) => asApp(books.id, client => client.query(
     `INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity) VALUES ($1, $2, 'main', $3, 1, $4)`,
@@ -135,9 +135,11 @@ test('every voucher type starts with one stored restart rule: the books beginnin
   }
   await assert.rejects(add('yearly', '2026-06-01'), code('23514', 'voucher_numbering_restart_fixed'));
   await assert.rejects(asApp(books.id, client => client.query('DELETE FROM voucher_numbering_restart WHERE company_id = $1', [books.id])), code('42501'));
-  // Books beginning in March of a January year: the first period runs from the rule's date, the next from 1 January.
-  assert.deepEqual([(await books.pay('2026-03-05')).number, (await books.pay('2027-01-05')).number], [1, 1]);
-  assert.deepEqual((await counters(books.id)).map(row => row.period), ['2026-03-01', '2027-01-01']);
+  // Observed with books beginning 15 October of an April year: the periods are financial years.
+  const numbers = [];
+  for (const date of ['2026-10-20', '2027-03-31', '2027-04-01', '2027-10-16']) numbers.push((await books.pay(date)).number);
+  assert.deepEqual(numbers, [1, 2, 1, 2]);
+  assert.deepEqual((await counters(books.id)).map(row => row.period), ['2026-04-01', '2027-04-01']);
 });
 
 test('numbers, periods and counters cannot be forged across years by direct SQL', async () => {

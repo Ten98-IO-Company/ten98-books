@@ -50,7 +50,7 @@ before(async () => {
   await admin.query('BEGIN');
   await admin.query("SELECT set_config('app.company_ids', $1, true)", [company]);
   await admin.query(`INSERT INTO company (company_id, base_currency, currency_minor_units, fy_start_month, fy_start_day, books_beginning, time_zone)
-    VALUES ($1, 'AED', 2, 1, 1, '2026-01-01', 'Asia/Dubai')`, [company]);
+    VALUES ($1, 'AED', 2, 1, 1, '2026-02-15', 'Asia/Dubai')`, [company]);
   await admin.query('SELECT ledger_seed_company($1)', [company]);
   const one = async (sql: string, values: unknown[]) => (await admin.query(sql, values)).rows[0].id as string;
   ids.journal = await one("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'journal'", [company]);
@@ -87,7 +87,7 @@ test('every voucher keeps its number and is filed under the year of its date', a
     { type: ids.journal, period: '2026-01-01', last: 5 }, { type: ids.journal, period: '2027-01-01', last: 6 }, { type: ids.payment, period: '2027-01-01', last: 1 }]);
   const rules = await admin.query(`SELECT to_char(applicable_from, 'YYYY-MM-DD') AS "from", starting_number AS start, periodicity, count(*)::int AS types
     FROM voucher_numbering_restart WHERE company_id = $1 GROUP BY 1, 2, 3`, [company]);
-  assert.deepEqual(rules.rows, [{ from: '2026-01-01', start: 1, periodicity: 'yearly', types: 8 }], 'each existing voucher type gets the default restart rule');
+  assert.deepEqual(rules.rows, [{ from: '2026-01-01', start: 1, periodicity: 'yearly', types: 8 }], 'each existing voucher type gets the default restart rule, dated on the financial year start, not the books beginning (15 February)');
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
 });
 
@@ -96,7 +96,7 @@ test('each year continues from its own highest number, so an earlier year may re
     context => createVoucher(context, voucherBody(type, date, [[ids.rent, 'Dr', '1'], [credit, 'Cr', '1']])), 'write').then(result => result.voucher.number);
   assert.equal(await postAs(ids.journal, '2026-12-21', ids.capital), 6, '2026 continues after 5 and repeats the (deleted) 2027 number 6');
   assert.equal(await postAs(ids.journal, '2027-01-09', ids.capital), 7, '2027 continues after its own 6');
-  assert.equal(await postAs(ids.payment, '2026-02-01', ids.cash), 1, 'a year with no numbers yet starts at 1');
+  assert.equal(await postAs(ids.payment, '2026-03-02', ids.cash), 1, 'a year with no numbers yet starts at 1');
   const sixes = await admin.query(`SELECT to_char(number_period, 'YYYY') AS year FROM voucher WHERE company_id = $1 AND voucher_type_id = $2 AND number = 6 ORDER BY 1`, [company, ids.journal]);
   assert.deepEqual(sixes.rows.map(row => row.year), ['2026', '2027']);
 });
