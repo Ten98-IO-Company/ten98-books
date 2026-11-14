@@ -59,18 +59,18 @@ async function billStates(context: LedgerContext, ledgerIds: string[], asOf: str
      FROM wanted w
        -- Each wanted bill by its key (a join could read every bill of the company while the table has no statistics).
        -- By id alone (bill_id_idx; the ledgers name the company and the row-level policy filters as everywhere).
-       CROSS JOIN LATERAL (SELECT x.id, x.name, x.ledger_id FROM bill x WHERE x.id = w.bill_id AND x.ledger_id = ANY($2::uuid[]) LIMIT 1) b
+       CROSS JOIN LATERAL (SELECT x.id, x.name, x.name_key, x.ledger_id FROM bill x WHERE x.id = w.bill_id AND x.ledger_id = ANY($2::uuid[]) LIMIT 1) b
        JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
        JOIN chosen ch ON ch.bill_id = w.bill_id
      WHERE $6::date IS NULL OR ch.row_date <= $6
-     ORDER BY lower(led.name), led.id, ch.row_date, name_match_key(b.name) COLLATE "C", b.id`,
+     ORDER BY lower(led.name), led.id, ch.row_date, b.name_key, b.id`,
     [context.company.companyId, ledgerIds, asOf, keep, options.side ?? null, options.datedBy ?? null, options.billIds ?? null]);
   return rows;
 }
 const states = billStates;
 
 /**
- * The keyset of the bills receivable or payable list: party name, party, the bill name's match key (`name_match_key`: the
+ * The keyset of the bills receivable or payable list: party name, party, the bill's stored match key (`name_key`: the
  * name as the reference compares it) and bill.
  */
 type PageKey = [party: string, ledgerId: string, name: string, billId: string];
@@ -85,10 +85,13 @@ function decodeKey(cursor: string | undefined): PageKey | undefined {
 }
 
 /**
- * One page of the bills pending on `side` at `asOf`, in list order (party name, party, bill name), without reading the
- * bills before or after it: parties are taken in order, and each party's bills in key order (bill_ledger_order_idx, by
- * ledger alone: the ledger implies the company), each with its pending
- * summed from its own rows, until the page is full. A page costs the bills it returns plus the settled ones it passes.
+ * One page of the bills pending on `side` at `asOf`, in list order (party name, party, bill name): parties are taken in
+ * order, and each party's bills from the cursor in key order (bill_ledger_order_idx on the stored key `name_key`, by
+ * ledger alone: the ledger implies the company), each with its pending summed from its own rows, until the page is full.
+ * The keyset compares the plain stored column, so under the row-level policy it is an index condition and the page
+ * seeks to the cursor. With statistics on bill, a page reads the bills it returns, the settled ones it passes and one
+ * bill of each party in scope (the parties probe); without them the planner may read the party's bills from the cursor
+ * to the party's end (LEDGER.md, "Known limits").
  */
 async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: string, side: 'Dr' | 'Cr', after: PageKey | undefined, limit: number) {
   const { client, company } = context;
@@ -100,13 +103,13 @@ async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: st
   for (const party of parties) {
     const from = after && party.id === after[1] ? after : null;
     const { rows } = await client.query<{ billId: string; name: string }>(
-      `SELECT b.id AS "billId", name_match_key(b.name) AS name FROM bill b
+      `SELECT b.id AS "billId", b.name_key AS name FROM bill b
          CROSS JOIN LATERAL (SELECT coalesce(sum(${signedSql('r')}) FILTER (WHERE r.opening OR r.row_date <= $4), 0) AS pending
            FROM (${liveBillRowsSql('a.bill_id = b.id')}) r) s
        WHERE b.ledger_id = $2
-         AND ($3::text IS NULL OR (name_match_key(b.name) COLLATE "C", b.id) > ($3::text COLLATE "C", $7::uuid))
+         AND ($3::text IS NULL OR (b.name_key, b.id) > ($3::text, $7::uuid))
          AND (($5 = 'Dr' AND s.pending > 0) OR ($5 = 'Cr' AND s.pending < 0))
-       ORDER BY name_match_key(b.name) COLLATE "C", b.id LIMIT $6`,
+       ORDER BY b.name_key, b.id LIMIT $6`,
       [company.companyId, party.id, from?.[2] ?? null, asOf, side, limit + 1 - page.length, from?.[3] ?? null]);
     page.push(...rows.map(row => ({ billId: row.billId, ledgerId: party.id, key: [party.key, party.id, row.name, row.billId] as PageKey })));
     if (page.length > limit) break;
@@ -318,9 +321,9 @@ export async function billPicker(context: LedgerContext, ledgerId: string, query
   const { rows: [ledger] } = await context.client.query('SELECT 1 FROM ledger WHERE company_id = $1 AND id = $2', [context.company.companyId, ledgerId]);
   if (!ledger) throw ledgerNotFound;
   const offered = await states(context, [ledgerId], asOf, listScope === 'all' ? 'final' : 'pending', { datedBy: asOf });
-  // By name: the name match key (`name_match_key` in the database), compared as plain text like the lists (COLLATE "C").
+  // By name: the bill's stored match key (`name_key`, from `name_match_key`), compared as plain text like the lists.
   const keys = sort === 'name' ? new Map((await context.client.query<{ id: string; key: string }>(
-    'SELECT id, name_match_key(name) AS key FROM bill WHERE company_id = $1 AND id = ANY($2::uuid[])', [context.company.companyId, offered.map(bill => bill.billId)])).rows
+    'SELECT id, name_key AS key FROM bill WHERE company_id = $1 AND id = ANY($2::uuid[])', [context.company.companyId, offered.map(bill => bill.billId)])).rows
     .map(row => [row.id, row.key])) : new Map<string, string>();
   const key = (bill: BillState): string | bigint => ({ name: keys.get(bill.billId) ?? '', bill_date: bill.billDate ?? '', due_date: bill.dueDate ?? '',
     pending: bill.pending, final_pending: bill.finalPending })[sort];

@@ -81,7 +81,7 @@ async function billsByName(context: LedgerContext, keys: { ledgerId: string; nam
   if (!keys.length) return [];
   const { rows } = await context.client.query<{ ord: string; id: string | null }>(
     `SELECT t.ord, b.id FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
-       LEFT JOIN bill b ON b.company_id = $1 AND b.ledger_id = t.ledger_id AND name_match_key(b.name) COLLATE "C" = name_match_key(t.name) COLLATE "C" ORDER BY t.ord`,
+       LEFT JOIN bill b ON b.company_id = $1 AND b.ledger_id = t.ledger_id AND b.name_key = name_match_key(t.name) ORDER BY t.ord`,
     [context.company.companyId, keys.map(key => key.ledgerId), keys.map(key => key.name)]);
   return rows.map(row => row.id);
 }
@@ -218,7 +218,7 @@ export async function writeBills(context: LedgerContext, voucher: { id: string; 
          SELECT DISTINCT ON (t.ledger_id, name_match_key(t.name)) t.ledger_id, t.name FROM unnest($2::uuid[], $3::text[]) WITH ORDINALITY AS t(ledger_id, name, ord)
          ORDER BY t.ledger_id, name_match_key(t.name), t.ord) d
        ORDER BY d.ledger_id, name_match_key(d.name) COLLATE "C"
-       ON CONFLICT (company_id, ledger_id, (name_match_key(name)) COLLATE "C") DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency]);
+       ON CONFLICT (company_id, ledger_id, name_key) DO NOTHING`, [company.companyId, ledgers, names, company.baseCurrency]);
     const found = await billsByName(context, creating.map(row => ({ ledgerId: row.ledgerId, name: row.name! })));
     creating.forEach((row, index) => { row.billId = found[index]; });
   }

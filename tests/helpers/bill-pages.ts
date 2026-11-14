@@ -58,12 +58,17 @@ export async function assertPageReads(t: TestContext, owner: Member, database: T
   await inCompany(owner.userId, pageCompany, async context => {
     const first = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '5' });
     assert.deepEqual(first.bills.map(bill => bill.name), ['A-000', 'A-001', 'M0-000', 'M0-001', 'M0-002']);
-    const bills = await counters(context.client, 'bill'), rows = await counters(context.client, 'bill_allocation');
-    const page = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3', after: first.next! });
-    const billsRead = read(await counters(context.client, 'bill'), bills), rowsRead = read(await counters(context.client, 'bill_allocation'), rows);
-    assert.deepEqual(page.bills.map(bill => bill.name), ['M0-003', 'M0-004', 'M0-005']);
-    t.diagnostic(`${state}: ${billsRead} bills and ${rowsRead} bill rows read for one page of three`);
-    assert.ok(billsRead <= bound, `${state}: ${billsRead} bills read, bound ${bound}`);
-    assert.ok(rowsRead <= bound, `${state}: ${rowsRead} bill rows read, bound ${bound}`);
+    // The second page, and a deep one: three bills after the first 284 (the keyset seeks; it never walks from the start).
+    const deep = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '284' });
+    const pages: [string, string, string[]][] = [['second page', first.next!, ['M0-003', 'M0-004', 'M0-005']], ['after 284 bills', deep.next!, ['M2-082', 'M2-083', 'M2-084']]];
+    for (const [where, after, expected] of pages) {
+      const bills = await counters(context.client, 'bill'), rows = await counters(context.client, 'bill_allocation');
+      const page = await billsOutstandingReport(context, { side: 'receivable', asOf: '2026-01-31', limit: '3', after });
+      const billsRead = read(await counters(context.client, 'bill'), bills), rowsRead = read(await counters(context.client, 'bill_allocation'), rows);
+      assert.deepEqual(page.bills.map(bill => bill.name), expected);
+      t.diagnostic(`${state}, ${where}: ${billsRead} bills and ${rowsRead} bill rows read for one page of three`);
+      assert.ok(billsRead <= bound, `${state}, ${where}: ${billsRead} bills read, bound ${bound}`);
+      assert.ok(rowsRead <= bound, `${state}, ${where}: ${rowsRead} bill rows read, bound ${bound}`);
+    }
   });
 }
