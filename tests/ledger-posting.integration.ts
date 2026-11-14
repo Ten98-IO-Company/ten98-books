@@ -52,8 +52,9 @@ test('posting rules refuse bad vouchers with plain-language messages and write n
     ['before books beginning', attempt('payment', '2025-12-31', [[ids.rent, 'Dr', '100'], [cash, 'Cr', '100']]), 400, /before the books begin on 2026-01-01/],
     ['contra with another ledger', attempt('contra', '2026-02-01', [[ids.bank, 'Dr', '100'], [ids.rent, 'Cr', '100']]), 400, /contra voucher moves money between cash and bank/],
     ['payment without cash or bank credit', attempt('payment', '2026-02-01', [[ids.rent, 'Dr', '100'], [ids.capital, 'Cr', '100']]), 400, /payment must credit at least one cash or bank/],
-    ['payment debiting cash', attempt('payment', '2026-02-01', [[cash, 'Dr', '100'], [ids.bank, 'Cr', '100']]), 400, /payment cannot debit a cash or bank ledger \(line 1\)/],
+    ['payment with bank only debited', attempt('payment', '2026-02-01', [[ids.bank, 'Dr', '100'], [ids.capital, 'Cr', '100']]), 400, /payment must credit at least one cash or bank/],
     ['receipt without cash or bank debit', attempt('receipt', '2026-02-01', [[ids.rent, 'Dr', '100'], [ids.sales, 'Cr', '100']]), 400, /receipt must debit at least one cash or bank/],
+    ['receipt with bank only credited', attempt('receipt', '2026-02-01', [[ids.customer, 'Dr', '100'], [ids.bank, 'Cr', '100']]), 400, /receipt must debit at least one cash or bank/],
     ['unknown voucher type', owner.browser.call(url(), voucherBody(randomUUID(), '2026-02-01', [[ids.rent, 'Dr', '1'], [cash, 'Cr', '1']])), 400, /voucher type was not found/],
   ];
   for (const [name, response, status, message] of cases) {
@@ -334,4 +335,12 @@ test('a journal accepts cash and bank ledgers, also on either side', async () =>
   const cash = await post(owner.browser, companyId, books.type('journal'), '2026-06-02', [[books.ledger('Cash'), 'Dr', '15'], [ids.capital, 'Cr', '15']]);
   assert.ok(cash.number > bank.number);
   assert.equal(await closing(ids.bank), before - 4000n, 'the bank ledger moves like any other');
+});
+
+test('a payment may also debit cash or bank, and a receipt also credit one, as long as one is credited or debited', async () => {
+  const cash = books.ledger('Cash');
+  const payment = await post(owner.browser, companyId, books.type('payment'), '2026-06-03', [[cash, 'Dr', '25'], [ids.bank, 'Cr', '25']]);
+  assert.deepEqual(payment.lines.map((line: { ledgerId: string; side: string }) => [line.ledgerId, line.side]), [[cash, 'Dr'], [ids.bank, 'Cr']], 'cash debited, bank credited');
+  const receipt = await post(owner.browser, companyId, books.type('receipt'), '2026-06-04', [[ids.bank, 'Dr', '25'], [cash, 'Cr', '25']]);
+  assert.deepEqual(receipt.lines.map((line: { ledgerId: string; side: string }) => [line.ledgerId, line.side]), [[ids.bank, 'Dr'], [cash, 'Cr']], 'bank debited, cash credited');
 });

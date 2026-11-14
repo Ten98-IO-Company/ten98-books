@@ -339,7 +339,7 @@ const stockDataset = (): Dataset => parseDataset({
     { key: 'payment-1', type: 'payment', date: '2026-01-08', status: 'optional', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
     { key: 'payment-2', type: 'payment', date: '2026-01-09', status: 'optional', postDated: false,
-      lines: [{ ledger: 'cash', side: 'Dr', amount: '5.00' }, { ledger: 'bank', side: 'Cr', amount: '5.00' }] },
+      lines: [{ ledger: 'bank', side: 'Dr', amount: '5.00' }, { ledger: 'capital', side: 'Cr', amount: '5.00' }] },
     { key: 'receipt-2', type: 'receipt', date: '2027-01-05', status: 'regular', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'cash', side: 'Dr', amount: '50.00' }, { ledger: 'sales', side: 'Cr', amount: '50.00' }] },
   ],
@@ -364,7 +364,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.deepEqual(report.unsupportedTypes, { sales_order: 1, memorandum: 1 });
   assert.deepEqual(report.noEntries, { journal: 1 });
   assert.equal(report.refused.length, 1);
-  assert.match(report.refused[0], /^voucher "payment-2" \(payment, 2026-01-09, optional\): A payment cannot debit a cash or bank ledger/);
+  assert.match(report.refused[0], /^voucher "payment-2" \(payment, 2026-01-09, optional\): A payment must credit at least one cash or bank ledger/);
   assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 2, kind: 'dataset sequence (not yet verified against the reference)' });
   assert.ok(formatCompareResult(await compareDataset(owner.userId, stockDataset())).includes('  Voucher numbers (expectedNumber, checked when seeding): dataset sequence (not yet verified against the reference)'));
   assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (cancelled without lines)']);

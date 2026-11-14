@@ -98,8 +98,8 @@ type LineInput = { ledgerId: string; side: Side; amount: string; bills?: BillRow
 
 /**
  * Applies the posting rules to a voucher body and returns its lines in minor units. Contra moves money between cash and
- * bank ledgers only; a payment credits, and a receipt debits, at least one cash or bank ledger and never uses one on its
- * other side. A journal, sales, purchase and the two notes accept any ledgers, cash and bank included (observed: the
+ * bank ledgers only; a payment credits, and a receipt debits, at least one cash or bank ledger and may use cash or bank
+ * on its other side too (observed at save on the entry screens). A journal, sales, purchase and the two notes accept any ledgers, cash and bank included (observed: the
  * journal entry list only hides cash and bank until asked to show more; hiding them is the entry screen's job).
  */
 async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { date: string; lines: LineInput[] }): Promise<PreparedLine[]> {
@@ -149,8 +149,6 @@ async function prepareLines(context: LedgerContext, kind: VoucherKind, body: { d
   } else if (kind === 'payment' || kind === 'receipt') {
     const [paidFrom, word] = kind === 'payment' ? ['Cr', 'credit'] : ['Dr', 'debit'];
     if (!lines.some(line => line.side === paidFrom && isCash(line))) refuse(`A ${kind} must ${word} at least one cash or bank ledger.`);
-    const wrong = first(line => line.side !== paidFrom && isCash(line));
-    if (wrong) refuse(`A ${kind} cannot ${paidFrom === 'Cr' ? 'debit' : 'credit'} a cash or bank ledger (line ${wrong}). Use a contra voucher for transfers between them.`);
   }
   return lines;
 }
