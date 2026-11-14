@@ -95,7 +95,8 @@ export function useLeave(fallback: { to: string; params: Record<string, string> 
 /**
  * Keeps typed work from being lost: while `dirty`, any route change away from the screen (go-to, the company switcher,
  * a link, the browser's back) waits for `ask` and goes ahead only on a yes, and closing or reloading the tab gets the
- * browser's own warning. `pass` runs an exit the screen has already settled (after a save or a delete) without asking.
+ * browser's own warning. `pass` runs an exit the screen has already settled (after a save or a delete) without asking;
+ * `leave` asks first (when dirty) and then leaves, for the screen's own exits.
  * Every entry screen guards itself with this; tests/keyboard.test.ts checks that each one rendering `EntryScope` does.
  */
 export function useLeaveGuard(dirty: boolean, ask: () => Promise<boolean>) {
@@ -111,7 +112,13 @@ export function useLeaveGuard(dirty: boolean, ask: () => Promise<boolean>) {
     enableBeforeUnload: () => latest.current.dirty && passUntil.current <= Date.now(),
   })
   const pass = useCallback((exit: () => void) => { passUntil.current = Date.now() + 2000; exit() }, [])
-  return { pass }
+  // The screen's own exits (Escape, Ctrl+Q, the Leave button) ask before navigating, so the address does not change
+  // while the question is open; only the browser's back moves the address first.
+  const leave = useCallback(async (exit: () => void) => {
+    if (latest.current.dirty && !await latest.current.ask()) return
+    pass(exit)
+  }, [pass])
+  return { pass, leave }
 }
 
 export type Failure = ReturnType<typeof describeFailure>

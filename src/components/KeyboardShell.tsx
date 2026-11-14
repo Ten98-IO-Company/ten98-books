@@ -3,7 +3,7 @@ import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/rea
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, keepsEscape, type CommandContext, type CommandId, type GoToReturn } from '../lib/commands'
-import { claimSplit, defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
+import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
 import { useCanWrite } from './masters/useCanWrite'
@@ -25,8 +25,6 @@ export type KeyboardState = {
 }
 
 const KeyboardContext = createContext<KeyboardState | null>(null)
-/** True while focus is in an editable element or text is selected: claims then leave the editing chords alone (claimSplit). */
-const EditingContext = createContext(false)
 /** How a screen is opened from the go-to list: stacked over this one (go-to) or in its place (switch-to). */
 export type ScreenMode = 'go-to' | 'switch-to'
 type OpenScreen = (mode: ScreenMode, to: string, params: { companyId: string }, search?: Record<string, unknown>) => Promise<void>
@@ -58,39 +56,16 @@ export function useAppCommand(id: CommandId, run: () => void, { enabled = true, 
   // In classic a switched-off command still keeps its keys from the browser: it registers as a do-nothing claim under an
   // id outside the registry, which the action bar and the help leave out (the registry runs nothing for a disabled one).
   const keymap = useContext(KeyboardContext)?.keymap ?? defaultKeymap
-  const editingNow = useContext(EditingContext)
   const claim = enabled ? [] : disabledClaims(keymap, id)
-  // A switched-off accept is still the accept key (D-05), so its Ctrl+A is claimed even in a field.
-  const { always, editing } = claimSplit(claim, id === 'entry.accept' ? claim : [])
-  useCommand(always.length ? { id: `claim.${id}`, label: command.title, run: nothing, keys: always }
+  useCommand(claim.length ? { id: `claim.${id}`, label: command.title, run: nothing, keys: claim }
     : { id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
-  useCommand({ id: `claim.${id}.editing`, label: command.title, run: nothing, keys: editing, enabled: !editingNow })
 }
 
 const nothing = () => undefined
 
-/**
- * Registers a claim (keys taken from the browser, nothing run) under an id outside the registry. The clipboard and
- * editing chords among `keys` go into a second claim that is switched off while focus is editable or text is selected,
- * and a switched-off command leaves its key to the browser (claimSplit).
- */
-function useClaim(id: string, label: string, keys: readonly string[], accept: readonly string[] = []) {
-  const editingNow = useContext(EditingContext)
-  const { always, editing } = claimSplit(keys, accept)
-  useCommand({ id, label, run: nothing, keys: always })
-  useCommand({ id: `${id}.editing`, label, run: nothing, keys: editing, enabled: !editingNow })
-}
-
-/** Whether focus is in an editable element (keepsEscape's test) or the page has a text selection, followed live. */
-function useEditingTarget() {
-  const [editing, setEditing] = useState(false)
-  useEffect(() => {
-    const update = () => setEditing(keepsEscape(document.activeElement) || (document.getSelection()?.toString() ?? '') !== '')
-    update()
-    for (const type of ['focusin', 'focusout', 'selectionchange']) document.addEventListener(type, update)
-    return () => { for (const type of ['focusin', 'focusout', 'selectionchange']) document.removeEventListener(type, update) }
-  }, [])
-  return editing
+/** Registers a claim (keys taken from the browser, nothing run) under an id outside the registry; `claimable` decides the keys. */
+function useClaim(id: string, label: string, keys: readonly string[]) {
+  useCommand({ id, label, run: nothing, keys })
 }
 
 /** A command's current keys as an `aria-keyshortcuts` value, for the button that runs it. */
@@ -185,9 +160,8 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
 
   const keymap = setting?.keymap ?? defaultKeymap
   const state = useMemo<KeyboardState>(() => ({ keymap, chosen: setting?.chosen ?? null, saving, error, choose, openHelp }), [keymap, setting, saving, error, choose, openHelp])
-  const editing = useEditingTarget()
 
-  return <KeyboardContext value={state}><EditingContext value={editing}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}>
+  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
       <GlobalCommands back={backNow} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
       <ReservedKeys context='global' />
@@ -195,7 +169,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
       <GoToDialog mode={goToMode} onClose={() => setGoToMode(null)} />
     </ShortcutProvider>
-  </OpenScreenContext></BackOverrideContext></EditingContext></KeyboardContext>
+  </OpenScreenContext></BackOverrideContext></KeyboardContext>
 }
 
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.

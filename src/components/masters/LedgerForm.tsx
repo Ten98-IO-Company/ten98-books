@@ -168,8 +168,8 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
 
   async function cancel() {
     if (confirming) { keepEditing(); return }
-    // The leave guard asks first when something was typed.
-    leave()
+    // Asks first when something was typed, before the address changes.
+    await guard.leave(leave)
   }
 
   useEntryCommands({

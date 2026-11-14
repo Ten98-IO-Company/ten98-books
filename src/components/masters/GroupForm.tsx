@@ -160,8 +160,8 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
 
   async function cancel() {
     if (confirming) { keepEditing(); return }
-    // The leave guard asks first when something was typed.
-    leave()
+    // Asks first when something was typed, before the address changes.
+    await guard.leave(leave)
   }
 
   useEntryCommands({

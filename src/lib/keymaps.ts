@@ -231,42 +231,52 @@ export const reservedShadows: readonly string[] = ['report.period on F2', 'repor
 const chordsOf = (name: KeymapName, id: CommandId): readonly string[] => { const keys = keymaps[name][id]; return typeof keys === 'string' ? [keys] : keys }
 
 /**
- * Whether classic takes a chord from the browser even with nothing to run: chords with Ctrl, Alt or Meta, and function
- * keys. Escape, Enter, arrows, Tab and letters are never taken this way, so fields and controls keep them.
+ * Never claimed by a key that has no running command: the clipboard and editing chords (an accountant copies figures out
+ * of reports and fields), and Ctrl+F (the browser's find is useful on a long report and nothing replaces it yet). Some
+ * of them stay reserved for a future meaning; until a command exists they are simply not claimed. A future command on
+ * one of them must itself yield to the browser over a text selection or in an editable field, except Ctrl+A as the
+ * accept key on entry screens (D-05).
  */
-export const claimable = (chord: string): boolean => /(^|\+)F\d+$/.test(chord) || /(^|\+)(Ctrl|Alt|Meta)\+/.test(chord)
-
-/** Clipboard and editing chords. Text editing keeps them: see `claimSplit`. */
-export const editingChords: readonly string[] = ['Ctrl+C', 'Ctrl+X', 'Ctrl+V', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z', 'Ctrl+A']
+export const neverClaimed: readonly string[] = ['Ctrl+C', 'Ctrl+X', 'Ctrl+V', 'Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z', 'Ctrl+A', 'Ctrl+F']
 
 /**
- * The one rule for what a claim may take. `always` is claimed wherever focus is. `editing` holds the clipboard and editing
- * chords, claimed only while focus is on a non-editable target (a list row, a menu, a button) and nothing on the page is
- * selected; in a text field, select or editable region, or over a selection, the browser keeps them whatever is
- * reserved. Ctrl+A stays in `always` where it is the accept key (D-05): pass the accept chords of that place as `accept`.
+ * The one rule for what classic takes from the browser with nothing to run: chords with Ctrl, Alt or Meta, and function
+ * keys, except `neverClaimed`. Escape, Enter, arrows, Tab and letters are never taken this way, so fields and controls
+ * keep them. Every claim (reserved keys, a switched-off command's keys, a dialog's keys) goes through it.
  */
-export function claimSplit(keys: readonly string[], accept: readonly string[] = []): { always: string[]; editing: string[] } {
-  const editing = keys.filter(key => editingChords.includes(key) && !accept.includes(key))
-  return { always: keys.filter(key => !editing.includes(key)), editing }
-}
+export const claimable = (chord: string): boolean =>
+  (/(^|\+)F\d+$/.test(chord) || /(^|\+)(Ctrl|Alt|Meta)\+/.test(chord)) && !neverClaimed.includes(chord)
 
-/** The reserved keys of a context that classic claims (default prevented, nothing run); none in web-safe. */
+/**
+ * Browser keys an accountant presses by habit, whose browser action would disrupt the work (print, bookmark, history,
+ * reload, help, find-next, the menus and the address bar). Classic claims them application-wide; any command in an inner
+ * context still takes its key first. None of them may be a key of a global command (a test checks).
+ */
+export const habitChords: readonly string[] = [
+  'Ctrl+P', 'Ctrl+D', 'Ctrl+H', 'Ctrl+E', 'Ctrl+B', 'Ctrl+J', 'Ctrl+L', 'Ctrl+U', 'Ctrl+R',
+  'F5', 'F10', 'F12',
+  'Alt+D', 'Alt+F', 'Alt+E', 'Alt+V', 'Alt+S', 'Alt+B', 'Alt+T', 'Alt+H',
+]
+
+/** The keys classic claims in a context (default prevented, nothing run): its reserved keys, and application-wide the habit chords. None in web-safe. */
 export function reservedClaims(name: KeymapName, context: CommandContext): string[] {
   if (name !== 'classic') return []
-  return [...new Set(classicReserved.filter(entry => entry.context === context).flatMap(entry => entry.keys).filter(claimable))]
+  const keys = [...classicReserved.filter(entry => entry.context === context).flatMap(entry => entry.keys), ...context === 'global' ? habitChords : []]
+  return [...new Set(keys.filter(claimable))]
 }
 
 /** The keys of a switched-off command that classic still claims in its context, so the browser does not act on them. */
 export const disabledClaims = (name: KeymapName, id: CommandId): string[] => name === 'classic' ? chordsOf(name, id).filter(claimable) : []
 
 /**
- * Every classic chord a dialog takes from the browser: the keys of all commands and all reserved keys, less the ones the
- * dialog runs itself (`own`). A dialog cuts off the outer scopes, so without this the browser would act on them there.
+ * Every classic chord a dialog takes from the browser: the keys of all commands, all reserved keys and the habit chords,
+ * less the ones the dialog runs itself (`own`). A dialog cuts off the outer scopes, so without this the browser would act
+ * on them there.
  */
 export function dialogClaims(name: KeymapName, own: readonly CommandId[]): string[] {
   if (name !== 'classic') return []
   const ownKeys = new Set(own.flatMap(id => chordsOf(name, id)))
-  const every = [...(Object.keys(keymaps.classic) as CommandId[]).flatMap(id => chordsOf(name, id)), ...classicReserved.flatMap(entry => entry.keys)]
+  const every = [...(Object.keys(keymaps.classic) as CommandId[]).flatMap(id => chordsOf(name, id)), ...classicReserved.flatMap(entry => entry.keys), ...habitChords]
   return [...new Set(every.filter(chord => claimable(chord) && !ownKeys.has(chord)))]
 }
 
