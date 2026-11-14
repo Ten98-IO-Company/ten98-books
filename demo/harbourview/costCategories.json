@@ -1,0 +1,14 @@
+[
+  {
+    "key": "channel",
+    "name": "Channel",
+    "allocateRevenue": true,
+    "allocateNonRevenue": false
+  },
+  {
+    "key": "projects",
+    "name": "Projects",
+    "allocateRevenue": true,
+    "allocateNonRevenue": true
+  }
+]

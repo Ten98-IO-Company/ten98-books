@@ -325,6 +325,19 @@ test('items.json is checked for shape and references only, and everything else i
   mentions(problems(notAFile), 'items.json', 'items');
 });
 
+test('a unit may carry decimals (a whole number from 0 to 4), which is kept; anything else is refused', () => {
+  const raw = good();
+  const items = stock();
+  items.units = [{ key: 'nos', name: 'Nos' }, { key: 'kg', name: 'Kg', decimals: 1 } as never, { key: 'ltr', name: 'Ltr', decimals: 4 } as never];
+  raw.extraFiles = { 'items.json': items };
+  assert.deepEqual(parseDataset(raw, 'demo/sample-shop').extraFiles['items.json'], items);
+  for (const decimals of [-1, 5, 1.5, '1']) {
+    const bad = good();
+    bad.extraFiles = { 'items.json': { ...stock(), units: [{ key: 'kg', name: 'Kg', decimals }] } };
+    mentions(problems(bad), 'items.json', 'units[0].decimals');
+  }
+});
+
 test('inventory lines name items and locations that items.json has, once the file is present', () => {
   const raw = good();
   raw.extraFiles = { 'items.json': stock() };
@@ -397,7 +410,7 @@ test('numbersVerified is an optional boolean that says what expectedNumber is; i
 });
 
 test('every dataset in demo/ says its numbers were confirmed against the reference', async () => {
-  for (const slug of ['starter-trading', 'gulfline', 'najd']) assert.equal(numbersKind(await loadDataset(join(demoRoot, slug))), 'confirmed against the reference', slug);
+  for (const slug of ['starter-trading', 'gulfline', 'najd', 'harbourview', 'sunrise']) assert.equal(numbersKind(await loadDataset(join(demoRoot, slug))), 'confirmed against the reference', slug);
 });
 
 /** Vouchers for the number check: type, key, date, status, lines, expectedNumber. */
@@ -442,4 +455,87 @@ test('checkNumbers keys skipped vouchers by type and financial year, so a gap in
   assert.deepEqual(check.differences.map(difference => [difference.key, difference.year, difference.holes.length, difference.explained]), [
     ['j2', '2026-04-01', 1, true], ['j3', '2027-04-01', 0, false], ['j4', '2027-04-01', 0, false]],
   'the cancelled March journal explains the March shift only; April starts a new financial year');
+});
+
+/** Cost categories, centres and currencies for a dataset whose lines use them. */
+const costing = () => ({
+  'costCategories.json': [{ key: 'channel', name: 'Channel', allocateRevenue: true }, { key: 'projects', name: 'Projects' }],
+  'costCentres.json': [{ key: 'online', name: 'Online', category: 'channel' }, { key: 'p-north', name: 'P-North', category: 'projects' }, { key: 'p-south', name: 'P-South', category: 'projects' }],
+  'currencies.json': [{ code: 'USD', name: 'US Dollar', symbol: 'USD', rates: [{ kind: 'standard', date: '2026-01-01', rate: '3.6725' }] }],
+  'checkpoints.json': { note: 'kept', dates: { '2026-02-28': { outstanding: {} } } },
+});
+
+test('cost categories, centres, currencies and checkpoints are accepted, checked and kept untouched', () => {
+  const raw = good();
+  raw.extraFiles = costing();
+  raw.vouchers[0].lines[0].extras = { costCentres: [{ centre: 'online', amount: '40.00' }, { centre: 'p-north', amount: '30.00' }, { centre: 'p-south', amount: '10.00' }], currency: 'USD', currencyAmount: '10.89', rate: '3.6725', bills: [{ kind: 'new', name: 'A-1', amount: '10.89' }] };
+  raw.vouchers[0].extras = { party: 'cash', reference: 'R-1' };
+  const dataset = parseDataset(raw, 'demo/sample-shop');
+  assert.deepEqual(dataset.extraFiles, costing());
+  assert.deepEqual(dataset.vouchers[0].lines[0].extras, raw.vouchers[0].lines[0].extras);
+  assert.deepEqual(problems(raw), []);
+});
+
+test('cost centre and currency references must resolve, and a category\'s allocations must add up to the line', () => {
+  const raw = good();
+  raw.extraFiles = costing();
+  raw.vouchers[0].lines[0].extras = { costCentres: [{ centre: 'ghost', amount: '40.00' }], currency: 'EUR', currencyAmount: '1,5', rate: '3.6' };
+  raw.vouchers[0].lines[1].extras = { costCentres: [{ centre: 'p-north', amount: '30.00' }, { centre: 'p-south', amount: '9.99' }] };
+  raw.vouchers[0].extras = { party: 'nobody' };
+  const found = problems(raw);
+  mentions(found, 'vouchers.json', '"pay-1"', 'lines[0]', 'cost centre "ghost"');
+  mentions(found, 'vouchers.json', '"pay-1"', 'lines[0]', 'currency "EUR"');
+  mentions(found, 'vouchers.json', '"pay-1"', 'lines[0]', 'currencyAmount must be a plain decimal string');
+  mentions(found, 'vouchers.json', '"pay-1"', 'lines[1]', 'category "projects" add up to 3999 but the line is 4000');
+  mentions(found, 'vouchers.json', '"pay-1"', 'extras.party "nobody"');
+});
+
+test('cost centres name an existing category; keys are unique; checkpoint dates are real; item components are items', () => {
+  const raw = good();
+  const files = costing() as Record<string, any>;
+  files['costCentres.json'].push({ key: 'online', name: 'Online again', category: 'elsewhere' });
+  files['costCategories.json'].push({ key: 'projects', name: 'Dup' });
+  files['currencies.json'].push({ code: 'USD', name: 'Dup' });
+  files['checkpoints.json'].dates['2026-02-30'] = {};
+  files['items.json'] = { items: [{ key: 'gate', name: 'Gate', extras: { billOfMaterials: [{ item: 'rod', quantity: '2' }] } }] };
+  raw.extraFiles = files;
+  const found = problems(raw);
+  mentions(found, 'costCentres.json', 'centre "online"', 'category "elsewhere"');
+  mentions(found, 'costCentres.json', 'cost centre "online"', 'more than once');
+  mentions(found, 'costCategories.json', 'cost category "projects"', 'more than once');
+  mentions(found, 'currencies.json', 'currency "USD"', 'more than once');
+  mentions(found, 'checkpoints.json', 'dates "2026-02-30"', 'not a real date');
+  mentions(found, 'items.json', 'item "gate"', 'billOfMaterials names "rod"');
+  const shape = good();
+  shape.extraFiles = { 'costCentres.json': [{ key: 'x', name: 'X' }], 'currencies.json': [{ code: 'usd', name: 'x', rates: [{ kind: 'standard', date: '2026-01-01', rate: '3,6' }] }] };
+  const shapeFound = problems(shape);
+  mentions(shapeFound, 'costCentres.json', 'category');
+  mentions(shapeFound, 'currencies.json', 'three-letter currency code');
+});
+
+test('expected exchange differences are amounts that fit the currency, and the new blocks are named with their reason', () => {
+  const raw = good();
+  raw.expected.exchangeDifferences = { realised: { amount: '1.50', side: 'Dr' }, unrealised: { amount: '3.005', side: 'Dr' } };
+  mentions(problems(raw), 'expected.json', 'exchangeDifferences.unrealised', '"3.005"');
+  assert.deepEqual(notComparable({ ...good().expected, outstanding: {}, costCentres: {}, exchangeDifferences: {}, balanceSheet: { total: '1.00', unrealisedExchangeDifference: '1.00' } }), [
+    'outstanding (needs pending bills (bill-wise tracking), which ten98-books does not have yet)',
+    'costCentres (needs cost centres, which ten98-books does not model yet)',
+    'exchangeDifferences (needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately)',
+  ]);
+});
+
+test('the skipped-feature summary counts bills, cost centres, foreign currencies and bank details, and words the new files', () => {
+  const raw = good();
+  raw.extraFiles = costing();
+  raw.vouchers[0].lines[0].extras = { costCentres: [{ centre: 'online', amount: '40.00' }, { centre: 'p-north', amount: '40.00' }], currency: 'USD', currencyAmount: '10.89', rate: '3.6725', bank: { instrumentType: 'Cheque' } };
+  raw.vouchers[0].lines[1].extras = { bills: [{ kind: 'new', name: 'A-1', amount: '40.00' }], currency: 'USD', currencyAmount: '10.89', rate: '3.6725' };
+  const lines = unmodelled(parseDataset(raw, 'demo/sample-shop'));
+  for (const expectedLine of [
+    'vouchers.json: bill-wise allocations on 1 voucher line(s) (bills are not tracked)',
+    'vouchers.json: cost centre allocations on 1 voucher line(s) (cost centres are not modelled)',
+    'vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled',
+    'vouchers.json: bank details (instrument and bank date) on 1 voucher line(s) (not modelled)',
+    'costCategories.json: cost categories not yet supported (2)', 'costCentres.json: cost centres not yet supported (3 centre(s))',
+    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures kept as they are (not compared)',
+  ]) assert.ok(lines.includes(expectedLine), expectedLine + '\n' + lines.join('\n'));
 });

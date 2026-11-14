@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { formatMoney, subtractMoney } from '@ten98/runtime';
 import { compareDataset, formatCompareResult } from '../src/server/demo/compare.ts';
-import { demoRoot, dispositionOf, loadDataset, toMinor } from '../src/server/demo/dataset.ts';
+import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
- * The two large companies (319 vouchers each, with orders, stock journals, cancelled entries, a refused journal, opening
- * stock and 30 vouchers after the compared period) seeded as books_app and compared with their expected.json.
+ * The four large companies (gulfline and najd: 319 vouchers each with orders, stock journals, cancelled entries and
+ * opening stock; harbourview: bills, cost centres, foreign currencies; sunrise: item invoices, bills of materials,
+ * manufacturing stock journals) seeded as books_app and compared with their expected.json.
  *
- * Findings are asserted, not hidden: expected.json lists 16 party, bank, loan, provision and tax ledgers at 0.00 although
- * the dataset's own vouchers move them, and gives the profit and loss figure excluding stock without its loss sign. If
- * the analyst corrects expected.json these assertions fail on purpose: shrink the list then.
+ * Every remaining difference is asserted by name, not hidden, so a change in the data or the tools fails here on purpose.
+ * Journals may use cash and bank ledgers and numbers restart each financial year, so no comparable line differs; the
+ * numbers that differ are all shifted by vouchers cancelled without lines, which ten98-books cannot post yet.
  */
 let database: TestDatabase;
 let owner: Member & { workspaceId: string };
@@ -25,84 +25,78 @@ before(async () => {
 });
 after(async () => { await database?.drop(); });
 
-for (const slug of ['gulfline', 'najd']) {
-  test(`${slug}: seeds its postable vouchers, reports every skip, runs again without change, and its comparable lines agree apart from the findings`, async t => {
-    const dataset = await loadDataset(join(demoRoot, slug));
+type Expectation = {
+  slug: string; created: number; unsupported: Record<string, number>; noEntries: Record<string, number>;
+  numbers: { checked: number; matched: number }; counts: [matches: number, differences: number, pending: number]; differs: string[];
+};
+const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 };
+const expectations: Expectation[] = [
+  { slug: 'gulfline', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [60, 0, 1], differs: [] },
+  { slug: 'najd', created: 301, unsupported: tradingUnsupported, noEntries: { journal: 2 }, numbers: { checked: 300, matched: 298 }, counts: [60, 0, 1], differs: [] },
+  // 93 harbourview numbers are shifted by four sales, receipt and payment vouchers cancelled without lines.
+  { slug: 'harbourview', created: 188, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: { receipt: 2, sales: 1, payment: 1 }, numbers: { checked: 185, matched: 92 }, counts: [38, 0, 8], differs: [] },
+  { slug: 'sunrise', created: 214, unsupported: { stock_journal: 36, sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: { journal: 1, receipt: 1 },
+    numbers: { checked: 212, matched: 198 }, counts: [44, 0, 1], differs: [] },
+];
+
+for (const expectation of expectations) {
+  test(`${expectation.slug}: seeds its postable vouchers, reports every skip, runs again without change, and compares apart from the named differences`, async t => {
+    const dataset = await loadDataset(join(demoRoot, expectation.slug));
     let started = Date.now();
     const first = await seedDataset(owner.userId, dataset);
     t.diagnostic(`first seed of ${dataset.vouchers.length} vouchers: ${Date.now() - started} ms`);
     assert.equal(first.companyCreated, true);
-    assert.deepEqual(first.vouchers, { created: 301, present: 0, cancelled: 0 });
-    assert.deepEqual(first.unsupportedTypes, { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 });
-    assert.deepEqual(first.noEntries, { journal: 2 }, 'the two cancelled journals without lines');
-    assert.deepEqual(first.refused, [], 'a journal may use a bank ledger, so the optional journal-001 posts');
-    assert.deepEqual(first.numbers, { checked: 300, matched: 298, unnumbered: 0, kind: 'confirmed against the reference' });
-    // Numbers restart each financial year (D-04 as amended), so the only two that differ are the journals shifted by the
-    // two cancelled journals without lines.
-    assert.equal(first.numberDifferences.length, 2);
-    assert.equal(first.numberDifferences.filter(line => line.includes('which accounts for the whole difference')).length, 2);
-    assert.ok(first.skipped.some(line => line.startsWith('items.json: stock not yet supported (14 item(s), 3 location(s); opening stock worth 369440.00')));
+    assert.deepEqual(first.vouchers, { created: expectation.created, present: 0, cancelled: 0 });
+    assert.deepEqual(first.unsupportedTypes, expectation.unsupported);
+    assert.deepEqual(first.noEntries, expectation.noEntries);
+    assert.deepEqual(first.refused, [], 'a journal may use cash and bank ledgers, so nothing is refused');
+    assert.deepEqual(first.numbers, { ...expectation.numbers, unnumbered: 0, kind: 'confirmed against the reference' });
+    assert.ok(first.skipped.some(line => line.includes('not yet supported') || line.includes('not modelled')));
 
     started = Date.now();
     const again = await seedDataset(owner.userId, dataset);
     t.diagnostic(`second seed (nothing to do): ${Date.now() - started} ms`);
-    assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: 301, cancelled: 0 }, 0, 0]);
+    assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: expectation.created, cancelled: 0 }, 0, 0]);
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
+    assert.ok(first.numberDifferences.every(line => line.includes('which accounts for the whole difference')), 'every differing number is shifted by vouchers cancelled without lines');
 
     const result = await compareDataset(owner.userId, dataset);
     t.diagnostic(`${result.lines.length} lines compared: ${result.matches} match, ${result.differences} differ, ${result.pending} not yet comparable`);
     const text = formatCompareResult(result).join('\n');
-    // Three groups, every line in one: the 16 ledgers expected.json lists at zero (its own totals need their balances) are
-    // not yet comparable with the reason; only the sign of the net profit differs.
-    const placeholders = result.lines.filter(line => line.reason && line.block === 'Trial balance');
-    assert.equal(placeholders.length, 16, text);
-    assert.ok(placeholders.every(line => line.block === 'Trial balance' && line.expected === '0.00' && line.reason!.includes('its own totals need their balances')));
-    const findings = result.lines.filter(line => !line.ok && !line.reason);
-    assert.deepEqual(findings.map(line => line.label).sort(), ['Net profit (excluding stock)'], text);
-    assert.deepEqual([result.matches, result.differences, result.pending], [43, 1, 17]);
-    assert.match(text, /MATCHES \(43\)[^]*DIFFERS \(1\)[^]*NOT YET COMPARABLE \(17 line\(s\)/);
-    // Every number of the vouchers posted here equals the reference's, including the 28 that restart on 1 January 2027.
-    const numbers = result.lines.find(line => line.label.startsWith('Voucher numbers equal'))!;
-    assert.deepEqual([numbers.expected, numbers.actual, numbers.difference, numbers.ok], ['298', '298', '0', true]);
-    const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
-    assert.deepEqual([shifted.expected, shifted.ok, typeof shifted.reason], ['2', false, 'string']);
-    assert.ok(findings.find(line => line.label === 'Net profit (excluding stock)')!.note!.includes('opposite sign'));
-    const net = result.lines.find(line => line.label === 'Net profit (excluding stock)')!;
-    assert.deepEqual([net.expected, net.actual], ['52839.06', '-52839.06'], 'a loss, given without its sign');
-    const journals = result.lines.find(line => line.label === 'Vouchers of type journal')!;
-    assert.deepEqual([journals.expected, journals.actual, journals.ok], ['3', '3', true], 'the optional journal with a bank ledger is posted');
-
-    // Everything that carries a figure and is not one of those findings agrees exactly, totals and opening stock included.
-    const agreeing = result.lines.filter(line => line.ok).map(line => line.label);
-    for (const label of ['Total debit', 'Total credit', 'Opening-balance difference (equals the opening stock value)', 'Gross profit (excluding stock)', 'Vouchers of type sales', 'Vouchers of type purchase', 'Vouchers of type payment', 'Vouchers of type receipt']) {
-      assert.ok(agreeing.includes(label), label);
-    }
-    assert.ok(result.lines.filter(line => line.ok).length >= 25);
-    for (const name of ['stockSummary (needs inventory)', 'receivables (needs bill-wise receivables, which ten98-books does not track yet)']) assert.ok(result.notComparable.includes(name), name);
-    assert.equal(result.notComparable.some(line => line.startsWith('vat (')), slug === 'najd');
-
-    // The app's figure for each placeholder ledger is what the dataset's own vouchers add up to: opening balance plus
-    // every regular voucher with lines up to the period's end.
-    const exponent = dataset.company.minorUnits;
-    const totals = new Map<string, bigint>();
-    for (const ledger of dataset.ledgers) {
-      const opening = ledger.opening ? toMinor(ledger.opening.amount, exponent) : 0n;
-      totals.set(ledger.name, ledger.opening?.side === 'Cr' ? subtractMoney(0n, opening) : opening);
-    }
-    const nameOf = new Map(dataset.ledgers.map(ledger => [ledger.key, ledger.name]));
-    for (const voucher of dataset.vouchers) {
-      if (voucher.status !== 'regular' || dispositionOf(voucher) !== 'post' || voucher.date > dataset.expected.period.to) continue;
-      for (const line of voucher.lines) {
-        const name = nameOf.get(line.ledger)!;
-        const amount = toMinor(line.amount, exponent);
-        totals.set(name, line.side === 'Dr' ? totals.get(name)! + amount : subtractMoney(totals.get(name)!, amount));
-      }
-    }
-    for (const line of placeholders) {
-      const name = line.label.replace('Closing balance of ', '');
-      const sum = totals.get(name)!;
-      const shown = sum === 0n ? formatMoney(0n, exponent) : `${formatMoney(sum < 0n ? subtractMoney(0n, sum) : sum, exponent)} ${sum < 0n ? 'Cr' : 'Dr'}`;
-      assert.equal(line.actual, shown, `${name} follows from the dataset's vouchers`);
-    }
+    assert.deepEqual([result.matches, result.differences, result.pending], expectation.counts, text);
+    assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(), expectation.differs, text);
+    assert.equal(result.lines.find(line => line.label === 'Vouchers of type journal')!.ok, true, 'every journal is posted');
+    assert.match(text, /MATCHES \(\d+\)[^]*DIFFERS \(\d+\)[^]*NOT YET COMPARABLE \(\d+ line\(s\)/);
+    assert.ok(result.notComparable.some(line => line.startsWith('voucher types ten98-books does not have, left out of the voucher counts')));
   });
 }
+
+test('gulfline and najd: the 16 closings per company that were once recorded as zero are compared and match, and so is the loss', async () => {
+  for (const slug of ['gulfline', 'najd']) {
+    const result = await compareDataset(owner.userId, await loadDataset(join(demoRoot, slug)));
+    const ledgers = result.lines.filter(line => line.block === 'Trial balance' && line.label.startsWith('Closing balance of'));
+    assert.equal(ledgers.length, 46, slug);
+    assert.ok(ledgers.every(line => line.ok), `${slug}: ${ledgers.filter(line => !line.ok).map(line => line.label).join(', ')}`);
+    assert.equal(ledgers.filter(line => line.expected !== '0.00').length, 31, 'the 16 formerly zero ledgers and the 15 others are all compared with a real figure');
+    const net = result.lines.find(line => line.label === 'Net profit (excluding stock)')!;
+    assert.deepEqual([net.expected, net.actual, net.ok], ['-52839.06', '-52839.06', true]);
+    assert.equal(result.lines.filter(line => line.reason).length, 1, 'only the shifted numbers are not yet comparable');
+  }
+});
+
+test('harbourview: the foreign-currency ledgers and the totals differ from expected by exactly the reference\'s restatement and its unrealised row, so they are not yet comparable', async () => {
+  const result = await compareDataset(owner.userId, await loadDataset(join(demoRoot, 'harbourview')));
+  const pending = Object.fromEntries(result.lines.filter(line => line.reason && line.block !== 'Voucher numbers').map(line => [line.label, [line.expected, line.actual]]));
+  assert.deepEqual(pending, {
+    'Total debit': ['587116.25', '586846.25'], 'Total credit': ['587116.25', '586846.25'],
+    'Closing balance of Creditor G Overseas': ['15120.00 Cr', '14850.00 Cr'], 'Closing balance of Debtor F Overseas': ['60555.00 Dr', '60663.75 Dr'],
+    'Unrealised exchange-difference row (a separate row in the expected trial balance)': ['378.75 Dr', 'not computed'],
+    'Total capital and liabilities': ['318012.75', '317742.75'], 'Total assets': ['318012.75', '317742.75'],
+  });
+  const reason = result.lines.find(line => line.label === 'Total debit')!.reason!;
+  assert.match(reason, /Expected total debit 587116\.25 = app 586846\.25 \+ restated ledgers -108\.75 \+ the row 378\.75; expected total credit 587116\.25 = app 586846\.25 \+ restated ledgers 270\.00 \+ the row 0\.00\. Without the row the expected totals would be 586737\.50 and 587116\.25, which do not balance/);
+  // The realised difference is an ordinary ledger and is compared (it matches).
+  const forex = result.lines.find(line => line.label === 'Closing balance of Forex Gain and Loss')!;
+  assert.deepEqual([forex.expected, forex.actual, forex.ok], ['354.00 Dr', '354.00 Dr', true]);
+  for (const block of ['outstanding', 'costCentres', 'exchangeDifferences']) assert.ok(result.notComparable.some(line => line.startsWith(`${block} (`)), block);
+});

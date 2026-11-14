@@ -1,0 +1,208 @@
+{
+  "units": [
+    {
+      "key": "nos",
+      "name": "Nos"
+    },
+    {
+      "key": "kg",
+      "name": "Kg",
+      "decimals": 1
+    },
+    {
+      "key": "mtr",
+      "name": "Mtr"
+    },
+    {
+      "key": "ltr",
+      "name": "Ltr",
+      "decimals": 1
+    }
+  ],
+  "locations": [
+    {
+      "key": "raw-store",
+      "name": "Raw Store"
+    },
+    {
+      "key": "workshop",
+      "name": "Workshop"
+    },
+    {
+      "key": "finished-goods-store",
+      "name": "Finished Goods Store"
+    }
+  ],
+  "stockGroups": [
+    {
+      "key": "raw-materials",
+      "name": "Raw Materials"
+    },
+    {
+      "key": "finished-goods",
+      "name": "Finished Goods"
+    }
+  ],
+  "items": [
+    {
+      "key": "steel-sheet-2mm",
+      "name": "Steel Sheet 2mm",
+      "group": "raw-materials",
+      "unit": "Kg",
+      "opening": [
+        {
+          "location": "raw-store",
+          "quantity": "4000",
+          "rate": "4.20"
+        }
+      ]
+    },
+    {
+      "key": "steel-rod-12mm",
+      "name": "Steel Rod 12mm",
+      "group": "raw-materials",
+      "unit": "Mtr",
+      "opening": [
+        {
+          "location": "raw-store",
+          "quantity": "1500",
+          "rate": "6.50"
+        }
+      ]
+    },
+    {
+      "key": "paint-grey",
+      "name": "Paint Grey",
+      "group": "raw-materials",
+      "unit": "Ltr",
+      "opening": [
+        {
+          "location": "raw-store",
+          "quantity": "300",
+          "rate": "18.00"
+        }
+      ]
+    },
+    {
+      "key": "hinges",
+      "name": "Hinges",
+      "group": "raw-materials",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "raw-store",
+          "quantity": "800",
+          "rate": "2.40"
+        }
+      ]
+    },
+    {
+      "key": "welding-wire",
+      "name": "Welding Wire",
+      "group": "raw-materials",
+      "unit": "Kg",
+      "opening": [
+        {
+          "location": "raw-store",
+          "quantity": "150",
+          "rate": "9.00"
+        }
+      ]
+    },
+    {
+      "key": "steel-cabinet",
+      "name": "Steel Cabinet",
+      "group": "finished-goods",
+      "unit": "Nos",
+      "opening": [
+        {
+          "location": "finished-goods-store",
+          "quantity": "10",
+          "rate": "205.00"
+        }
+      ],
+      "extras": {
+        "billOfMaterials": [
+          {
+            "item": "steel-sheet-2mm",
+            "quantity": "40"
+          },
+          {
+            "item": "paint-grey",
+            "quantity": "1.5"
+          },
+          {
+            "item": "hinges",
+            "quantity": "4"
+          },
+          {
+            "item": "welding-wire",
+            "quantity": "0.5"
+          }
+        ],
+        "standardPrice": "340.00"
+      }
+    },
+    {
+      "key": "metal-gate",
+      "name": "Metal Gate",
+      "group": "finished-goods",
+      "unit": "Nos",
+      "opening": [],
+      "extras": {
+        "billOfMaterials": [
+          {
+            "item": "steel-rod-12mm",
+            "quantity": "30"
+          },
+          {
+            "item": "steel-sheet-2mm",
+            "quantity": "12"
+          },
+          {
+            "item": "paint-grey",
+            "quantity": "2"
+          },
+          {
+            "item": "hinges",
+            "quantity": "3"
+          },
+          {
+            "item": "welding-wire",
+            "quantity": "1.2"
+          }
+        ],
+        "standardPrice": "850.00"
+      }
+    },
+    {
+      "key": "work-table",
+      "name": "Work Table",
+      "group": "finished-goods",
+      "unit": "Nos",
+      "opening": [],
+      "extras": {
+        "billOfMaterials": [
+          {
+            "item": "steel-rod-12mm",
+            "quantity": "12"
+          },
+          {
+            "item": "steel-sheet-2mm",
+            "quantity": "18"
+          },
+          {
+            "item": "paint-grey",
+            "quantity": "0.8"
+          },
+          {
+            "item": "welding-wire",
+            "quantity": "0.6"
+          }
+        ],
+        "standardPrice": "430.00"
+      }
+    }
+  ],
+  "note": "opening stock per location: quantity x rate; opening stock value is not a ledger balance; finished goods carry their bill of materials in extras.billOfMaterials"
+}

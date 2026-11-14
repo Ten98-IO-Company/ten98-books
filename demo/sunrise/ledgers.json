@@ -1,0 +1,274 @@
+[
+  {
+    "key": "cash",
+    "name": "Cash",
+    "standard": "cash"
+  },
+  {
+    "key": "profit-and-loss",
+    "name": "Profit and Loss",
+    "standard": "profit_and_loss"
+  },
+  {
+    "key": "alpha-builders-llc",
+    "name": "Alpha Builders LLC",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "desert-contractors",
+    "name": "Desert Contractors",
+    "group": "receivables",
+    "opening": {
+      "amount": "18400.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "billWise": true,
+      "creditDays": 45,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates",
+      "opening": {
+        "bills": [
+          {
+            "kind": "new",
+            "name": "OB-DC-1",
+            "billDate": "2025-12-12",
+            "creditDays": 45,
+            "amount": "18400.00",
+            "side": "Dr"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "key": "marina-interiors",
+    "name": "Marina Interiors",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "palm-joinery-co",
+    "name": "Palm Joinery Co",
+    "group": "receivables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "address": [
+        "Dubai, United Arab Emirates"
+      ],
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "ironvale-trading",
+    "name": "Ironvale Trading",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 45,
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "hueworks-paints",
+    "name": "Hueworks Paints",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "fastener-house",
+    "name": "Fastener House",
+    "group": "payables",
+    "extras": {
+      "billWise": true,
+      "creditDays": 30,
+      "country": "United Arab Emirates"
+    }
+  },
+  {
+    "key": "amber-dune-bank-current",
+    "name": "Amber Dune Bank - Current",
+    "group": "bank_accounts",
+    "opening": {
+      "amount": "180000.00",
+      "side": "Dr"
+    },
+    "extras": {
+      "bank": {
+        "accountNumber": "AE000000000000000000004",
+        "bankName": "Amber Dune Commercial Bank (UAE)"
+      }
+    }
+  },
+  {
+    "key": "petty-cash-workshop",
+    "name": "Petty Cash - Workshop",
+    "group": "cash_in_hand",
+    "opening": {
+      "amount": "4000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "machinery",
+    "name": "Machinery",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "260000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "workshop-tools",
+    "name": "Workshop Tools",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "35000.00",
+      "side": "Dr"
+    }
+  },
+  {
+    "key": "accumulated-depreciation",
+    "name": "Accumulated Depreciation",
+    "group": "fixed_assets",
+    "opening": {
+      "amount": "60000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "term-loan",
+    "name": "Term Loan - Amber Dune Bank",
+    "group": "secured_loans",
+    "opening": {
+      "amount": "150000.00",
+      "side": "Cr"
+    }
+  },
+  {
+    "key": "sales-products",
+    "name": "Sales - Products",
+    "group": "sales"
+  },
+  {
+    "key": "sales-job-work",
+    "name": "Sales - Job Work",
+    "group": "sales",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "purchases-raw-materials",
+    "name": "Purchases - Raw Materials",
+    "group": "purchases"
+  },
+  {
+    "key": "freight-inward",
+    "name": "Freight Inward",
+    "group": "direct_expenses",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "wages",
+    "name": "Wages - Workshop",
+    "group": "direct_expenses",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "factory-rent",
+    "name": "Factory Rent",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "electricity",
+    "name": "Electricity",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "repairs",
+    "name": "Repairs and Maintenance",
+    "group": "indirect_expenses",
+    "extras": {
+      "costCentres": true
+    }
+  },
+  {
+    "key": "office-salaries",
+    "name": "Office Salaries",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "bank-charges",
+    "name": "Bank Charges",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "depreciation",
+    "name": "Depreciation",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "loan-interest",
+    "name": "Loan Interest",
+    "group": "indirect_expenses"
+  },
+  {
+    "key": "vat-output-5",
+    "name": "VAT Output 5%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others",
+      "taxRate": "5"
+    }
+  },
+  {
+    "key": "vat-input-5",
+    "name": "VAT Input 5%",
+    "group": "duties_taxes",
+    "extras": {
+      "taxType": "Others",
+      "taxRate": "5"
+    }
+  },
+  {
+    "key": "accrued-expenses",
+    "name": "Accrued Expenses",
+    "group": "current_liabilities"
+  },
+  {
+    "key": "share-capital",
+    "name": "Share Capital",
+    "group": "capital",
+    "opening": {
+      "amount": "324670.00",
+      "side": "Cr"
+    }
+  }
+]

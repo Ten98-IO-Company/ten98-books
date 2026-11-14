@@ -31,7 +31,7 @@ export type CompareResult = {
 
 const comparable = { top: ['period', 'numbersVerified', 'voucherCount', 'vouchersByType', 'trialBalance', 'profitAndLoss', 'balanceSheet'],
   trialBalance: ['totalDebit', 'totalCredit', 'ledgers'],
-  profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets'] };
+  profitAndLoss: ['grossProfit', 'netProfit', 'grossProfitExcludingStock', 'netProfitExcludingStock'], balanceSheet: ['total', 'closingStockInAssets', 'unrealisedExchangeDifference'] };
 
 /** Keys that only describe where a figure came from (report names, notes); they carry no figure, so they are not listed. */
 const annotations = ['source', 'voucherCountNote', 'report', 'note'];
@@ -42,6 +42,9 @@ const blockReasons: Record<string, string> = {
   receivables: 'needs bill-wise receivables, which ten98-books does not track yet',
   payables: 'needs bill-wise payables, which ten98-books does not track yet',
   vat: 'needs the VAT return, which ten98-books does not compute yet',
+  outstanding: 'needs pending bills (bill-wise tracking), which ten98-books does not have yet',
+  costCentres: 'needs cost centres, which ten98-books does not model yet',
+  exchangeDifferences: 'needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately',
 };
 
 /** Blocks and fields of expected.json that the comparison does not read, named with their reason. */
@@ -61,6 +64,8 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
   const { from, to } = expected.period;
   const lines: CompareLine[] = [];
   const skipped = notComparable(expected);
+
+  let restatement: { restated: { name: string; nature: string | null; wanted: bigint; actual: bigint; line: CompareLine }[]; unrealDr: bigint; unrealCr: bigint; reason: string } | undefined;
 
   await withCompany(userId, company.id, 'read', async (client, access) => {
     const context = await ledgerContext(client, access.companyId, userId, 'read');
@@ -157,6 +162,8 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         stored.find(item => entry.standard ? item.systemKey === entry.standard : item.name.toLowerCase() === entry.name.toLowerCase());
       const matched = new Set<string>();
       const zeroed: { line: CompareLine; actual: bigint }[] = [];
+      const foreignCodes = new Set(dataset.vouchers.flatMap(voucher => voucher.lines.filter(line => typeof (line.extras as { currency?: unknown } | undefined)?.currency === 'string').map(line => line.ledger)));
+      const foreign: { name: string; nature: string | null; wanted: bigint; actual: bigint; line: CompareLine }[] = [];
       for (const [key, figure] of Object.entries(trial.ledgers)) {
         const entry = dataset.ledgers.find(ledger => ledger.key === key)!;
         const ledger = appLedger(entry);
@@ -169,6 +176,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         const difference = subtractMoney(actual, wanted);
         push('Trial balance', label, balance(wanted), balance(actual), balance(difference), difference === 0n);
         if (wanted === 0n && actual !== 0n) zeroed.push({ line: lines[lines.length - 1], actual });
+        if (foreignCodes.has(key)) foreign.push({ name: entry.name, nature: ledger.nature, wanted, actual, line: lines[lines.length - 1] });
       }
       // A ledger listed at zero that the app holds a balance on. If the file's own totals are reached only with those
       // balances (its listed closings, the opening-balance difference and the app's figures for exactly these ledgers add
@@ -185,6 +193,34 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
           const reason = `expected.json lists these ${zeroed.length} ledger(s) at zero, but its own totals need their balances: the listed closings, the opening-balance difference and the app's balances for exactly these ledgers add up to its total debit ${trial.totalDebit} and total credit ${trial.totalCredit}; their per-ledger closings are missing from the file`;
           for (const { line } of zeroed) line.reason = reason;
         }
+      }
+      // Foreign-currency ledgers: the reference restates them at the year-end rates and adds a separate row for the
+      // unrealised difference; ten98-books posts the base amounts and has neither. When the totals reconcile to the cent
+      // with exactly that (restated ledgers plus the row), the lines it explains are not yet comparable, with the
+      // arithmetic as the reason; otherwise they stay differences.
+      const unrealised = expected.exchangeDifferences?.unrealised;
+      if (unrealised) {
+        const unrealisedAmount = toMinor(unrealised.amount, exponent);
+        const [unrealDr, unrealCr] = unrealised.side === 'Dr' ? [unrealisedAmount, 0n] : [0n, unrealisedAmount];
+        const sides = (signed: bigint) => signed > 0n ? [signed, 0n] : [0n, subtractMoney(0n, signed)];
+        let [restDr, restCr] = [0n, 0n];
+        for (const item of foreign) {
+          const [wantedDr, wantedCr] = sides(item.wanted), [actualDr, actualCr] = sides(item.actual);
+          restDr = addMoney(restDr, subtractMoney(wantedDr, actualDr));
+          restCr = addMoney(restCr, subtractMoney(wantedCr, actualCr));
+        }
+        const [wantedDr, wantedCr] = [toMinor(trial.totalDebit, exponent), toMinor(trial.totalCredit, exponent)];
+        const [appDr, appCr] = [report.grandTotals.closingDebit, report.grandTotals.closingCredit];
+        const reconciled = wantedDr === addMoney(addMoney(appDr, restDr), unrealDr) && wantedCr === addMoney(addMoney(appCr, restCr), unrealCr);
+        const row = `${money(unrealisedAmount)} ${unrealised.side}`;
+        const reason = reconciled
+          ? `the reference restates its foreign-currency ledgers (${foreign.filter(item => item.wanted !== item.actual).map(item => item.name).join(', ')}) at the year-end rates and adds a separate trial-balance row of ${row} for the unrealised difference; ten98-books posts base-currency amounts only. Expected total debit ${trial.totalDebit} = app ${money(appDr)} + restated ledgers ${money(restDr)} + the row ${money(unrealDr)}; expected total credit ${trial.totalCredit} = app ${money(appCr)} + restated ledgers ${money(restCr)} + the row ${money(unrealCr)}. Without the row the expected totals would be ${money(subtractMoney(wantedDr, unrealDr))} and ${money(subtractMoney(wantedCr, unrealCr))}, which do not balance: the row only makes sense together with the restated ledgers`
+          : `ten98-books does not compute unrealised exchange differences; the totals could not be reconciled with this row (expected total debit ${trial.totalDebit} and credit ${trial.totalCredit}, app ${money(appDr)} and ${money(appCr)})`;
+        if (reconciled) {
+          restatement = { restated: foreign, unrealDr, unrealCr, reason };
+          for (const line of lines) if (!line.ok && !line.reason && (line.label === 'Total debit' || line.label === 'Total credit' || foreign.some(item => item.line === line))) line.reason = reason;
+        }
+        lines.push({ block: 'Trial balance', label: 'Unrealised exchange-difference row (a separate row in the expected trial balance)', expected: row, actual: 'not computed', difference: 'n/a', ok: false, reason });
       }
       // Ledgers expected.json does not list: a dataset ledger missing from the app, or any ledger of the app with a
       // balance, is a difference; a zero closing is not, but it is named rather than skipped.
@@ -231,6 +267,16 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         const report = await balanceSheetReport(context, { date: to });
         amount('Balance sheet', 'Total capital and liabilities', expected.balanceSheet.total, report.totals.liabilities);
         amount('Balance sheet', 'Total assets', expected.balanceSheet.total, report.totals.assets);
+        if (restatement) {
+          // The same restatement, read as balance sheet sides: restated liabilities on the liabilities side; restated assets and
+          // the unrealised row on the assets side.
+          const net = (item: { wanted: bigint; actual: bigint }, credit: boolean) => credit ? subtractMoney(item.actual, item.wanted) : subtractMoney(item.wanted, item.actual);
+          const effect = (nature: string) => restatement!.restated.filter(item => item.nature === nature).reduce((sum, item) => addMoney(sum, net(item, nature === 'liability')), 0n);
+          const wanted = toMinor(expected.balanceSheet.total, exponent);
+          const [liabilities, assets] = lines.slice(-2);
+          if (!liabilities.ok && wanted === addMoney(report.totals.liabilities, addMoney(effect('liability'), restatement.unrealCr))) liabilities.reason = restatement.reason;
+          if (!assets.ok && wanted === addMoney(report.totals.assets, addMoney(effect('asset'), restatement.unrealDr))) assets.reason = restatement.reason;
+        }
       }
     }
   }).catch(error => {

@@ -201,7 +201,7 @@
     },
     "extras": {
       "bank": {
-        "accountNumber": "SA0380000000608010167519",
+        "accountNumber": "SA0000000000000000000001",
         "bankName": "Tuwaiq Plains Bank (Saudi Arabia)"
       }
     }
@@ -216,7 +216,7 @@
     },
     "extras": {
       "bank": {
-        "accountNumber": "SA4420000001234567891234",
+        "accountNumber": "SA0000000000000000000002",
         "bankName": "Dune Crest Savings (Saudi Arabia)"
       }
     }
