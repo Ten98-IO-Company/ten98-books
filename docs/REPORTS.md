@@ -71,7 +71,7 @@ A company that holds opening stock (any `stock_opening` row, [LEDGER.md](LEDGER.
 - **Balance sheet.** "Closing stock" first in current assets at the same value; the answer carries `closingStock`. Both sides agree with stock in them.
 - A company without opening rows has none of these lines (`stock` and `closingStock` are null, `openingStock` is null).
 - Verified by `tests/stock-statements.integration.ts` on a fixture of its own (full years, February of the first year and February of the second); the demo figures follow with the demo seeder.
-- **Not built.** Valuation (average cost and FIFO per location), the stock summary and the stock reports, the stock change in later periods' profit and loss row, and `demo:compare`'s stock lines (slice c). The trial balance screen opens a ledger's monthly summary for any line that is not a group, so Enter on the stock row reaches no ledger; the screen change is outside this slice.
+- **Not built.** Valuation (average cost and FIFO per location), the stock summary and the stock reports, the stock change in later periods' profit and loss row, and `demo:compare`'s stock lines (slice c). On the trial balance screen the stock row is not openable, and the profit and loss and balance sheet screens open nothing for a line without a target. The group summary screen still opens a ledger's monthly summary for any row that is not a group, so Enter on the stock row of current assets reaches no ledger ("not found"); that screen change is not made yet.
 
 ## Drill-down and screens
 
