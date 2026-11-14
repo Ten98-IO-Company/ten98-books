@@ -60,7 +60,8 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const deleteReason = existing ? ledgerDeleteReason(existing) : null
   const group = groups.find(item => item.id === values.groupId)
   const side = effectiveSide(values, groups)
-  const dirty = JSON.stringify(values) !== JSON.stringify(initial.current)
+  // A new entry is dirty once something is typed (the kept group after a save is not an edit); an alter once it differs.
+  const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
   async function save() {
@@ -110,7 +111,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   }
 
   useEntryCommands({
-    form, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
+    form, readOnly, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/ledger/$ledgerId', params: { companyId: company.id, ledgerId: existing.id } }) : undefined,
   })

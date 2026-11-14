@@ -1,8 +1,9 @@
-import { Alert, Badge, Button, Inline, PageHeader, Stack, Text } from '@ten98/ui'
+import { Alert, Badge, Button, Inline, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 import { useApp, useCompany } from '../../lib/app-context'
 import { groupPath, type GroupRow, type LedgerRow, isolate } from '../../lib/masters'
+import { takeFlash } from './flash'
 import { ListScope, MasterList, type ListEntry } from './MasterList'
 import { useMasterData } from './useMasterData'
 
@@ -49,6 +50,7 @@ function PickerBody() {
   const navigate = useNavigate()
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   const [query, setQuery] = useState('')
+  const [message] = useState(takeFlash)
   const [active, setActive] = useState<string | null>(null)
   const candidates = useMemo<Candidate[]>(() => groups && ledgers ? [
     ...groups.map((group: GroupRow) => ({ key: `group:${group.id}`, kind: 'group' as const, id: group.id, name: group.name, second: group.secondLanguageName, builtIn: group.systemKey !== null,
@@ -80,6 +82,7 @@ function PickerBody() {
   }
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title='Alter a master' description='Type to filter by name, move with the arrow keys, then press Enter to open the highlighted group or ledger.' />
+    {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
     <Text aria-live='polite'>{query ? `Filter: ${query} · ${shown.length} ${shown.length === 1 ? 'match' : 'matches'}` : 'Type to filter. Backspace edits the filter and Escape clears it.'}</Text>
     {groups && ledgers && <MasterList label='Groups and ledgers' entries={entries} active={current?.key ?? null} onActiveChange={setActive} onOpen={open}

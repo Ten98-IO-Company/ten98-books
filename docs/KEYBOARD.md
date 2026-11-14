@@ -10,8 +10,8 @@ A command belongs to one context. Contexts nest, and while an inner context is a
 |---|---|---|
 | Everywhere (`global`) | Every signed-in page | the application scope |
 | Company menu (`company-home`) | Only while the company menu has focus | `ShortcutScope activation='focus'` |
-| Lists (`list`) | While a list screen is mounted | a mounted `ShortcutScope` (no screen yet) |
-| Entry screens (`entry`) | While an entry screen is mounted | a mounted `ShortcutScope` (no screen yet) |
+| Lists (`list`) | While a list screen is mounted | a mounted `ShortcutScope` (the masters screens) |
+| Entry screens (`entry`) | While an entry screen is mounted | a mounted `ShortcutScope` (the masters forms) |
 
 The one intended overlap: Escape on an entry screen is `entry.cancel`, not `nav.back`.
 
@@ -50,7 +50,29 @@ The one intended overlap: Escape on an entry screen is `entry.cancel`, not `nav.
 | `entry.voucher.sales` | Switch to a sales voucher | Entry screens | `Alt+L` | `F8` |
 | `entry.voucher.purchase` | Switch to a purchase voucher | Entry screens | `Alt+U` | `F9` |
 
-`Ctrl` is `Ctrl` on every platform here (the keymaps do not use `Mod`), and `Alt` is Option on Apple keyboards. `list.*` and `entry.*` are reserved for the masters, vouchers and reports screens; nothing registers them yet.
+`Ctrl` is `Ctrl` on every platform here (the keymaps do not use `Mod`), and `Alt` is Option on Apple keyboards. `list.*` and `entry.*` are used by the masters screens (next section); the vouchers and reports screens register them as they arrive.
+
+## Masters screens
+
+The chart of accounts, the create and alter forms and the history view register these commands (ids owned by the coordinator, defined in `src/lib/commands.ts`). The bar above each page shows the ones that apply right now: a command that does not apply (delete on a built-in row, anything that changes data for a viewer) is off and leaves the bar.
+
+| Id | Title | Context | Web-safe | Classic |
+|---|---|---|---|---|
+| `list.next`, `list.previous` | Highlight the next or previous row | Lists | `ArrowDown`, `ArrowUp` | same |
+| `list.first`, `list.last` | Highlight the first or last row | Lists | `Home`, `End` | same |
+| `list.open` | Open the highlighted row (alter it) | Lists | `Enter` | `Enter` |
+| `list.create` | Create (opens the choice of group or ledger) | Lists | `Alt+C` | `Alt+C` |
+| `list.delete` | Delete the highlighted row, after a confirmation | Lists | `Alt+X` | `Alt+D` |
+| `list.history` | Show the history of the highlighted row | Lists | `Alt+Y` | `Alt+Y` |
+| `entry.next-field` | Next field; after the last field, ask to save | Entry screens | `Enter` | `Enter` |
+| `entry.accept` | Save from anywhere in the form | Entry screens | `Ctrl+Enter` | `Ctrl+A`, `Ctrl+Enter` |
+| `entry.cancel` | Keep editing (while saving is being confirmed), otherwise leave one level; asks first when something was typed | Entry screens | `Escape` | `Escape` |
+| `entry.delete` | Delete this group or ledger, after a confirmation | Entry screens | `Alt+X` | `Alt+D` |
+| `entry.history` | Show the history of this group or ledger | Entry screens | `Alt+Y` | `Alt+Y` |
+
+- **Where the keys lead.** Company menu: `C` opens the chart of accounts, `N` the choice of what to create, `E` the alter list. Chart: arrows and Enter alter a row; `Alt+C` creates under the highlighted group; Escape returns to the company menu. Alter list (`/masters/edit`): typing filters (printable keys act only while the focused list has them, WCAG 2.1.4), Backspace edits the filter, Escape clears it before it leaves, Enter opens. Forms: Enter moves through the fields in a fixed order, Enter on the last field shows a Save panel with Save focused (Enter saves, Escape keeps editing), and after a create the form clears for the next entry with the group kept. A lookup with its list open keeps Enter for picking a row: type to filter, `ArrowDown` to the row, Enter to pick it, Enter again to move on.
+- **Lookups are text fields.** Every field of the forms is a text field or a lookup (Dr/Cr, nature and the gross-profit flag are lookups too), because the registry leaves Enter on selects and checkboxes to the element. The movement and entry commands `entry.next-field`, `entry.accept` and `entry.cancel` are registered with `allowInTextInput`, so they run from inside a field; `entry.cancel` does nothing while a lookup's list is open or a dialog is up.
+- **Unverified here:** `Alt+Y` (not in the `@ten98/ui` 0.37.0 reachability matrix, and Option+Y types a character on Apple keyboards, like the other web-safe `Alt+letter` chords above). Menu letters on non-Latin layouts and the platform overlay stay as listed under Open.
 
 ## Reports
 
@@ -95,5 +117,5 @@ Web-safe letters follow the existing convention of a letter from inside the word
 - Cross-browser key reachability (D-05) is not settled for this keymap. The `@ten98/ui` 0.37.0 reachability matrix covers F1–F10, F12, Enter, Escape, Ctrl+A, Ctrl+Enter, Ctrl+S, Ctrl+P, Alt+C, Alt+D, Alt+E, Alt+F, Alt+G and Ctrl+K in Chromium, Firefox and WebKit at the page level. Not yet measured in any engine: `Ctrl+/`, `Alt+K`, `Alt+X`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`, `Home`, `End` and the menu letters; not measured anywhere at the browser-window level (where the browser could take the key before the page): `F1`, `F3`, `F5`, `F6`, `Alt+D`, `Ctrl+A`. The keyboard-shell branch drove the home menu in one Chromium-based browser only.
 - Menu letters on non-Latin keyboard layouts: an Arabic layout sends a different character for the same physical key, so the letters do nothing there; the arrows and Enter still work. This needs the engine to match unmodified printable keys by physical key as it already does for modified ones; requested from the design system, no local workaround.
 - Coming back to the menu highlights the last item only when it was opened from the menu. Arriving any other way (sidebar, address bar, reload) highlights the first item.
-- Apple platforms: the web-safe `Alt+letter` chords for lists and entry screens (`Alt+C`, `Alt+X`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`) are Option+letter on macOS, which types characters and starts dead keys, so binding them would take those characters away from text fields. An Apple overlay waits on a registry change: `@ten98/ui` 0.37.0 has one keymap for every platform (only `Mod` varies), and per-platform keymap entries have been requested from the design system; the app does not detect the platform itself. No list or entry screen registers these chords yet, so nothing is affected today. They stay unverified on Apple until the overlay and the cross-browser reachability test exist.
+- Apple platforms: the web-safe `Alt+letter` chords for lists and entry screens (`Alt+C`, `Alt+X`, `Alt+O`, `Alt+P`, `Alt+I`, `Alt+J`, `Alt+L`, `Alt+U`) are Option+letter on macOS, which types characters and starts dead keys, so binding them would take those characters away from text fields. An Apple overlay waits on a registry change: `@ten98/ui` 0.37.0 has one keymap for every platform (only `Mod` varies), and per-platform keymap entries have been requested from the design system; the app does not detect the platform itself. The masters screens now register `Alt+C`, `Alt+X` and `Alt+Y`, so on Apple keyboards these take Option+letter characters (such as a dead key) away from their text fields until the overlay exists. They stay unverified on Apple until the overlay and the cross-browser reachability test exist.
 - `@ten98/ui` gaps noticed: `Dialog` has no initial-focus target, so the company picker opens with focus on its close button (one Tab reaches the list).

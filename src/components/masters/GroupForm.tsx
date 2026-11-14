@@ -51,7 +51,8 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const natureLock = existing ? natureLockReason(existing, groups, ledgers) : null
   const deleteReason = existing ? groupDeleteReason(existing, groups, ledgers) : null
   const fields = groupFields(values)
-  const dirty = JSON.stringify(values) !== JSON.stringify(initial.current)
+  // A new entry is dirty once something is typed (the kept parent after a save is not an edit); an alter once it differs.
+  const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
 
@@ -101,7 +102,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   }
 
   useEntryCommands({
-    form, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
+    form, readOnly, onLastField: () => void askToSave(), onAccept: () => void save(), onCancel: () => void cancel(),
     onDelete: existing && !readOnly && !deleteReason ? () => void remove() : undefined,
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/group/$groupId', params: { companyId: company.id, groupId: existing.id } }) : undefined,
   })

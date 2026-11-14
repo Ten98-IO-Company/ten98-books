@@ -1,6 +1,6 @@
 import { Alert, Button, ShortcutScope } from '@ten98/ui'
 import { useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
-import { useCallback, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
@@ -50,6 +50,8 @@ export function useEntryCommands(options: {
   onCancel: () => void
   onDelete?: () => void
   onHistory?: () => void
+  /** Viewers see the entry but cannot save it: the accept command is then off. */
+  readOnly?: boolean
 }) {
   const latest = useRef(options)
   latest.current = options
@@ -61,7 +63,7 @@ export function useEntryCommands(options: {
     const next = nextFieldAfter(fields.map(field => field.name), current.name)
     if (next === 'confirm') onLastField(); else focusEntryField(form.current, next)
   }, { allowInTextInput: true })
-  useAppCommand('entry.accept', () => latest.current.onAccept(), { allowInTextInput: true })
+  useAppCommand('entry.accept', () => latest.current.onAccept(), { allowInTextInput: true, enabled: !options.readOnly })
   // The registry delivers Escape from text fields too; a lookup's open list takes the key first.
   useAppCommand('entry.cancel', () => { if (!popupOpen()) latest.current.onCancel() }, { allowInTextInput: true })
   useAppCommand('entry.delete', () => latest.current.onDelete?.(), { enabled: options.onDelete !== undefined })
@@ -86,7 +88,9 @@ export function useMasterRequest() {
   const { unauthorized } = useApp()
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
+  const returnTo = useRef<Element | null>(null)
   const run = useCallback(async <T,>(task: () => Promise<T>): Promise<T | undefined> => {
+    returnTo.current = document.activeElement
     setBusy(true); setFailure(null)
     try { return await task() }
     catch (cause) {
@@ -95,15 +99,25 @@ export function useMasterRequest() {
       return undefined
     } finally { setBusy(false) }
   }, [unauthorized])
+  // The form locks its fields while the request runs, which drops focus to the page. Once the fields are back, focus
+  // returns to where it was, or to the first field when that control went away with a closed dialog.
+  useEffect(() => {
+    if (busy || returnTo.current === null) return
+    const previous = returnTo.current
+    returnTo.current = null
+    if (document.activeElement !== document.body) return
+    const target = previous instanceof HTMLElement && previous.isConnected ? previous : document.querySelector<HTMLElement>('[data-entry-field] input')
+    target?.focus()
+  }, [busy])
   return { busy, failure, run, clear: () => setFailure(null) }
 }
 
 /** What went wrong, with a reload when someone else changed the master first. */
 export function FailureAlert({ failure, onReload }: { failure: Failure | null; onReload?: () => void }) {
   if (!failure) return null
-  return <Alert tone='danger' title={failure.stale ? 'Changed by someone else' : 'Not saved'}
+  return <Alert tone='danger' title={failure.stale ? 'Changed by someone else' : 'Not done'}
     actions={failure.stale && onReload ? <Button size='sm' variant='secondary' onClick={onReload}>Reload the latest</Button> : undefined}>
-    {failure.stale ? `${failure.message} Reloading replaces what you typed with the saved version.` : failure.message}
+    {failure.stale ? 'Someone saved a newer version while you were editing. Reload to see it; reloading replaces what you typed.' : failure.message}
   </Alert>
 }
 
