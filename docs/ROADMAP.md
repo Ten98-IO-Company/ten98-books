@@ -28,11 +28,12 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md) |
-| Masters screens: chart of accounts, create and alter group and ledger, history | in review | |
+| Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | in review | Same data is loaded into the reference installation for like-for-like checks |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release |
-| `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | planned | After the masters and company-model merges |
+| `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | in progress | |
+| Voucher numbering that restarts each financial year, as accountants expect | planned | Found by the like-for-like comparison; rules being observed before the counters change |
 
 Open items inside merged pieces:
 
@@ -44,7 +45,9 @@ Open items inside merged pieces:
 
 M1 is accepted when, on a fresh installation and by keyboard only in both keymaps, a user can set up a company, maintain masters, enter and alter every accounting voucher type, and read the reports with drill-down; and `demo:compare` shows no difference on the starter company.
 
-## M2 Inventory, receivables and banking: planned
+## M2 Inventory, receivables and banking: in progress
+
+Delivered in slices. Bill-wise receivables and payables (base currency) is being built first, from a design that was reviewed twice against observed behaviour; then cost centres and accounting projects, currencies and rates, and exchange differences.
 
 Stock masters, units and locations; inventory vouchers and valuation (weighted average and FIFO first); orders and their tracking; bill-wise receivables and payables with credit periods and ageing; cost centres and accounting projects (the project dimension of D-03); multi-currency with exchange differences; banking with cheque details and reconciliation; interest; budgets.
 
