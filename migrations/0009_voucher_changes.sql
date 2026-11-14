@@ -53,3 +53,12 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
+
+-- ---- Bill name order ----
+
+-- Bills are listed by name as text, ignoring case and punctuation (observed for ten bills of one debtor: 10, 9, A-020,
+-- A-100, a2, B-050, B1, b3, B-300, C-200). An ICU collation at primary strength with punctuation shifted gives that
+-- order; it is not deterministic (B-1 and b1 compare equal), so every order by it ends with the bill id. Bill identity
+-- is unchanged: a bill is still its party's name ignoring case (bill_identity_idx).
+CREATE COLLATION bill_name_order (provider = icu, locale = 'und-u-ka-shifted-ks-level1', deterministic = false);
+CREATE INDEX bill_name_order_idx ON bill (company_id, ledger_id, name COLLATE bill_name_order, id);

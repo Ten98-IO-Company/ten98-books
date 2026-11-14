@@ -58,27 +58,30 @@ async function billStates(context: LedgerContext, ledgerIds: string[], asOf: str
        JOIN ledger led ON led.company_id = $1 AND led.id = b.ledger_id
        JOIN chosen ch ON ch.bill_id = w.bill_id
      WHERE $6::date IS NULL OR ch.row_date <= $6
-     ORDER BY lower(led.name), led.id, ch.row_date, lower(b.name), b.id`,
+     ORDER BY lower(led.name), led.id, ch.row_date, b.name COLLATE bill_name_order, b.id`,
     [context.company.companyId, ledgerIds, asOf, keep, options.side ?? null, options.datedBy ?? null, options.billIds ?? null]);
   return rows;
 }
 const states = billStates;
 
-/** The keyset of the bills receivable or payable list: party name, party, bill name (unique per party ignoring case). */
-type PageKey = [party: string, ledgerId: string, name: string];
+/**
+ * The keyset of the bills receivable or payable list: party name, party, bill name in name order (ignoring case and
+ * punctuation, `bill_name_order`) and bill (names can be equal in that order).
+ */
+type PageKey = [party: string, ledgerId: string, name: string, billId: string];
 const encodeKey = (key: PageKey) => Buffer.from(JSON.stringify(key)).toString('base64url');
 function decodeKey(cursor: string | undefined): PageKey | undefined {
   if (cursor === undefined) return undefined;
   try {
     const key = JSON.parse(Buffer.from(cursor, 'base64url').toString()) as unknown;
-    if (Array.isArray(key) && key.length === 3 && key.every(part => typeof part === 'string') && /^[0-9a-f-]{36}$/.test(key[1])) return key as PageKey;
+    if (Array.isArray(key) && key.length === 4 && key.every(part => typeof part === 'string') && /^[0-9a-f-]{36}$/.test(key[1]) && /^[0-9a-f-]{36}$/.test(key[3])) return key as PageKey;
   } catch { /* refused below */ }
   throw ledgerError(400, 'Check the page cursor and try again.', 'validation');
 }
 
 /**
  * One page of the bills pending on `side` at `asOf`, in list order (party name, party, bill name), without reading the
- * bills before or after it: parties are taken in order, and each party's bills in its name index, each with its pending
+ * bills before or after it: parties are taken in order, and each party's bills in name order (bill_name_order_idx), each with its pending
  * summed from its own rows, until the page is full. A page costs the bills it returns plus the settled ones it passes.
  */
 async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: string, side: 'Dr' | 'Cr', after: PageKey | undefined, limit: number) {
@@ -89,16 +92,17 @@ async function pendingPage(context: LedgerContext, ledgerIds: string[], asOf: st
     [company.companyId, ledgerIds, after?.[0] ?? null, after?.[1] ?? null]);
   const page: { billId: string; ledgerId: string; key: PageKey }[] = [];
   for (const party of parties) {
-    const from = after && party.id === after[1] ? after[2] : null;
+    const from = after && party.id === after[1] ? after : null;
     const { rows } = await client.query<{ billId: string; name: string }>(
-      `SELECT b.id AS "billId", lower(b.name) AS name FROM bill b
+      `SELECT b.id AS "billId", b.name FROM bill b
          CROSS JOIN LATERAL (SELECT coalesce(sum(${signedSql('r')}) FILTER (WHERE r.opening OR r.row_date <= $4), 0) AS pending
            FROM (${liveBillRowsSql('a.bill_id = b.id')}) r) s
-       WHERE b.company_id = $1 AND b.ledger_id = $2 AND ($3::text IS NULL OR lower(b.name) > $3)
+       WHERE b.company_id = $1 AND b.ledger_id = $2
+         AND ($3::text IS NULL OR (b.name COLLATE bill_name_order, b.id) > ($3::text COLLATE bill_name_order, $7::uuid))
          AND (($5 = 'Dr' AND s.pending > 0) OR ($5 = 'Cr' AND s.pending < 0))
-       ORDER BY lower(b.name) LIMIT $6`,
-      [company.companyId, party.id, from, asOf, side, limit + 1 - page.length]);
-    page.push(...rows.map(row => ({ billId: row.billId, ledgerId: party.id, key: [party.key, party.id, row.name] as PageKey })));
+       ORDER BY b.name COLLATE bill_name_order, b.id LIMIT $6`,
+      [company.companyId, party.id, from?.[2] ?? null, asOf, side, limit + 1 - page.length, from?.[3] ?? null]);
+    page.push(...rows.map(row => ({ billId: row.billId, ledgerId: party.id, key: [party.key, party.id, row.name, row.billId] as PageKey })));
     if (page.length > limit) break;
   }
   return { page: page.slice(0, limit), more: page.length > limit };
@@ -297,6 +301,12 @@ export async function ageingReport(context: LedgerContext, query: unknown): Prom
 }
 
 /**
+ * Bill names in name order, as the database's `bill_name_order` collation sorts them: as text, ignoring case and
+ * punctuation (observed); equal names are ordered by bill id where it is used.
+ */
+const billNameOrder = new Intl.Collator('en', { sensitivity: 'base', ignorePunctuation: true });
+
+/**
  * The entry screen's pending list for one party at a voucher date: bills dated on or before it (a later bill is not
  * offered, observed), with their pending at the date and the final pending, sorted as asked.
  */
@@ -306,11 +316,12 @@ export async function billPicker(context: LedgerContext, ledgerId: string, query
   const { rows: [ledger] } = await context.client.query('SELECT 1 FROM ledger WHERE company_id = $1 AND id = $2', [context.company.companyId, ledgerId]);
   if (!ledger) throw ledgerNotFound;
   const offered = await states(context, [ledgerId], asOf, listScope === 'all' ? 'final' : 'pending', { datedBy: asOf });
-  const key = (bill: BillState): string | bigint => ({ name: bill.name.toLowerCase(), bill_date: bill.billDate ?? '', due_date: bill.dueDate ?? '',
+  const key = (bill: BillState): string | bigint => ({ name: bill.name, bill_date: bill.billDate ?? '', due_date: bill.dueDate ?? '',
     pending: bill.pending, final_pending: bill.finalPending })[sort];
   const order = direction === 'asc' ? 1 : -1;
+  const compare = (x: string | bigint, y: string | bigint) => sort === 'name' ? billNameOrder.compare(x as string, y as string) : x < y ? -1 : x > y ? 1 : 0;
   return offered
-    .sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : a.billId < b.billId ? -1 : 1) * order; })
+    .sort((a, b) => (compare(key(a), key(b)) || (a.billId < b.billId ? -1 : 1)) * order)
     .map(({ ledgerId: _ledger, ledgerName: _name, method: _method, ...bill }) => ({ ...bill, side: bill.pending > 0n ? 'Dr' : bill.pending < 0n ? 'Cr' : null }));
 }
 

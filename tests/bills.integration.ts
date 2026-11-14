@@ -183,6 +183,28 @@ test('each list holds the bills lying on its side: a customer advance is a payab
   assert.match(csv, /"2026-03-02","ADV-C","Customer","800.00"/);
 });
 
+test('bills are listed by name as text, ignoring case and punctuation: the ten observed names in their observed order', async () => {
+  const g = await books('Bills By Name');
+  const sales = await g.ledger('Sales', 'sales'), party = await g.ledger('Ten Bills', 'receivables');
+  const observed = ['10', '9', 'A-020', 'A-100', 'a2', 'B-050', 'B1', 'b3', 'B-300', 'C-200'];
+  for (const name of ['B-300', 'a2', 'C-200', '9', 'B1', 'A-100', '10', 'b3', 'A-020', 'B-050']) {
+    await g.voucher('sales', '2026-03-01', [[party, 'Dr', '10', [newRef(name, '10')]], [sales, 'Cr', '10']]);
+  }
+  const picker = async (direction: string) => ((await g.call(`/ledgers/${party}/bills?asOf=2026-03-31&sort=name&direction=${direction}`)).body.bills as any[]).map(bill => bill.name);
+  assert.deepEqual(await picker('asc'), observed, 'the pending list for entry');
+  assert.deepEqual(await picker('desc'), [...observed].reverse());
+  assert.deepEqual((await g.listed('receivable', '2026-03-31')).map((bill: any) => bill[0]), observed, 'the bills receivable list, in the database order');
+  // Paged one bill at a time, the list keeps the order (the cursor carries the bill id: names may compare equal).
+  const walked: string[] = [];
+  let after: string | null = null;
+  do {
+    const page: any = await g.report(`bills-outstanding?side=receivable&asOf=2026-03-31&limit=1${after ? `&after=${after}` : ''}`);
+    walked.push(...page.bills.map((bill: any) => bill.name));
+    after = page.next;
+  } while (after);
+  assert.deepEqual(walked, observed);
+});
+
 test('a bill is the party\'s name ignoring case: reuse attaches, also after settlement or deletion; another party has its own', async () => {
   const g = await books('Reuse Bills');
   const sales = await g.ledger('Sales', 'sales'), bank = await g.ledger('Bank', 'bank_accounts');
