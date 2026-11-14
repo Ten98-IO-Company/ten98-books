@@ -1,5 +1,5 @@
--- 0009: bill checks that read their own line or bill on any statistics; vouchers created cancelled without lines;
--- vouchers altered into another voucher type.
+-- 0009: bill checks that read their own line or bill on any statistics; bill names in name order; vouchers created
+-- cancelled without lines; vouchers altered into another voucher type.
 
 -- ---- Bill checks without statistics ----
 
@@ -71,7 +71,7 @@ CREATE INDEX bill_name_order_idx ON bill (company_id, ledger_id, name COLLATE bi
 -- lines, and a cancelled voucher never becomes regular again.
 ALTER TABLE voucher ADD COLUMN created_cancelled boolean NOT NULL DEFAULT false;
 
--- The lifecycle rules of 0007, plus created_cancelled.
+-- The lifecycle rules of 0007, plus created_cancelled and a change of voucher type (see the next section).
 CREATE OR REPLACE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   PERFORM ledger_assert_scope(NEW.company_id);
@@ -82,14 +82,16 @@ BEGIN
     IF OLD.deleted_at IS NOT NULL THEN
       RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
-    IF OLD.number IS NOT NULL AND (NEW.number IS NULL OR (NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.number <> OLD.number)) THEN
+    IF OLD.number IS NOT NULL AND (NEW.number IS NULL OR (NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.number <> OLD.number
+        AND NEW.voucher_type_id = OLD.voucher_type_id)) THEN
       RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
     IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
       RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
     END IF;
   END IF;
-  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period) AND (
+  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period
+      OR NEW.voucher_type_id <> OLD.voucher_type_id OR NEW.series <> OLD.series OR NEW.number <> OLD.number) AND (
     NEW.number_period IS DISTINCT FROM ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) OR NOT EXISTS (
       SELECT 1 FROM voucher_counter c WHERE c.company_id = NEW.company_id AND c.voucher_type_id = NEW.voucher_type_id AND c.series = NEW.series
         AND c.period_start = NEW.number_period AND c.last_number = NEW.number AND c.xmin = pg_current_xact_id()::xid)) THEN
@@ -131,3 +133,11 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
+
+-- ---- Vouchers altered into another voucher type ----
+
+-- An alter may move a voucher to another type (observed). A numbered voucher then takes the new type's next number in
+-- its date's period, issued by that type's counter in the same transaction (voucher_guard above: a number, type or
+-- series that changes is checked against the counter of the new type and series); the old number stays a gap of the
+-- old type, as a deleted voucher's does. An optional voucher changes type and stays unnumbered.
+GRANT UPDATE (voucher_type_id, series) ON voucher TO books_app;

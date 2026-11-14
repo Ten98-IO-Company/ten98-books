@@ -143,11 +143,13 @@ export const voucherCreateInput = z.object({
   lines,
 }).strict();
 /**
- * Altering replaces the whole voucher body except its type and number, so every field is stated: an omitted status or
+ * Altering replaces the whole voucher body except its number (and its type, unless `voucherTypeId` names another), so every field is stated: an omitted status or
  * post-dated flag must never fall back to a default (that would post an optional voucher). `revision` is the one the
  * editor last read; `narration` may be null to clear it.
  */
 export const voucherAlterInput = z.object({
+  /** Another voucher type to move the voucher to (its rules and its numbering then apply); the stored type when left out. */
+  voucherTypeId: id.optional(),
   date: calendarDate,
   narration: narration.nullable().transform(value => value?.trim() || null),
   status: voucherStatus,
