@@ -201,7 +201,7 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.deepEqual(differing, ['Voucher numbers equal to expectedNumber (dataset sequence (not yet verified against the reference))', 'Closing balance of Cash', 'Total capital and liabilities', 'Total assets']);
   const wrongNumber = result.lines.find(line => line.label.startsWith('Voucher numbers equal'))!;
   assert.deepEqual([wrongNumber.expected, wrongNumber.actual, wrongNumber.difference], ['2', '1', '-1']);
-  assert.match(wrongNumber.note!, /^1 voucher\(s\) differ \(by year: 2026: 1\); examples: rent-wrong \(2026-04-03\): expected 5, assigned 2$/);
+  assert.match(wrongNumber.note!, /^1 voucher\(s\) differ \(by financial year from 2026-04-01: 1\); examples: rent-wrong \(2026-04-03\): expected 5, assigned 2$/);
   const cash = result.lines.find(line => line.label === 'Closing balance of Cash')!;
   assert.deepEqual([cash.expected, cash.actual, cash.difference], ['20.000 Dr', '30.000 Dr', '10.000 Dr'], 'exact on three-decimal minor units');
   assert.equal(result.differences, 4, 'the count a non-zero exit code is based on');

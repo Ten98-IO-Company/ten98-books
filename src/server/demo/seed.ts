@@ -39,7 +39,7 @@ export type SeedReport = {
   /** Vouchers of a supported type not posted because they have no lines (cancelled or no accounting effect), by type. */
   noEntries: Record<string, number>;
   /**
-   * Vouchers the ledger module's posting rules refuse (for example a journal on a bank ledger): not posted and listed with
+   * Vouchers the ledger module's posting rules refuse (for example a payment that credits no cash or bank ledger): not posted and listed with
    * the ledger's reason, because the rules are ten98-books' own and a difference from the reference system. Any other
    * refusal still stops the seed.
    */

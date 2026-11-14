@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
-import { daysInMonth, isCalendarDate } from '../../lib/company.ts';
+import { daysInMonth, financialYearOf, isCalendarDate } from '../../lib/company.ts';
 import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
 
 /**
@@ -136,31 +136,35 @@ export function dispositionOf(voucher: VoucherEntry): 'post' | 'unsupported-type
   return voucher.lines.length === 0 ? 'no-entries' : 'post';
 }
 
-export type NumberDifference = { key: string; type: string; date: string; expected: string | number; assigned: number; holes: string[]; explained: boolean };
+/** `year` is the first day of the company's financial year that holds the voucher's date (numbers restart there). */
+export type NumberDifference = { key: string; type: string; date: string; year: string; expected: string | number; assigned: number; holes: string[]; explained: boolean };
 export type NumberCheck = { checked: number; matched: number; unnumbered: number; differences: NumberDifference[] };
 
 /**
  * Compares the numbers ten98-books assigned (`assigned`: dataset voucher key to number, null for an optional voucher; a
  * posted-kind voucher missing from the map is not in the books) with `expectedNumber`. A difference is `explained` when
- * earlier vouchers of the same type hold numbers in the dataset but none here (cancelled without lines, optional,
- * refused or absent) and their count accounts for the whole gap; otherwise it is a real difference. Shared by the seeder,
+ * earlier vouchers of the same type and financial year (numbers restart each year, D-04) hold numbers in the dataset but
+ * none here (cancelled without lines, optional, refused or absent) and their count accounts for the whole gap; otherwise
+ * it is a real difference. Shared by the seeder,
  * which knows which vouchers were refused, and the comparison, which reads the numbers back from the books.
  */
-export function checkNumbers(dataset: Pick<Dataset, 'vouchers'>, assigned: ReadonlyMap<string, number | null>, refused: ReadonlySet<string> = new Set()): NumberCheck {
+export function checkNumbers(dataset: Pick<Dataset, 'vouchers' | 'company'>, assigned: ReadonlyMap<string, number | null>, refused: ReadonlySet<string> = new Set()): NumberCheck {
   const holes = new Map<string, string[]>();
-  const hole = (type: string, label: string) => holes.set(type, [...holes.get(type) ?? [], label]);
+  const yearOf = (date: string) => financialYearOf(dataset.company.financialYearStart, date).from;
+  const sequence = (voucher: VoucherEntry) => `${voucher.type} ${yearOf(voucher.date)}`;
+  const hole = (voucher: VoucherEntry, label: string) => holes.set(sequence(voucher), [...holes.get(sequence(voucher)) ?? [], label]);
   const result: NumberCheck = { checked: 0, matched: 0, unnumbered: 0, differences: [] };
   for (const voucher of dataset.vouchers) {
     const disposition = dispositionOf(voucher);
     if (disposition === 'unsupported-type' || voucher.expectedNumber === undefined) continue;
-    if (disposition === 'no-entries') { hole(voucher.type, `${voucher.key} (${voucher.status === 'cancelled' ? 'cancelled without lines' : 'no entries'})`); continue; }
-    if (!assigned.has(voucher.key)) { hole(voucher.type, `${voucher.key} (${refused.has(voucher.key) ? 'refused by a posting rule' : 'not in the books'})`); continue; }
+    if (disposition === 'no-entries') { hole(voucher, `${voucher.key} (${voucher.status === 'cancelled' ? 'cancelled without lines' : 'no entries'})`); continue; }
+    if (!assigned.has(voucher.key)) { hole(voucher, `${voucher.key} (${refused.has(voucher.key) ? 'refused by a posting rule' : 'not in the books'})`); continue; }
     const number = assigned.get(voucher.key)!;
-    if (number === null) { result.unnumbered++; hole(voucher.type, `${voucher.key} (${voucher.status})`); continue; }
+    if (number === null) { result.unnumbered++; hole(voucher, `${voucher.key} (${voucher.status})`); continue; }
     result.checked++;
     if (String(number) === String(voucher.expectedNumber)) { result.matched++; continue; }
-    const earlier = holes.get(voucher.type) ?? [];
-    result.differences.push({ key: voucher.key, type: voucher.type, date: voucher.date, expected: voucher.expectedNumber, assigned: number, holes: earlier, explained: earlier.length > 0 && Number(voucher.expectedNumber) === number + earlier.length });
+    const earlier = holes.get(sequence(voucher)) ?? [];
+    result.differences.push({ key: voucher.key, type: voucher.type, date: voucher.date, year: yearOf(voucher.date), expected: voucher.expectedNumber, assigned: number, holes: earlier, explained: earlier.length > 0 && Number(voucher.expectedNumber) === number + earlier.length });
   }
   return result;
 }
