@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useState } from 'react'
 import { useCompany } from '../../lib/app-context'
-import { popCursor, pushCursor, type PeriodKind, type ReportPeriod } from '../../lib/reports'
+import { popCursor, pushCursor, readCursorStack, writeCursorStack, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { periodSearch, useReport, useReportNavigation, useReportPeriod, type ReportLink, type ReportSearch } from './navigation'
 
 /**
@@ -23,22 +23,26 @@ export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path:
   return {
     company, period, report, highlight, setHighlight, open, back: navigation.back, hrefOf: navigation.hrefOf,
     status: periodError ? 'error' as const : report.status, error: periodError || report.error,
-    setPeriod: (next: ReportPeriod) => update(previous => ({ ...previous, ...next, hl: undefined })),
+    setPeriod: (next: ReportPeriod) => update(previous => ({ ...previous, ...next, hl: undefined, pages: undefined })),
     detail: { on: search.detail === true, toggle: () => update(previous => ({ ...previous, detail: previous.detail ? undefined : true })) },
     zeros: { shown: search.zeros === true, toggle: () => update(previous => ({ ...previous, zeros: previous.zeros ? undefined : true })) },
   }
 }
 
 /**
- * Keyset pages of a register (day book, ledger vouchers): the cursors of the pages before this one are kept so PageUp
- * past the first line can go back. `reset` (the period and subject) starts again from the first page. The screen also
- * ignores paging keys while a page loads (ReportTable `pageBusy`); pushCursor ignores a repeat of the cursor on top.
+ * Keyset pages of a register (day book, ledger vouchers). The cursors of the pages before this one are kept in the
+ * address (`pages`, joined by dots), so PageUp past the first line can go back, and going back from a drill-down (the
+ * trail returns to the address left) restores the page and its highlighted line. A new period or subject drops them
+ * (setPeriod clears `pages`; links carry only the period). The screen ignores paging keys and pager clicks while a page
+ * loads (ReportTable `pageBusy`); pushCursor ignores a repeat of the cursor on top.
  */
-export function useCursorPages(reset: string) {
-  const [state, setState] = useState<{ reset: string; cursors: readonly string[] }>({ reset, cursors: [] })
-  const cursors = state.reset === reset ? state.cursors : []
-  const change = (next: (cursors: readonly string[]) => readonly string[]) =>
-    setState(previous => ({ reset, cursors: next(previous.reset === reset ? previous.cursors : []) }))
+export function useCursorPages(search: ReportSearch) {
+  const navigate = useNavigate()
+  const cursors = readCursorStack(search.pages)
+  const change = (next: (cursors: readonly string[]) => readonly string[]) => {
+    const pages = next(cursors)
+    void navigate({ to: '.', search: ((previous: ReportSearch) => ({ ...previous, pages: writeCursorStack(pages), hl: undefined })) as never, replace: true })
+  }
   return {
     after: cursors.at(-1),
     hasPrevious: cursors.length > 0,

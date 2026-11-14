@@ -4,7 +4,7 @@ import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import { isCalendarDate } from '../../lib/company'
 import type { Wire } from '../../lib/money'
-import { recordPeriod, rememberedPeriod, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
+import { readCursorStack, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
 
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
@@ -14,6 +14,8 @@ import { recordPeriod, rememberedPeriod, type PeriodKind, type ReportDefaults, t
  */
 export type ReportSearch = {
   from?: string; to?: string; detail?: boolean; zeros?: boolean; hl?: string; group?: string; ledger?: string; voucher?: string
+  /** A register's earlier page cursors, oldest first, joined by dots (base64url cursors contain none). */
+  pages?: string
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -28,6 +30,7 @@ export function reportSearch(search: Record<string, unknown>): ReportSearch {
     detail: search.detail === true ? true : undefined, zeros: search.zeros === true ? true : undefined,
     hl: typeof search.hl === 'string' && key.test(search.hl) ? search.hl : undefined,
     group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher),
+    pages: writeCursorStack(readCursorStack(search.pages)),
   }
   return Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined)) as ReportSearch
 }

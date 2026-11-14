@@ -27,11 +27,11 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Keyboard shell: command registry, `classic` and `web-safe` keymaps, company menu | merged | [KEYBOARD.md](KEYBOARD.md) |
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
-| Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md) |
+| Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides) |
 | Masters screens: chart of accounts, create and alter group and ledger, history | merged | |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies. No compared line differs from the reference installation in any of them; lines that need features not built yet (foreign currency, vouchers cancelled without lines, bill and stock figures) are reported as not yet comparable |
-| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned |
+| Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned. The reads the screen needs are merged (expected next number, resulting balances of a draft, proposed counter ledger: [LEDGER.md](LEDGER.md)) |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | merged | Parity table and reserved keys in [KEYBOARD.md](KEYBOARD.md) |
 | Voucher numbers per voucher type and financial year of the voucher's date; posting rules per voucher type as observed | merged | [LEDGER.md](LEDGER.md), migration 0007, [D-04](DECISIONS.md) as amended. Prefix, suffix, manual numbering and other restart periods are not built |
 

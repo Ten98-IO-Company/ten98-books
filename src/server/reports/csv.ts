@@ -1,4 +1,4 @@
-import { formatMoney, toCsv, type MoneyExponent } from '@ten98/runtime';
+import { formatMoney, subtractMoney, toCsv, type MoneyExponent } from '@ten98/runtime';
 import {
   splitBalance, type BalanceSheetReport, type DayBookReport, type GroupSummaryReport, type LedgerMonthlyReport,
   type LedgerVouchersReport, type NodeAmounts, type ProfitAndLossReport, type StatementLine, type TrialBalanceReport,
@@ -28,10 +28,30 @@ export function trialBalanceCsv(report: TrialBalanceReport, exponent: MoneyExpon
   ];
 }
 
+/** The side a statement section's amounts stand on: capital, liabilities and income are credits, assets and costs debits. */
+const sectionSide: Readonly<Record<string, 'Dr' | 'Cr'>> = {
+  'h:liabilities': 'Cr', 'h:trading-income': 'Cr', 'h:other-income': 'Cr', 'h:assets': 'Dr', 'h:trading-costs': 'Dr', 'h:other-costs': 'Dr',
+};
+
+/**
+ * A statement as rows of line, kind, level, amount and side. An amount is the line's figure on its section's side; one
+ * that went the other way (a negative figure on screen, such as an income group with a debit balance) is written as a
+ * plain amount with the other side, so no amount starts with a minus sign and the formula guard never turns it into text.
+ * Result lines (gross and net profit or loss) are named by their label and have no side.
+ */
 function statementCsv(lines: readonly StatementLine[], exponent: MoneyExponent): string[][] {
+  let side: 'Dr' | 'Cr' | null = null;
   return [
-    ['Line', 'Kind', 'Level', 'Amount'],
-    ...lines.map(line => [line.label, line.kind, line.depth === null ? '' : String(line.depth), line.amount === null ? '' : formatMoney(line.amount, exponent)]),
+    ['Line', 'Kind', 'Level', 'Amount', 'Side'],
+    ...lines.map(line => {
+      if (line.kind === 'heading') side = sectionSide[line.key] ?? null;
+      const level = line.depth === null ? '' : String(line.depth);
+      if (line.amount === null) return [line.label, line.kind, level, '', ''];
+      const negative = line.amount < 0n;
+      const amount = formatMoney(negative ? subtractMoney(0n, line.amount) : line.amount, exponent);
+      const shownSide = line.kind === 'result' || side === null ? '' : negative ? (side === 'Dr' ? 'Cr' : 'Dr') : side;
+      return [line.label, line.kind, level, amount, shownSide];
+    }),
   ];
 }
 export const profitAndLossCsv = (report: ProfitAndLossReport, exponent: MoneyExponent) => statementCsv(report.lines, exponent);

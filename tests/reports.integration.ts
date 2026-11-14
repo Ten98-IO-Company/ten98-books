@@ -205,6 +205,28 @@ test('CSV exports hold the same figures, quote every cell and neutralise formula
   }
 });
 
+test('statement exports write an amount and a side, never a negative amount turned into text', async () => {
+  const odd = await createCompany(owner.browser, { name: 'Odd Balances' });
+  const chartOf = await chart(owner.browser, odd);
+  const refunds = await addLedger(owner.browser, odd, 'Refunds Given', chartOf.group('indirect_income'));
+  const owing = await addLedger(owner.browser, odd, 'Owing Out', chartOf.group('current_liabilities'));
+  const bank = await addLedger(owner.browser, odd, 'Main Bank', chartOf.group('bank_accounts'));
+  // An income ledger with a debit balance and a liability with a debit balance: negative lines on screen.
+  await post(owner.browser, odd, chartOf.type('journal'), '2026-01-05', [[refunds, 'Dr', '40'], [bank, 'Cr', '40']]);
+  await post(owner.browser, odd, chartOf.type('journal'), '2026-01-06', [[owing, 'Dr', '25'], [bank, 'Cr', '25']]);
+  const screen = await report('profit-and-loss?from=2026-01-01&to=2026-01-31', owner.browser, odd);
+  assert.equal(screen.lines.find((line: any) => line.label === 'Refunds Given').amount, '-40.00', 'negative on screen');
+  const pl = await (await rawGet(owner.browser, `/api/companies/${odd}/reports/profit-and-loss/export?from=2026-01-01&to=2026-01-31`)).text();
+  // Response.text() drops the byte-order mark; the CSV test above checks the raw bytes.
+  assert.ok(pl.startsWith('"Line","Kind","Level","Amount","Side"'), pl.slice(0, 60));
+  assert.match(pl, /"Refunds Given","ledger","\d","40\.00","Dr"/);
+  assert.match(pl, /"Net loss","result","","40\.00",""/);
+  const bs = await (await rawGet(owner.browser, `/api/companies/${odd}/reports/balance-sheet/export?date=2026-01-31`)).text();
+  assert.match(bs, /"Owing Out","ledger","\d","25\.00","Dr"/);
+  assert.match(bs, /"Main Bank","ledger","\d","65\.00","Cr"/);
+  assert.doesNotMatch(pl + bs, /"'-/, 'no amount is guarded as text');
+});
+
 test('a three-decimal company reports exact fils in every statement', async () => {
   const kwd = await createCompany(owner.browser, { name: 'Three Decimals', baseCurrency: 'KWD' });
   const chartOf = await chart(owner.browser, kwd);
@@ -260,6 +282,20 @@ test('a financial year starting in April carries the earlier year into the profi
   assert.equal(monthly.to, '2026-03-31', 'one financial year at a time');
   assert.deepEqual(monthly.months.map((month: any) => month.month), ['2026-01', '2026-02', '2026-03']);
   assert.equal(monthly.opening, '-1000.00');
+});
+
+test('a balance sheet dated before the books begin agrees with the profit and loss it opens', async () => {
+  const later = await createCompany(owner.browser, { name: 'Late Start', booksBeginning: '2026-03-01' });
+  const chartOf = await chart(owner.browser, later);
+  await addLedger(owner.browser, later, 'Commission', chartOf.group('indirect_income'), { amount: '300', side: 'Cr' });
+  await addLedger(owner.browser, later, 'Main Bank', chartOf.group('bank_accounts'), { amount: '300', side: 'Dr' });
+  for (const date of ['2026-02-15', '2026-03-01', '2026-06-30']) {
+    const bs = await report(`balance-sheet?date=${date}`, owner.browser, later);
+    const pl = await report(`profit-and-loss?from=2026-01-01&to=${date}`, owner.browser, later);
+    assert.deepEqual([bs.profitAndLoss.currentPeriod, pl.netProfit], ['300.00', '300.00'], date);
+  }
+  // A period that starts after the books begin leaves the opening out of its result, as before.
+  assert.equal((await report('profit-and-loss?from=2026-04-01&to=2026-06-30', owner.browser, later)).netProfit, '0.00');
 });
 
 test('unbalanced opening balances show a difference line so the statements agree', async () => {
@@ -347,6 +383,21 @@ test('another workspace\'s user gets "not found" for every report and export; a 
     assert.deepEqual(await intruder.browser.call(path), { status: 404, body: { error: companyNotFound, code: 'not_found' } }, path);
     assert.equal((await stranger.call(path)).status, 401, path);
     assert.equal((await rawGet(viewer.browser, path)).status, 200, path);
+  }
+});
+
+test('a ledger or group id of another company inside one company answers "not found", reports and exports alike', async () => {
+  const own = await createCompany(owner.browser, { name: 'Substitution Books' });
+  const viewer = await invite(owner.browser, own, 'viewer');
+  // The golden company's ids, which the viewer of `own` cannot reach.
+  const ledger = books.ledger('Cash'), group = books.group('current_assets');
+  const paths = [`ledger-vouchers/${ledger}?${period}`, `ledger-monthly/${ledger}?${period}`, `group-summary/${group}?${period}`];
+  for (const path of [...paths, ...paths.map(item => item.replace('?', '/export?'))]) {
+    const response = await rawGet(viewer.browser, `/api/companies/${own}/reports/${path}`);
+    assert.equal(response.status, 404, path);
+    const body = await response.json() as { error: string; code?: string };
+    assert.equal(body.code, 'not_found', path);
+    assert.ok(!/Cash|Current Assets/i.test(body.error), `${path}: the answer names nothing of the other company`);
   }
 });
 

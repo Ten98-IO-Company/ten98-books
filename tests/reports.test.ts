@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance } from '../src/lib/reports.ts';
+import { defaultPeriod, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -69,4 +69,14 @@ test('page cursors: a repeated push of the cursor on top is ignored, so PageUp s
   assert.deepEqual(stack, ['page-2', 'page-3']);
   stack = popCursor(popCursor(stack));
   assert.deepEqual(stack, [], 'two PageUps return to the first page');
+});
+
+test('the cursor stack of a register round-trips through the address; anything else reads as the first page', () => {
+  const stack = ['MjAyNi0wMS0wNH4wMWExZGFkZi1iNTcw', 'MjAyNi0wMS0wOX4wMWExZGFkZi1iNTcw'];
+  assert.equal(writeCursorStack(stack), stack.join('.'));
+  assert.deepEqual(readCursorStack(writeCursorStack(stack)), stack);
+  assert.equal(writeCursorStack([]), undefined, 'the first page leaves no parameter');
+  for (const text of [undefined, '', 'a..b', '.a', 'a.', 'a b', 'a/b', 7, ['a'], 'x'.repeat(121), Array.from({ length: 201 }, () => 'a').join('.')]) {
+    assert.deepEqual(readCursorStack(text), [], JSON.stringify(text)?.slice(0, 40));
+  }
 });
