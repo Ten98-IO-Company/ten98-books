@@ -35,7 +35,11 @@ let lastCheck: { url: string; at: number; pending: boolean; result: Promise<bool
 /** The probe's one connection, kept between checks while it works; never more than one for the whole process. */
 let probeClient: { url: string; client: pg.Client } | undefined;
 
-/** Drops the probe's connection, closing its socket at once (a database that never answers would hold a graceful end). */
+/**
+ * Drops the probe's connection, closing its socket at once. pg's Client has no public way to do that: `end()` sends
+ * Terminate and waits for the server to close, which a database that never answers never does, so the socket of its
+ * private `connection.stream` is destroyed directly.
+ */
 function dropProbeClient(): void {
   const stream = (probeClient?.client as unknown as { connection?: { stream?: { destroy(): void } } } | undefined)?.connection?.stream;
   stream?.destroy();

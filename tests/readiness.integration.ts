@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:net';
+import { connect, createServer, type Server, type Socket } from 'node:net';
 import { after, before, test } from 'node:test';
 import { handleApi, readinessStepMs } from '../src/server/api.ts';
 import { getConfig } from '../src/server/config.ts';
@@ -37,6 +37,43 @@ const withDatabaseUrl = async (change: (url: URL) => void) => {
   try { return await probe(); } finally { process.env.DATABASE_URL = databaseUrl; }
 };
 const notReady = { error: 'The installation is not ready. Check configuration and database migrations.' };
+const pastShare = () => new Promise(resolve => setTimeout(resolve, 1100));
+
+/**
+ * A TCP proxy in front of the test database: it counts the queries clients send (simple `Q` and extended `P` messages,
+ * after the startup message) and, while `held`, drops what the database sends back, as a network that stalls.
+ */
+async function databaseProxy() {
+  const target = new URL(databaseUrl);
+  const state = { queries: 0, held: false, port: 0, url: '', close: () => undefined as void };
+  const sockets = new Set<Socket>();
+  const server = createServer(client => {
+    const upstream = connect(Number(target.port || 5432), target.hostname);
+    for (const socket of [client, upstream]) { sockets.add(socket); socket.on('error', () => undefined); socket.on('close', () => { sockets.delete(socket); client.destroy(); upstream.destroy(); }); }
+    let pending = Buffer.alloc(0), started = false;
+    client.on('data', chunk => {
+      upstream.write(chunk);
+      pending = Buffer.concat([pending, chunk]);
+      for (;;) {
+        const header = started ? 5 : 4;
+        if (pending.length < header) break;
+        const size = started ? 1 + pending.readInt32BE(1) : pending.readInt32BE(0);
+        if (pending.length < size) break;
+        if (started && (pending[0] === 0x51 || pending[0] === 0x50)) state.queries += 1;
+        pending = pending.subarray(size);
+        started = true;
+      }
+    });
+    upstream.on('data', chunk => { if (!state.held) client.write(chunk); });
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  state.port = (server.address() as { port: number }).port;
+  const url = new URL(databaseUrl);
+  url.hostname = '127.0.0.1'; url.port = String(state.port);
+  state.url = url.href;
+  state.close = () => { for (const socket of sockets) socket.destroy(); server.close(); };
+  return state;
+}
 
 test('ready while the database is there', async () => {
   assert.deepEqual((await probe()).body, { status: 'ready' });
@@ -80,13 +117,55 @@ test('503 within the bound for a database that accepts and then stalls, and for 
   assert.deepEqual((await probe()).body, { status: 'ready' }, 'ready again once the lock is gone');
 });
 
+test('a kept connection cut while the database stays up is replaced: past the share window the probe answers 200', async () => {
+  const { asAdmin } = await import('./helpers/ledger.ts');
+  await pastShare();
+  assert.deepEqual((await probe()).body, { status: 'ready' }, 'ready, with its connection kept');
+  const cut = await asAdmin(database.adminUrl, async admin => (await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'books-readiness' AND datname = current_database()")).rowCount);
+  assert.equal(cut, 1, 'the one probe connection was cut');
+  await pastShare();
+  // The first check finds the connection dead (one 503, shared for a second); the check after it connects again.
+  await probe();
+  await pastShare();
+  assert.deepEqual((await probe()).body, { status: 'ready' }, 'a new connection after the failed check');
+});
+
+test('while healthy, back-to-back probes inside the share window run no query of their own', async () => {
+  const proxy = await databaseProxy();
+  process.env.DATABASE_URL = proxy.url;
+  try {
+    assert.equal((await probe()).status, 200);
+    const oneCheck = proxy.queries;
+    assert.ok(oneCheck > 0, 'the proxy counts the queries of a check');
+    for (let index = 0; index < 20; index += 1) assert.equal((await probe()).status, 200);
+    assert.equal(proxy.queries, oneCheck, `20 more probes ran no query (one check is ${oneCheck})`);
+  } finally { process.env.DATABASE_URL = databaseUrl; proxy.close(); }
+});
+
+test('a kept connection whose network stalls is given up at the statement bound, and the next check connects again', { timeout: 20_000 }, async () => {
+  const proxy = await databaseProxy();
+  process.env.DATABASE_URL = proxy.url;
+  try {
+    assert.equal((await probe()).status, 200);
+    await pastShare();
+    // The server answers; nothing reaches the client. Only the client's own query bound ends the wait.
+    proxy.held = true;
+    const stalled = await probe();
+    assert.deepEqual([stalled.status, stalled.body], [503, notReady], 'stalled');
+    assert.ok(stalled.ms >= readinessStepMs - 100 && stalled.ms < readinessStepMs + 1500, `stalled: ${Math.round(stalled.ms)} ms`);
+    proxy.held = false;
+    await pastShare();
+    assert.equal((await probe()).status, 200, 'ready again through a new connection');
+  } finally { process.env.DATABASE_URL = databaseUrl; proxy.close(); }
+});
+
 test('150 concurrent probes hold at most one probe connection while application requests beside them answer', async () => {
   const { asAdmin } = await import('./helpers/ledger.ts');
   const { setupOwner } = await import('./helpers/ledger.ts');
   const owner = await setupOwner();
   const probes = Array.from({ length: 150 }, () => probe());
   const requests = Array.from({ length: 20 }, () => owner.browser.call('/api/companies'));
-  const counted = asAdmin(database.adminUrl, async admin => Number((await admin.query("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'books-readiness'")).rows[0].count));
+  const counted = asAdmin(database.adminUrl, async admin => Number((await admin.query("SELECT count(*) FROM pg_stat_activity WHERE application_name = 'books-readiness' AND datname = current_database()")).rows[0].count));
   const [answers, appAnswers, probeBackends] = await Promise.all([Promise.all(probes), Promise.all(requests), counted]);
   assert.ok(answers.every(answer => answer.status === 200), answers.map(answer => answer.status).join(','));
   assert.ok(appAnswers.every(answer => answer.status === 200), appAnswers.map(answer => answer.status).join(','));
