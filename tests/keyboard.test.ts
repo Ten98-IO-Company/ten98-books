@@ -24,7 +24,7 @@ function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): Res
 }
 
 /** Commands the screens register with allowInTextInput (entry.tsx, MasterList.tsx under its search field, MasterPicker.tsx, a dialog's accept); a test below reads them from the sources. */
-const inTextInput = new Set<string>(['entry.next-field', 'entry.accept', 'entry.cancel', 'list.next', 'list.previous', 'list.open', 'list.cancel']);
+const inTextInput = new Set<string>(['entry.next-field', 'entry.accept', 'entry.cancel', 'list.next', 'list.previous', 'list.first', 'list.last', 'list.open', 'list.cancel', 'report.page-down', 'report.page-up']);
 
 /** `popupOpen`: the focused element is a select or holds an open popup (a lookup's list), as the registry checks it. */
 function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other', disabled: readonly string[] = [], popupOpen = false) {

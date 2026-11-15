@@ -1,14 +1,15 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Amount } from '../../components/reports/cells'
-import { query, reportSearch } from '../../components/reports/navigation'
+import { query } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { StatementTable } from '../../components/reports/StatementTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
 import type { ProfitAndLossReport } from '../../lib/reports'
+import { readReportSearch } from '../../lib/reports'
 
 /** Profit and loss for a period inside one financial year: trading section to gross profit, then the net result. */
-export const Route = createFileRoute('/app/c/$companyId/reports_/profit-and-loss')({ validateSearch: reportSearch, component: ProfitAndLossScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/profit-and-loss')({ validateSearch: readReportSearch, component: ProfitAndLossScreen })
 
 function ProfitAndLossScreen() {
   const search = Route.useSearch()

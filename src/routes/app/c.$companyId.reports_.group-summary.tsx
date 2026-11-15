@@ -2,15 +2,15 @@ import type { DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
-import { query, reportSearch, type ReportLink } from '../../components/reports/navigation'
+import { query, type ReportLink } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { isZeroNode, type GroupSummaryReport, type StatementNode } from '../../lib/reports'
+import { isZeroNode, type GroupSummaryReport, type StatementNode, readReportSearch } from '../../lib/reports'
 
 /** One group's sub-groups and ledgers for the period (`group` in the address), or the primary level without one. */
-export const Route = createFileRoute('/app/c/$companyId/reports_/group-summary')({ validateSearch: reportSearch, component: GroupSummaryScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/group-summary')({ validateSearch: readReportSearch, component: GroupSummaryScreen })
 
 type Row = Wire<StatementNode>
 const columns: DataColumn<Row>[] = [

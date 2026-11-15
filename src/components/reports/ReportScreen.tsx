@@ -1,8 +1,9 @@
 import { Button, DateRangeField, Dialog, Field, Inline, Input, KeyHint, ReportPanel, ReportToolbar, saveFile, ShortcutScope, Stack, Switch, Text } from '@ten98/ui'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from '@tanstack/react-router'
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
-import { defaultScopeNote, longDate, periodText, reportFailureAction, type DefaultsText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
+import { failureActions, readCursorStack, scopeLine, type DefaultsText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../KeyboardMenu'
 import { DialogKeys, ReservedKeys, screenModeText, useAppCommand, useBackOverride, useOpenScreen, type ScreenMode } from '../KeyboardShell'
 import { loadDefaults, periodSearch, reportRoutes, type ReportRoute, type ReportSearch } from './navigation'
@@ -29,8 +30,9 @@ export type PeriodControl =
  * Escape goes back one level through `back` (nav.back). The table inside registers the movement and drill commands.
  *
  * `period` is what the address asks for (the period dialog starts from it); `shown` is the period the report actually
- * covers when the server cut it short, and the scope line and the as-of date state that one. A failure the user can fix by
- * changing the period (`failure`, see reportFailureAction) offers "Change period" first instead of "Try again".
+ * covers when the server cut it short, and the scope line and the as-of date state that one (`scopeLine`). What a failed
+ * load offers comes from its status and the page in the address (`failureActions`): a refusal the user can fix offers
+ * "Open the first page" (on a later page of a register) and "Change period" instead of "Try again".
  */
 export function ReportScreen({ title, search, periodKind = 'statement', period, shown, failure, detail, zeros, exportPath, back, summary, status, error, onRetry, children }: {
   title: string
@@ -84,11 +86,10 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
 
   useBackOverride(back)
   const defaults = useReportDefaults(company.id, period !== undefined)
-  const covered = shown ?? (period?.kind === 'range' ? period.period : null)
-  const note = defaults && period?.kind === 'range' && covered ? defaultScopeNote(covered, periodKind, false, defaults)
-    : defaults && period?.kind === 'date' && period.date ? defaultScopeNote({ from: period.date, to: period.date }, periodKind, true, defaults) : null
-  const scopeText = period?.kind === 'range' ? (covered ? periodText(covered) : 'Choosing the period…')
-    : period?.kind === 'date' ? (period.date ? `As at ${longDate(period.date)}` : 'Choosing the date…') : 'Read-only'
+  const { scope, asOf } = scopeLine(period, shown, periodKind, defaults)
+  const navigate = useNavigate()
+  const offers = failureActions({ failure, hasPeriod: period !== undefined, onLaterPage: readCursorStack(search.pages).length > 0 })
+  const firstPage = <Button variant='secondary' size='sm' onClick={() => void navigate({ to: '.', search: ((previous: ReportSearch) => ({ ...previous, pages: undefined, hl: undefined })) as never, replace: true })}>Open the first page</Button>
   const changeButton = period && <Button variant='secondary' size='sm' onClick={() => setPeriodOpen(true)}>Change {period.kind === 'date' ? 'date' : 'period'} <KeyHint command='report.period' /></Button>
 
   return <ShortcutScope name={contextTitles.report}>
@@ -104,10 +105,11 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
         </Inline>}
         summary={summary}
         actions={exportState.message ? <Text size='sm' tone={exportState.failed ? 'danger' : 'muted'} role='status'>{exportState.message}</Text> : undefined} />
-      <ReportPanel title={title} scope={<Text as='span' dir='auto'>{scopeText}{note ? ` (${note})` : ''}</Text>} source={<Text as='span' dir='auto'>{company.name} · amounts in {company.baseCurrency}</Text>}
-        asOf={<Text as='span' dir='auto'>{covered ? longDate(covered.to) : period?.kind === 'date' && period.date ? longDate(period.date) : '—'}</Text>}
+      <ReportPanel title={title} scope={<Text as='span' dir='auto'>{scope}</Text>} source={<Text as='span' dir='auto'>{company.name} · amounts in {company.baseCurrency}</Text>}
+        asOf={<Text as='span' dir='auto'>{asOf ?? '—'}</Text>}
         status={status} reason={status === 'error' ? error : status === 'loading' ? 'Loading…' : undefined} retainedContent
-        retry={status === 'error' ? (period && reportFailureAction(failure) === 'change-period' ? changeButton : onRetry ? <Button variant='secondary' size='sm' onClick={onRetry}>Try again</Button> : undefined) : undefined}>
+        retry={status === 'error' ? <Inline gap={2}>{offers.map(offer => offer === 'first-page' ? <Fragment key={offer}>{firstPage}</Fragment> : offer === 'change-period' ? <Fragment key={offer}>{changeButton}</Fragment>
+          : onRetry ? <Button key={offer} variant='secondary' size='sm' onClick={onRetry}>Try again</Button> : null)}</Inline> : undefined}>
         {children}
       </ReportPanel>
     </Stack>

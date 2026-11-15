@@ -2,15 +2,15 @@ import type { DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
-import { query, reportSearch } from '../../components/reports/navigation'
+import { query } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { monthlyClipNotice, monthText, type LedgerMonthlyReport } from '../../lib/reports'
+import { monthlyClipNotice, monthText, type LedgerMonthlyReport, readReportSearch } from '../../lib/reports'
 
 /** A ledger's opening, then debit, credit and closing per month of the period (one financial year at a time). */
-export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-monthly')({ validateSearch: reportSearch, component: LedgerMonthlyScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-monthly')({ validateSearch: readReportSearch, component: LedgerMonthlyScreen })
 
 type Row = { key: string; label: string; debit: string | null; credit: string | null; closing: string; from: string; to: string; month: boolean }
 const columns: DataColumn<Row>[] = [

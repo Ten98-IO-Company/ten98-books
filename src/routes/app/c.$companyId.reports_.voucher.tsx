@@ -1,20 +1,20 @@
 import { DescriptionList, Stack, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { Amount, Blank, Particulars, VoucherMarks } from '../../components/reports/cells'
-import { reportSearch, useReport } from '../../components/reports/navigation'
+import { useReport } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Voucher, VoucherLine } from '../../lib/ledger'
 import type { Wire } from '../../lib/money'
-import { longDate, voucherParent } from '../../lib/reports'
+import { longDate, voucherParent, readReportSearch } from '../../lib/reports'
 
 /**
  * A voucher, read-only: the last level of the drill-down, read through the voucher API (read mode, the same
  * authorization as the reports). Editing belongs to the voucher screens. The report period stays in the address so
  * going back and opening other reports carries it.
  */
-export const Route = createFileRoute('/app/c/$companyId/reports_/voucher')({ validateSearch: reportSearch, component: VoucherScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/voucher')({ validateSearch: readReportSearch, component: VoucherScreen })
 
 type Line = Wire<VoucherLine>
 const columns: DataColumn<Line>[] = [

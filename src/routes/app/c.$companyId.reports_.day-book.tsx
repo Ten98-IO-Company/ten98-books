@@ -1,18 +1,18 @@
 import { Text, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { Amount, Blank, Particulars, VoucherMarks } from '../../components/reports/cells'
-import { query, reportSearch } from '../../components/reports/navigation'
+import { query } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { registerRange, type DayBookReport, type DayBookRow } from '../../lib/reports'
+import { registerRange, type DayBookReport, type DayBookRow, readReportSearch } from '../../lib/reports'
 
 /**
  * The day book: the vouchers of one day (by default the last voucher date) or of a period, in entry order. The amount
  * stands in the column of the voucher's first line; cancelled and optional vouchers are marked and not counted.
  */
-export const Route = createFileRoute('/app/c/$companyId/reports_/day-book')({ validateSearch: reportSearch, component: DayBookScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/day-book')({ validateSearch: readReportSearch, component: DayBookScreen })
 
 type Row = Wire<DayBookRow>
 const counts = (row: Row) => row.status === 'regular'

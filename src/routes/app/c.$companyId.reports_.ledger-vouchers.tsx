@@ -2,15 +2,15 @@ import { Alert, Text, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Blank, Balance, Particulars } from '../../components/reports/cells'
-import { query, reportSearch } from '../../components/reports/navigation'
+import { query } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { centreOriginNotice, ledgerVouchersParent, longDate, registerRange, type LedgerVoucherRow, type LedgerVouchersReport } from '../../lib/reports'
+import { centreOriginNotice, ledgerVouchersParent, longDate, registerRange, type LedgerVoucherRow, type LedgerVouchersReport, readReportSearch } from '../../lib/reports'
 
 /** One ledger's vouchers in the period with the running balance and the ledgers on the other side; paged. */
-export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-vouchers')({ validateSearch: reportSearch, component: LedgerVouchersScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-vouchers')({ validateSearch: readReportSearch, component: LedgerVouchersScreen })
 
 type Row = { key: string; entry: Wire<LedgerVoucherRow> | null; balance: string; label: string }
 const columns: DataColumn<Row>[] = [

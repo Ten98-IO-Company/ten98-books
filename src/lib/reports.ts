@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { financialYearOf, isCalendarDate } from './company.ts';
+import { nameMatchKey } from './names.ts';
 import { calendarDate, type Nature, type Side, type VoucherKind, type VoucherStatus } from './ledger.ts';
 import type { CostCategorySummary, CostCentreBreakup, CostFigures } from './cost-centres.ts';
 import type { Wire } from './money.ts';
@@ -169,36 +170,92 @@ export function defaultPeriod(financialYearStart: { month: number; day: number }
   return { from: financialYearOf(financialYearStart, anchor).from, to: anchor };
 }
 
-/** What the address of the balance sheet says about its date: `from` and `to` as read, and the text of a `to` that is no date. */
-export type AsAtAddress = { from?: string; to?: string; badTo?: string };
+/** A date of an address as a report reads it: a calendar date written as text, nothing else (the router parses `?to=2027` as a number and a repeated parameter as an array). */
+export const addressDate = (value: unknown): string | undefined => typeof value === 'string' && isCalendarDate(value) ? value : undefined;
 
-/** The text of a `to` that is not a calendar date between 1900 and 2199 (kept short for display), for a notice; undefined when it is a date or absent. */
-export const unreadableDate = (value: unknown): string | undefined =>
-  typeof value === 'string' && value !== '' && !isCalendarDate(value) ? value.slice(0, 40) : undefined;
+/**
+ * The `from` and `to` of the balance sheet's address, both keys always written. The router lays the address's raw
+ * values under a route's validated search, so a key left out (as the shared schema leaves out one it cannot read) shows
+ * the raw value through, a number or an array that nothing downstream expects. Writing the key, even as undefined,
+ * keeps that value from the screen and from the remembered period.
+ */
+export const balanceSheetDates = (search: Record<string, unknown>): { from: string | undefined; to: string | undefined } =>
+  ({ from: addressDate(search.from), to: addressDate(search.to) });
+
+/**
+ * What a `to` in an address that is no calendar date reads as, for a notice (kept short): the text itself, or a number,
+ * list or object written out. Undefined when it is a date or says nothing (absent, empty).
+ */
+export function unreadableDate(value: unknown): string | undefined {
+  if (value === undefined || value === null || addressDate(value) !== undefined) return undefined;
+  const text = typeof value === 'string' ? value : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return text === '' || text === '[]' ? undefined : text.slice(0, 40);
+}
+
+const idText = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const lineKeyText = /^[a-z]:[0-9a-f-]{36}$|^[a-z]:[a-z-]+$|^[0-9a-f-]{36}$|^\d{4}-\d{2}$/i;
+
+/**
+ * The search of a report screen as its route reads the address: only values it can read, and EVERY key written (as
+ * undefined when unreadable). The router lays the address's raw values under a route's validated search, so a key left
+ * out shows the raw value through (a number, a list, a date that is no date): a repeated `to` crashed the screen and a
+ * numeric `from` became the period. Writing the key keeps the raw value from the screen, the remembered period and the
+ * next report. Every report route validates with this.
+ */
+export function readReportSearch(search: Record<string, unknown>) {
+  const id = (value: unknown) => typeof value === 'string' && idText.test(value) ? value.toLowerCase() : undefined;
+  return {
+    from: addressDate(search.from), to: addressDate(search.to),
+    detail: search.detail === true ? true : undefined, zeros: search.zeros === true ? true : undefined,
+    hl: typeof search.hl === 'string' && lineKeyText.test(search.hl) ? search.hl : undefined,
+    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher), centre: id(search.centre), fromCentre: id(search.fromCentre),
+    pages: writeCursorStack(readCursorStack(search.pages)),
+  };
+}
+
+/**
+ * The text of a `to` that was no date, for the notice. The server validates the address before the screen exists and
+ * writes the validated address back, so the raw `to` is gone by then: the route carries the text as `badTo` for one
+ * render, and the screen takes it into its state and removes it from the address. `badTo` counts only while `to` is no
+ * date, so a link cannot attach a notice to a date that was read.
+ */
+export const unreadableTo = (search: Record<string, unknown>): string | undefined =>
+  balanceSheetDates(search).to === undefined ? unreadableDate(search.to) ?? unreadableDate(search.badTo) : undefined;
 
 /**
  * The period of a balance sheet address. The balance sheet is an "as at" report, so `to` alone is the date, and its
- * financial year's start is the period's start (`from` is kept only when it is not after the date, as the screen does
- * when both are given). Without a readable `to` there is no period yet: the screen fills in its default, and
- * `unreadableDateNotice` says so when the address held a `to` that was no date.
+ * financial year's start is the period's start (`from` is kept only when it is a date not after `to`, as the screen does
+ * when both are given). Anything that is not a calendar date is no date. Without a readable `to` there is no period yet:
+ * the screen fills in its default, and `unreadableDateNotice` says so when the address held a `to` that was no date.
  */
-export function asAtPeriod(address: AsAtAddress, financialYearStart: { month: number; day: number }): ReportPeriod | null {
-  if (!address.to) return null;
-  return { from: address.from && address.from <= address.to ? address.from : financialYearOf(financialYearStart, address.to).from, to: address.to };
+export function asAtPeriod(address: { from?: unknown; to?: unknown }, financialYearStart: { month: number; day: number }): ReportPeriod | null {
+  const to = addressDate(address.to);
+  if (!to) return null;
+  const from = addressDate(address.from);
+  return { from: from && from <= to ? from : financialYearOf(financialYearStart, to).from, to };
 }
 
 /** The notice for a balance sheet address whose `to` is no date: what was asked for, and the date shown instead (null while none is). */
 export const unreadableDateNotice = (badTo: string, shown: string | null): string =>
   `“${badTo}” is not a date. Write a date as 2026-01-31, in the years 1900 to 2199. ${shown ? `The balance sheet shows ${longDate(shown)} instead; ` : 'The default date is being chosen; '}use Change date to choose another.`;
 
+/** What a failed report can offer, in order. */
+export type FailureAction = 'first-page' | 'change-period' | 'retry';
+
 /**
- * What a failed report offers first. A refusal of the request itself (status 400: a period too long, an end before its
- * start, a date that is no date) is the user's to fix, and trying again can never help, so the screen offers to change
- * the period. Anything else (no connection, 5xx, a busy server) may pass on a retry. `status` 0 or absent is a failure
- * with no answer from the server.
+ * What a failed report offers. A refusal of the request itself (status 400: a period too long, an end before its start, a
+ * date that is no date, a page cursor the server cannot read) is the user's to fix, and trying again can never help: on
+ * a register's later page the first action is to open the first page (the cursor may be the cause; the server gives the
+ * cursor refusal no code of its own, so the page in the address is the clue), then to change the period where the screen
+ * has one. Anything else (no connection, 404, 409, 5xx) may pass on a retry or is the same as before: Try again.
  */
-export const reportFailureAction = (failure: { status?: number } | null | undefined): 'change-period' | 'retry' =>
-  failure?.status === 400 ? 'change-period' : 'retry';
+export function failureActions({ failure, hasPeriod, onLaterPage }: { failure: { status?: number } | null | undefined; hasPeriod: boolean; onLaterPage: boolean }): FailureAction[] {
+  if (failure?.status === 400) {
+    const actions: FailureAction[] = [...onLaterPage ? ['first-page' as const] : [], ...hasPeriod ? ['change-period' as const] : []];
+    if (actions.length) return actions;
+  }
+  return ['retry'];
+}
 
 /**
  * The monthly summary's notice when its end was clipped to the end of the financial year: what was asked for and why
@@ -216,7 +273,7 @@ export type DefaultsText = { lastVoucherDate: string | null; period: ReportPerio
  * Words for the scope line when a report shows the period it opens on by default, so it is clear why that period and
  * not the company home's financial year: statements open on the financial year to the last voucher date (or the date
  * the books begin while there is none) and the day book on that day. `shown` is the period on screen; for an "as at"
- * report (`asAt`) only its end counts. Null for any other period.
+ * report (`asAt`) only its end counts. Null for any other period. The note describes the period, not who chose it.
  */
 export function defaultScopeNote(shown: ReportPeriod, kind: PeriodKind, asAt: boolean, defaults: DefaultsText): string | null {
   const last = defaults.lastVoucherDate !== null;
@@ -224,6 +281,27 @@ export function defaultScopeNote(shown: ReportPeriod, kind: PeriodKind, asAt: bo
   if (kind !== 'statement') return null;
   if (asAt) return shown.to === defaults.period.to ? (last ? 'the last voucher date' : 'the date the books begin') : null;
   return shown.from === defaults.period.from && shown.to === defaults.period.to ? (last ? 'the financial year to the last voucher date' : 'the financial year to the date the books begin') : null;
+}
+
+/** What a screen's period control asks for: a range, an as-at date, or nothing (the voucher view). */
+export type ScopeControl = { kind: 'range'; period: ReportPeriod | null } | { kind: 'date'; date: string | null };
+
+/**
+ * The scope line and the as-of date of a report. A report states the period it actually covers (`shown`, when the server
+ * cut the asked period short), not the one asked for, and names the default period's origin (defaultScopeNote). The as-of
+ * is null where there is none yet.
+ */
+export function scopeLine(control: ScopeControl | undefined, shown: ReportPeriod | null | undefined, kind: PeriodKind, defaults: DefaultsText | null): { scope: string; asOf: string | null } {
+  if (!control) return { scope: 'Read-only', asOf: null };
+  if (control.kind === 'date') {
+    if (!control.date) return { scope: 'Choosing the date…', asOf: null };
+    const note = defaults ? defaultScopeNote({ from: control.date, to: control.date }, kind, true, defaults) : null;
+    return { scope: `As at ${longDate(control.date)}${note ? ` (${note})` : ''}`, asOf: longDate(control.date) };
+  }
+  const covered = shown ?? control.period;
+  if (!covered) return { scope: 'Choosing the period…', asOf: null };
+  const note = defaults ? defaultScopeNote(covered, kind, false, defaults) : null;
+  return { scope: `${periodText(covered)}${note ? ` (${note})` : ''}`, asOf: longDate(covered.to) };
 }
 
 /** A signed balance as an amount and its side: `{ amount: 5n, side: 'Cr' }` for -5n, side null for zero. */
@@ -370,11 +448,43 @@ export function costBreakupSummary(report: Pick<Wire<CostCentreBreakup>, 'centre
   return `Category: ${report.centre.categoryName}.${ledgers ? ' A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers for the period, for every centre.' : ''}`;
 }
 
-/** The centres the break-up's chooser lists for the typed text: a part of the name or the second-language name, any case. */
-export function matchingCentres<T extends { name: string; secondLanguageName: string | null }>(centres: readonly T[], text: string): T[] {
-  const words = text.trim().toLowerCase();
-  return centres.filter(row => !words || row.name.toLowerCase().includes(words) || (row.secondLanguageName?.toLowerCase().includes(words) ?? false));
+/**
+ * The lines a chooser (the ledger list, the cost centre list) shows for the typed text: those whose name or second-language
+ * name holds it under the product's name match key, so case, spaces and the ignored punctuation do not matter ("job 105"
+ * finds "JOB-105"), as in the master forms' lookups. Text made only of ignored characters shows everything.
+ */
+export function narrowByName<T extends { name: string; secondLanguageName: string | null }>(rows: readonly T[], text: string): T[] {
+  const wanted = nameMatchKey(text);
+  return rows.filter(row => !wanted || nameMatchKey(row.name).includes(wanted) || (row.secondLanguageName !== null && nameMatchKey(row.secondLanguageName).includes(wanted)));
 }
+
+/** What Escape does in a chooser's find field: typed text is cleared first; with none the key goes back. */
+export const pickerEscape = (filter: string): 'clear' | 'back' => filter === '' ? 'back' : 'clear';
+
+/** Lines a PageUp or PageDown moves in a list. */
+export const pageLines = 10;
+export type ListMove = 'next' | 'previous' | 'first' | 'last' | 'page-down' | 'page-up';
+
+/**
+ * The index the highlight goes to for a move key in a list of `count` lines from `index` (the first line is the
+ * highlighted one before any key), kept inside the list; null when the list is empty.
+ */
+export function listTarget(move: ListMove, index: number, count: number): number | null {
+  if (count <= 0) return null;
+  const by = { next: 1, previous: -1, 'page-down': pageLines, 'page-up': -pageLines }[move as 'next'] ?? 0;
+  const target = move === 'first' ? 0 : move === 'last' ? count - 1 : index + by;
+  return Math.min(Math.max(target, 0), count - 1);
+}
+
+/** The line Enter opens in a list: the highlighted one, the first while none was chosen (it shows highlighted), none in an empty list. */
+export const lineToOpen = (keys: readonly string[], highlight: string | undefined): string | undefined =>
+  keys.length === 0 ? undefined : keys[Math.max(0, highlight === undefined ? 0 : keys.indexOf(highlight))];
+
+/** A chooser's typed text kept for this tab while one of its lines is open, per company and chooser, so going back finds the list as it was left. */
+export const chooserFilters = new Map<string, string>();
+
+/** The text a chooser starts with: what it held when a line was opened, when coming back to that line (`hl` in the address); empty on any other arrival. */
+export const restoredFilter = (memory: ReadonlyMap<string, string>, key: string, hl: string | undefined): string => hl === undefined ? '' : memory.get(key) ?? '';
 
 /**
  * The masters cost list's notice while cost centres are switched off. Only someone who can write is told they can set
