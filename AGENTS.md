@@ -33,5 +33,6 @@ One canonical document per topic, linked from [docs/ROADMAP.md](docs/ROADMAP.md)
 - Money is `BIGINT` minor units and `bigint` in code, a string on the wire; quantities and rates are `NUMERIC`/strings. Never a float (D-04, D-07).
 - Every server entry point, export and job authorizes the company and runs accounting queries through `withCompany` (D-03). Each handler module has a wrong-company negative test.
 - Migrations are immutable numbered SQL files; the coordinator assigns numbers.
+- Hand-written SQL in `src` is counted per file in `raw-statements.json` and the architecture check refuses a rise. A change that adds a statement raises that file's count by hand and writes why in its reason in the same diff; a new file with SQL gets its own entry. Never lower a guard or bend a measured query shape to avoid the count.
 - Posting rules live in the server ledger module only; screens never compute balances.
 - A requirement is `done` only when observed, fixtured and tested (D-01); never describe unfinished behaviour as equivalent.

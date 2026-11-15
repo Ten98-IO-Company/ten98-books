@@ -1,0 +1,114 @@
+{
+  "src/server/account-security.ts": {
+    "count": 28,
+    "reason": "Identity controller: hand-written statements that lock the user, session, credential and verification rows in one transaction with the sign-in library call; it moves when the shared auth preset is adopted."
+  },
+  "src/server/api/http.ts": {
+    "count": 2,
+    "reason": "Rate-limit counters: one statement with a data-modifying CTE and ON CONFLICT on a specific key; kept as written until a builder form with the same emitted shape is shown."
+  },
+  "src/server/api/session.ts": {
+    "count": 1,
+    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/api/settings.ts": {
+    "count": 2,
+    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/api/team.ts": {
+    "count": 1,
+    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/auth.ts": {
+    "count": 11,
+    "reason": "First-user setup: one atomic transaction under the installation row lock and the per-email advisory lock that creates the account, credential, workspace and owner membership; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/cli.ts": {
+    "count": 2,
+    "reason": "Operator command-line tool: role and database statements run outside the application transaction helpers."
+  },
+  "src/server/companies.ts": {
+    "count": 10,
+    "reason": "Company creation and settings: idempotency rows and settings written in the same transaction as the shared team controller call; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/demo/compare.ts": {
+    "count": 1,
+    "reason": "Demo seeder and comparison: reads that check what the ledger module stored; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/demo/seed.ts": {
+    "count": 5,
+    "reason": "Demo seeder and comparison: reads that check what the ledger module stored; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/jobs.ts": {
+    "count": 2,
+    "reason": "Worker heartbeat statements; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/bills.ts": {
+    "count": 10,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/context.ts": {
+    "count": 1,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/cost-centres.ts": {
+    "count": 22,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/currencies.ts": {
+    "count": 18,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/masters.ts": {
+    "count": 28,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/reports.ts": {
+    "count": 3,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/revisions.ts": {
+    "count": 2,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/seed.ts": {
+    "count": 1,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/stock-masters.ts": {
+    "count": 31,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/voucher-entry.ts": {
+    "count": 5,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/ledger/vouchers.ts": {
+    "count": 19,
+    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/reports/bills.ts": {
+    "count": 16,
+    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/reports/cost-centres.ts": {
+    "count": 3,
+    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/reports/day-book.ts": {
+    "count": 3,
+    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/reports/ledger.ts": {
+    "count": 3,
+    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+  },
+  "src/server/tenancy.ts": {
+    "count": 6,
+    "reason": "Sets the company scope for row-level security, reads memberships under a share lock and asserts the database roles; replaced by the shared tenancy helper when it is adopted."
+  },
+  "src/server/workspace-team.ts": {
+    "count": 3,
+    "reason": "Transaction control (BEGIN, COMMIT, ROLLBACK) around the shared team controller on a caller-owned connection."
+  }
+}
