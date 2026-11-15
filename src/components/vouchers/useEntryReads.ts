@@ -7,8 +7,6 @@ import { financialYearOf } from '../../lib/company'
 import type { CounterLedger, NextNumber, Side, TrialBalanceRow } from '../../lib/ledger'
 import type { Wire } from '../../lib/money'
 import type { PendingChoice } from '../../lib/voucher-entry'
-import { readWorkingDate, sessionStore, startingWorkingDate, writeWorkingDate } from '../../lib/working-date'
-import { loadDefaults } from '../reports/navigation'
 
 /**
  * The voucher entry screen's reads (docs/LEDGER.md, "Voucher entry reads"): the expected number, the resulting balances,
@@ -82,34 +80,6 @@ export function useCounterLedgers(companyId: string, voucherTypeId: string | nul
   const counterOf = useCallback((ledgerId: string, side: Side): string | null | undefined => known.current.get(`${voucherTypeId}:${ledgerId}:${side}`), [voucherTypeId])
   const reset = useCallback(() => { known.current.clear(); asked.current.clear() }, [])
   return { read, counterOf, reset }
-}
-
-const workingListeners = new Set<() => void>()
-
-/**
- * The tab's working date for the signed-in user and the company (src/lib/working-date.ts): the kept one, else the last
- * voucher date from the report defaults; null while that loads. The setter keeps it and tells every screen of the tab
- * that shows it.
- */
-export function useWorkingDate(company: { id: string; booksBeginning: string }): [string | null, (date: string) => void] {
-  const { me } = useApp()
-  const userId = me.user.id
-  const read = useCallback(() => readWorkingDate(sessionStore, userId, company.id, company.booksBeginning), [userId, company.id, company.booksBeginning])
-  const [date, setDate] = useState(read)
-  useEffect(() => {
-    let live = true
-    const listener = () => { const kept = read(); if (kept) setDate(kept) }
-    workingListeners.add(listener)
-    const kept = read()
-    if (kept) setDate(kept)
-    else loadDefaults(company.id).then(found => { if (live) setDate(startingWorkingDate(found)) }).catch(() => undefined)
-    return () => { live = false; workingListeners.delete(listener) }
-  }, [read])
-  const change = useCallback((next: string) => {
-    writeWorkingDate(sessionStore, userId, company.id, next)
-    for (const listener of workingListeners) listener()
-  }, [userId, company.id])
-  return [date, change]
 }
 
 /** A party's bills pending at the voucher date, in name order (the picker read), for the bill panel. */

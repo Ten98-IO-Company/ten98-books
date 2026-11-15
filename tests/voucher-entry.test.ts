@@ -3,9 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { balancePreviewInput, counterLedgerQuery, ledgerErrorCodes, nextNumberQuery, sides } from '../src/lib/ledger.ts';
 import {
-  afterDate, afterDeclinedAccept, afterLedgerInPlace, againstAmount, allocated, appendedLine, billDueDate, billRowBody, billsCover,
+  afterDate, afterDeclinedAccept, againstAmount, allocated, appendedLine, billDueDate, billRowBody, billsCover,
   blankDraft, cashModeKey, cashRuleProblem, creditPeriodText, defaultBillMethod, detailSteps, differenceText, draftDirty, draftReducer,
-  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, lineAccepts, listEnd, negativeCashWarning,
+  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, keyForSave, saveOutcome, negativeCashWarning,
   nextBillRow, openBills, parseCreditPeriod, parseEntryAmount, parseEntryDate, proposedAmount, readLayout, refusalPlace, refusalPlaces,
   relayLines, toVoucherBody, writeLayout, bodyProblems, billRowProblem, cashInHandIds, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
 } from '../src/lib/voucher-entry/index.ts';
@@ -140,7 +140,8 @@ const ledgers: EntryLedger[] = [
 ];
 
 test('ledger lists: each list is the set the posting rule accepts there, or a closed list whose other members another layout reaches', () => {
-  const accepted = (kind: typeof entryKinds[number]) => new Set(ledgers.filter(ledger => lineAccepts(kind, ledger)).map(ledger => ledger.id));
+  // The posting rule per line, as the server's: only the contra restricts single lines (every line cash or bank).
+  const accepted = (kind: typeof entryKinds[number]) => new Set(ledgers.filter(ledger => kind !== 'contra' || ledger.cashOrBank).map(ledger => ledger.id));
   for (const kind of entryKinds) for (const layout of layoutsOf(kind)) for (const position of ['account', 'line'] as const) for (const side of [...sides, ''] as const) {
     if (layout === 'double' && position === 'account') continue;
     const lists = ledgerOptions(kind, layout, position, side, ledgers);
@@ -172,6 +173,10 @@ test('the cash and bank rule is checked before sending, on the first line of the
   assert.match(cashRuleProblem('receipt', [{ side: 'Cr', ledger: 'l-cap' }, { side: 'Dr', ledger: 'l-cust' }], isCash)!.message, /debited/);
   assert.equal(cashRuleProblem('contra', [{ side: 'Dr', ledger: 'l-bank' }, { side: 'Cr', ledger: 'l-wages' }], isCash)?.line, 1);
   assert.equal(cashRuleProblem('journal', [{ side: 'Dr', ledger: 'l-wages' }, { side: 'Cr', ledger: 'l-cap' }], isCash), undefined);
+  // The side counts (a mutation that ignored it survived the review): a payment's cash on the debit side, a receipt's on the credit side, are refused.
+  assert.equal(cashRuleProblem('payment', [{ side: 'Dr', ledger: 'l-bank' }, { side: 'Cr', ledger: 'l-cap' }], isCash)?.line, 1);
+  assert.equal(cashRuleProblem('receipt', [{ side: 'Cr', ledger: 'l-bank' }, { side: 'Dr', ledger: 'l-cap' }], isCash)?.line, 1);
+  assert.equal(cashRuleProblem('receipt', [{ side: 'Cr', ledger: 'l-cap' }, { side: 'Dr', ledger: 'l-bank' }], isCash), undefined);
 });
 
 const cashOrBank = (id: string) => id === 'l-cash' || id === 'l-bank';
@@ -305,8 +310,6 @@ test('focus after No at accept, after the date key, after a ledger alteration; t
   assert.deepEqual(afterDate({ cell: { row: 'line-2', column: 'ledger' } }), { cell: { row: 'line-2', column: 'ledger', open: true } }, 'a ledger cell reopens its list');
   assert.deepEqual(afterDate({ cell: { row: 'line-2', column: 'amount' } }), { cell: { row: 'line-2', column: 'amount', edit: true } }, 'in its editor, so typed keys land there (Part A finding)');
   assert.deepEqual(afterDate({ field: 'narration' }), { field: 'narration' });
-  assert.deepEqual(afterLedgerInPlace('saved', 'line-2'), { cell: { row: 'line-2', column: 'amount', edit: true } });
-  assert.deepEqual(afterLedgerInPlace('closed', 'line-2'), { cell: { row: 'line-2', column: 'ledger', open: true } });
   assert.equal(escapeStep('5.00', true), 'clear', 'a prefilled amount is emptied first');
   assert.equal(escapeStep('', true), 'ask');
   assert.equal(escapeStep('', false), 'leave');
@@ -421,4 +424,38 @@ test('review item 6: cash in hand comes from the seeded group through the tree, 
   ];
   const ledgers = [{ id: 'cash', groupId: 'g-cash' }, { id: 'petty', groupId: 'g-deep' }, { id: 'bank', groupId: 'g-bank' }, { id: 'named-cash', groupId: 'g-ca' }, { id: 'pl', groupId: null }];
   assert.deepEqual([...cashInHandIds(groups, ledgers)].sort(), ['cash', 'petty']);
+});
+
+test('round 2, item 11: a party line whose panel holds only its default on-account row for the whole line sends no rows; changed rows are sent', () => {
+  const onAccount = (amount: string, side: 'Dr' | 'Cr' | '' = 'Cr'): BillDraft => ({ key: 'b', method: 'on_account', bill: '', name: '', credit: '', amount, side });
+  assert.equal(defaultRowsOnly([onAccount('500.00')], { side: 'Cr', amount: '500.00' }, 2), true);
+  assert.equal(defaultRowsOnly([onAccount('500.00', '')], { side: 'Cr', amount: '500.00' }, 2), true, 'a row with no side takes the line\'s');
+  assert.equal(defaultRowsOnly([onAccount('400.00')], { side: 'Cr', amount: '500.00' }, 2), false, 'part of the line');
+  assert.equal(defaultRowsOnly([onAccount('500.00', 'Dr')], { side: 'Cr', amount: '500.00' }, 2), false, 'the other side');
+  assert.equal(defaultRowsOnly([onAccount('250.00'), onAccount('250.00')], { side: 'Cr', amount: '500.00' }, 2), false, 'two rows');
+  assert.equal(defaultRowsOnly([{ ...onAccount('500.00'), method: 'new_ref', name: 'A1' }], { side: 'Cr', amount: '500.00' }, 2), false);
+  const body = (rows: BillDraft[]) => toVoucherBody({ kind: 'journal', layout: 'double', account: '', idempotencyKey: 'key-12345678', voucherTypeId: 't', date: '2026-01-07', narration: '',
+    lines: [ln('line-1', 'Dr', 'l-wages', '500.00'), ln('line-2', 'Cr', 'l-supp', '500.00')], bills: { 'line-2': rows } }, 2).lines[1];
+  assert.deepEqual(body([onAccount('500.00')]), { ledgerId: 'l-supp', side: 'Cr', amount: '500.00' }, 'as the demo seeder stores journal-01');
+  assert.deepEqual(body([onAccount('300.00'), onAccount('200.00')]).bills, [{ kind: 'on_account', amount: '300.00' }, { kind: 'on_account', amount: '200.00' }]);
+});
+
+test('round 2, item 1: bill rows above the line\'s amount, or netting to its other side, are refused before sending', () => {
+  const input = (rows: BillDraft[]) => ({ kind: 'payment' as const, layout: 'single' as const, account: 'l-bank', idempotencyKey: 'key-12345678', voucherTypeId: '01a1dd5a-c536-7bcb-b6a4-801c6418b118', date: '2026-01-31', narration: '',
+    lines: [ln('line-1', 'Dr', '01a1dd5a-c536-7bcb-b6a4-801c6418b111', '100.00')], bills: { 'line-1': rows } });
+  const row = (amount: string, side: 'Dr' | 'Cr' = 'Dr'): BillDraft => ({ key: `b${amount}${side}`, method: 'new_ref', bill: '', name: 'A1', credit: '', amount, side });
+  assert.deepEqual(bodyProblems(input([row('150.00')]), 2), [{ message: 'Line 1: its bill rows add up to more than the line\'s amount.', line: 'line-1', column: 'amount', bills: true }]);
+  assert.match(bodyProblems(input([row('20.00'), row('50.00', 'Cr')]), 2)[0].message, /other side of the line/);
+  assert.deepEqual(bodyProblems(input([row('60.00'), row('40.00')]), 2).filter(problem => problem.bills), [], 'exactly the line is fine');
+});
+
+test('round 2, item 4: no answer, a server or gateway error is an unknown outcome; a refusal renews the key only once the body changes', () => {
+  for (const status of [undefined, 0, 500, 502, 503, 504, 599]) assert.equal(saveOutcome(status), 'unknown', String(status));
+  for (const status of [400, 403, 404, 409, 422]) assert.equal(saveOutcome(status), 'refused', String(status));
+  assert.equal(saveOutcome(401), 'signed-out');
+  let made = 0;
+  const make = () => `key-new-${++made}`;
+  assert.equal(keyForSave({ key: 'key-1', refusedBody: null }, 'body-a', make), 'key-1', 'nothing refused: the voucher\'s key (an unknown outcome resends with it)');
+  assert.equal(keyForSave({ key: 'key-1', refusedBody: 'body-a' }, 'body-a', make), 'key-1', 'the same refused body again: the same key');
+  assert.equal(keyForSave({ key: 'key-1', refusedBody: 'body-a' }, 'body-b', make), 'key-new-1', 'a changed body after a refusal: a new key');
 });

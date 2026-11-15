@@ -52,6 +52,9 @@ export function loadDefaults(companyId: string): Promise<Wire<ReportDefaults>> {
   return pending
 }
 
+/** Drops the cached defaults after a voucher is saved, so the day book and the statements open on the new last voucher date. */
+export const forgetDefaults = (companyId: string): void => { defaults.delete(companyId) }
+
 /**
  * The period of the report on screen. With none in the address it fills one in (replacing the history entry): the day
  * book its last voucher date, statements the statement period shown last in this tab or the financial-year start

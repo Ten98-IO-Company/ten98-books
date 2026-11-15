@@ -25,6 +25,8 @@ export const layoutsOf = (kind: EntryKind): readonly EntryLayout[] => kind === '
 export const defaultLayout = (kind: EntryKind): EntryLayout => kind === 'journal' ? 'double' : 'single';
 
 const other = (side: Side): Side => side === 'Dr' ? 'Cr' : 'Dr';
+/** A side read back from a grid cell's text: Dr, Cr, or '' for anything else. */
+export const sideOf = (value: string | undefined): Side | '' => value === 'Dr' || value === 'Cr' ? value : '';
 /**
  * The side of the single-entry Account: credited on a payment, debited on a receipt and on a contra (observed: the
  * contra's Account is the receiving side, and the starter dataset's contra lines follow that order).
@@ -43,10 +45,9 @@ export const firstLineSide = (kind: EntryKind): Side => kind === 'receipt' ? 'Cr
 /**
  * A layout chosen in one type applies to every type of its family (observed). The cash family (payment, receipt,
  * contra) keeps its choice per tab, user and company; the journal has no choice. Invoice types (slice 2) keep theirs
- * per browser under `voucherMode:invoice`.
+ * per browser (slice 2).
  */
 export const cashModeKey = (userId: string, companyId: string): string => `voucherMode:${userId}:${companyId}:cash`;
-export const invoiceModeKey = 'voucherMode:invoice';
 
 export function readLayout(kind: EntryKind, session: StoreSource, userId: string, companyId: string): EntryLayout {
   if (kind === 'journal') return 'double';
@@ -181,13 +182,6 @@ export function ledgerOptions(kind: EntryKind, layout: EntryLayout, position: Le
   return { defaults: rest, all: sorted.map(optionOf), closed: false };
 }
 
-/**
- * Whether the posting rule accepts a ledger on a line by itself: only the contra restricts single lines (every line cash
- * or bank). Payment and receipt rules are about the voucher as a whole (a cash or bank credit, or debit), checked by
- * `cashRuleProblem` before sending.
- */
-export const lineAccepts = (kind: EntryKind, ledger: Pick<EntryLedger, 'cashOrBank'>): boolean => kind !== 'contra' || ledger.cashOrBank;
-
 /** The posting rule's refusal before sending, with the first line of the side that needs cash or bank; undefined when it holds. */
 export function cashRuleProblem(kind: EntryKind, lines: readonly { side: Side; ledger: string }[], isCash: (ledgerId: string) => boolean): { message: string; line: number } | undefined {
   if (kind === 'contra') {
@@ -208,6 +202,6 @@ export function cashRuleProblem(kind: EntryKind, lines: readonly { side: Side; l
  */
 export function cashInHandIds(groups: readonly { id: string; parentId: string | null; systemKey: string | null }[], ledgers: readonly { id: string; groupId: string | null }[]): Set<string> {
   const family = new Set<string>();
-  for (const group of groups) if (group.systemKey === 'cash_in_hand') { family.add(group.id); for (const id of descendantIds(groups as never, group.id)) family.add(id); }
+  for (const group of groups) if (group.systemKey === 'cash_in_hand') { family.add(group.id); for (const id of descendantIds(groups, group.id)) family.add(id); }
   return new Set(ledgers.filter(ledger => ledger.groupId !== null && family.has(ledger.groupId)).map(ledger => ledger.id));
 }

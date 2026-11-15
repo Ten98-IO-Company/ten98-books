@@ -3,7 +3,7 @@ import { useMemo, type Ref } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { useAppCommand } from '../KeyboardShell'
 import {
-  amountText, balanceText, firstLineSide, kindTitles, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
+  amountText, balanceText, firstLineSide, kindTitles, sideOf, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
   type EntryKind, type EntryLayout, type EntryLedger, type EntryLine, type LedgerLists,
 } from '../../lib/voucher-entry'
 import type { Side } from '../../lib/ledger'
@@ -12,7 +12,7 @@ import type { Side } from '../../lib/ledger'
 export const toGridRows = (lines: readonly EntryLine[], balances: ReadonlyMap<string, bigint>, exponent: MoneyExponent): EntryGridRow[] =>
   lines.map(line => ({ key: line.key, values: { side: line.side, ledger: line.ledger, amount: line.amount, balance: line.ledger && balances.has(line.ledger) ? balanceText(balances.get(line.ledger)!, exponent) : '' } }))
 export const fromGridRows = (rows: readonly EntryGridRow[]): EntryLine[] =>
-  rows.map(row => ({ key: row.key, side: (row.values.side ?? '') as Side | '', ledger: row.values.ledger ?? '', amount: row.values.amount ?? '' }))
+  rows.map(row => ({ key: row.key, side: sideOf(row.values.side), ledger: row.values.ledger ?? '', amount: row.values.amount ?? '' }))
 
 const sides = [{ value: 'Dr', label: 'Dr', keys: ['B', 'D'] }, { value: 'Cr', label: 'Cr', keys: ['T', 'C'] }] as const
 
@@ -38,16 +38,18 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
   // One list per side, so the arrays stay the same between renders (the grid caches labels per array).
   const lists = useMemo(() => {
     const of = (side: Side | ''): LedgerLists => ledgerOptions(kind, layout, 'line', side, ledgers)
-    return { '': of(''), Dr: of('Dr'), Cr: of('Cr') } as Record<Side | '', LedgerLists>
+    const byside: Record<Side | '', LedgerLists> = { '': of(''), Dr: of('Dr'), Cr: of('Cr') }
+    return byside
   }, [kind, layout, ledgers])
-  const listOf = (row: EntryGridRow) => lists[(layout === 'double' ? row.values.side : '') as Side | ''] ?? lists['']
+  const listOf = (row: EntryGridRow) => lists[layout === 'double' ? sideOf(row.values.side) : '']
   const columns = useMemo<EntryGridColumn[]>(() => [
     ...layout === 'double' ? [{ id: 'side', label: 'Dr or Cr', type: 'side' as const, sides, required: true,
       // Fixed by the type on the first line (observed); a line that became first another way keeps its side editable.
       readOnly: (row: EntryGridRow) => locked || (row.key === lines[0]?.key && row.values.side === firstLineSide(kind)) }] : [],
     { id: 'ledger', label: 'Ledger', type: 'lookup', readOnly: locked,
       options: (row: EntryGridRow) => listOf(row).defaults, allOptions: (row: EntryGridRow) => listOf(row).all, showAllLabel: 'Show all ledgers' },
-    { id: 'amount', label: 'Amount', type: 'amount', readOnly: locked, parse: (text: string) => parseEntryAmount(text, exponent) },
+    // Required: an amount that rounds to zero empties the cell, and the cursor stays there instead of moving on (observed: no line).
+    { id: 'amount', label: 'Amount', type: 'amount', readOnly: locked, required: true, parse: (text: string) => parseEntryAmount(text, exponent) },
     { id: 'balance', label: 'Resulting balance', type: 'text', readOnly: true },
   ], [layout, locked, lines[0]?.key, lists, exponent])
   const rows = useMemo(() => toGridRows(lines, balances, exponent), [lines, balances, exponent])
@@ -60,7 +62,7 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
     onRowsChange={next => onLines(fromGridRows(next))} createRow={current => { const line = createRow(fromGridRows(current)); return toGridRows([line], balances, exponent)[0] }}
     footer={footer} footerLabel='Total' panel={panel} apiRef={apiRef} onEnd={onEnd} onCellCommit={onCellCommit} announce={announce}
     editKey={null} openListOnAppend escapeMode='clear'
-    labels={{ cell: (column, row) => `${column}, line ${row}` }}>
+    labels={{ cell: (column, row) => `${column}, line ${row}`, required: 'Enter an amount above zero.' }}>
     <LineCommands />
   </EntryGrid>
 }

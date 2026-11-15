@@ -18,6 +18,8 @@ export function detailSteps(line: Pick<EntryLine, 'ledger' | 'amount'>, ledger: 
 
 export const billKindTitles: Record<BillKind, string> = { against_ref: 'Against a bill', new_ref: 'New bill', advance: 'Advance', on_account: 'On account' };
 export const billKindOrder: readonly BillKind[] = ['against_ref', 'new_ref', 'advance', 'on_account'];
+/** A method read back from a grid cell's text, or '' for anything else. */
+export const billKindOf = (value: string | undefined): BillKind | '' => billKindOrder.find(kind => kind === value) ?? '';
 
 /** A pending bill the picker offers, as the picker read answers it (signed: positive on the debit side). */
 export type PendingChoice = { billId: string; name: string; billDate: string | null; dueDate: string | null; pending: bigint; finalPending: bigint };

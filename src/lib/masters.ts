@@ -112,7 +112,7 @@ export const isCursorRow = (row: ChartRow): row is Exclude<ChartRow, { kind: 'he
 export const primaryChoice = 'primary';
 
 /** Ids of the groups below `groupId`, at any depth. */
-export function descendantIds(groups: readonly GroupRow[], groupId: string): Set<string> {
+export function descendantIds(groups: readonly Pick<GroupRow, 'id' | 'parentId'>[], groupId: string): Set<string> {
   const children = new Map<string, string[]>();
   for (const group of groups) if (group.parentId) children.set(group.parentId, [...children.get(group.parentId) ?? [], group.id]);
   const found = new Set<string>();

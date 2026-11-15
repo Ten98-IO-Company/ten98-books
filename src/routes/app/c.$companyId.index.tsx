@@ -9,7 +9,7 @@ import { commands, type CommandId } from '../../lib/commands'
 import { baseCurrencies, financialYearOf } from '../../lib/company'
 import { longDate } from '../../lib/reports'
 import { entryDateLabel, parseEntryDate } from '../../lib/voucher-entry'
-import { useWorkingDate } from '../../components/vouchers/useEntryReads'
+import { useWorkingDate } from '../../components/vouchers/useWorkingDate'
 
 export const Route = createFileRoute('/app/c/$companyId/')({ component: CompanyHome })
 

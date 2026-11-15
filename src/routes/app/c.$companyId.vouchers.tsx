@@ -1,12 +1,12 @@
 import { Alert, Button, StatusLine } from '@ten98/ui'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { api, errMsg } from '../../lib/api'
 import type { VoucherType } from '../../lib/ledger'
 import { isEntryKind, type EntryKind } from '../../lib/voucher-entry'
 import { readStored, sessionStore } from '../../lib/working-date'
 import { useApp, useCompany } from '../../lib/app-context'
-import { useWorkingDate } from '../../components/vouchers/useEntryReads'
+import { useWorkingDate } from '../../components/vouchers/useWorkingDate'
 import { useCanWrite } from '../../components/masters/useCanWrite'
 import { useMasterData } from '../../components/masters/useMasterData'
 import { lastTypeKey, VoucherEntryScreen } from '../../components/vouchers/VoucherEntryScreen'
@@ -31,10 +31,18 @@ function VouchersRoute() {
     api<{ voucherTypes: VoucherType[] }>(`/api/companies/${company.id}/voucher-types`).then(found => { if (live) setTypes(found.voucherTypes) }).catch(cause => { if (live) setReadError(errMsg(cause)) })
     return () => { live = false }
   }, [company.id])
-  if (canWrite === false) return <Alert tone='info'>Viewers cannot enter vouchers. The day book and the reports show what is saved.</Alert>
+  if (canWrite === false) return <ViewerNotice companyId={company.id} />
   if (error || readError) return <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The voucher screen could not be loaded: {error || readError}</Alert>
   if (!groups || !ledgers || !types || !workingDate || canWrite === undefined) return <StatusLine busy>Loading the voucher screen…</StatusLine>
   const stored = readStored(sessionStore, lastTypeKey(userId, company.id))
   const kind = search.type ?? (isEntryKind(stored) ? stored : 'payment')
   return <VoucherEntryScreen company={company} ledgers={ledgers} groups={groups} types={types} start={{ kind, date: workingDate }} workingDate={workingDate} onWorkingDate={setWorkingDate} />
+}
+
+/** A viewer who opens the address: the notice, with the way back focused so the keyboard has somewhere to start. */
+function ViewerNotice({ companyId }: { companyId: string }) {
+  const navigate = useNavigate()
+  return <Alert tone='info' title='Viewers cannot enter vouchers' actions={<Button size='sm' autoFocus onClick={() => void navigate({ to: '/app/c/$companyId/reports/day-book', params: { companyId } })}>Open the day book</Button>}>
+    The day book and the reports show what is saved.
+  </Alert>
 }

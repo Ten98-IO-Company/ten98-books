@@ -1,13 +1,12 @@
 import { Text, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect } from 'react'
 import { Amount, Blank, Particulars, VoucherMarks } from '../../components/reports/cells'
 import { query, reportSearch } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { registerRange, type DayBookReport, type DayBookRow } from '../../lib/reports'
+import { registerRange, type DayBookReport, type DayBookRow, type ReportPeriod } from '../../lib/reports'
 import { sessionStore, writeWorkingDate } from '../../lib/working-date'
 import { useApp } from '../../lib/app-context'
 
@@ -36,10 +35,13 @@ function DayBookScreen() {
   const data = screen.report.data
   const range = data ? registerRange(pages.before, data.rows.length, data.next !== null) : null
   const userId = useApp().me.user.id
-  // Viewing one day moves the tab's working date to it, as the reference's day book does (docs/VOUCHERS.md).
-  useEffect(() => { if (screen.period && screen.period.from === screen.period.to) writeWorkingDate(sessionStore, userId, screen.company.id, screen.period.from) }, [userId, screen.company.id, screen.period?.from, screen.period?.to])
+  // A day the user chooses here becomes the tab's working date (observed); the default day the screen opens on does not.
+  const choosePeriod = (period: ReportPeriod) => {
+    if (period.from === period.to) writeWorkingDate(sessionStore, userId, screen.company.id, period.from)
+    screen.setPeriod(period)
+  }
   return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}
-    period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
+    period={{ kind: 'range', period: screen.period, onChange: choosePeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/day-book/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}
     summary={data ? `${range ? `${range} ` : ''}${data.totals.vouchers} ${data.totals.vouchers === 1 ? 'voucher counts' : 'vouchers count'} in the totals; cancelled and optional vouchers do not.` : undefined}>

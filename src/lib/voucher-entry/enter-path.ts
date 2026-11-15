@@ -66,10 +66,6 @@ export function afterDate(origin: FocusOrigin): EntryFocus {
   return { cell: { ...origin.cell, ...origin.cell.column === 'ledger' ? { open: true } : { edit: true } } };
 }
 
-/** After the ledger alteration opened from a lookup: saved goes to the line's amount, closed back to the ledger with its list (observed). */
-export const afterLedgerInPlace = (outcome: 'saved' | 'closed', row: string): EntryFocus =>
-  outcome === 'saved' ? { cell: { row, column: 'amount', edit: true } } : { cell: { row, column: 'ledger', open: true } };
-
 /**
  * Escape on a focused field or cell that is not editing (the grid hands it over): the first press empties a value,
  * prefilled ones included; with nothing to empty it asks to quit when anything was entered, else it leaves (observed).

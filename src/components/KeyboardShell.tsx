@@ -289,7 +289,8 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
       item('home.chart-of-accounts', '/app/c/$companyId/masters/chart-of-accounts'),
       item('home.cost-centres', '/app/c/$companyId/masters/cost-centres'),
     ] },
-    { id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] },
+    // Vouchers are entered by writers only; viewers read them in the day book.
+    ...canWrite ? [{ id: 'transactions', label: 'Transactions', items: [item('home.vouchers', '/app/c/$companyId/vouchers')] }] : [],
     ...reportMenuGroups(report => go(reportRoutes[report])),
   ]
   const text = screenModeText[shown.current]

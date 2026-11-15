@@ -8,7 +8,7 @@ import { SaveConfirm } from '../masters/entry'
  * appears: the Enter that opened it was pressed in the narration, which would otherwise keep the next key.
  */
 export function AcceptPrompt({ title, summary, onYes, onNo }: { title: string; summary: string; onYes: () => void; onNo: () => void }) {
-  const holder = useRef<HTMLDivElement>(null)
+  const holder = useRef<HTMLElement>(null)
   useEffect(() => { window.setTimeout(() => holder.current?.querySelector('button')?.focus(), 0) }, [])
-  return <Stack ref={holder as never}><SaveConfirm title={title} description={summary} onConfirm={onYes} onCancel={onNo} /></Stack>
+  return <Stack ref={holder}><SaveConfirm title={title} description={summary} onConfirm={onYes} onCancel={onNo} /></Stack>
 }

@@ -3,9 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime/browser'
 import { errMsg } from '../../lib/api'
 import { longDate } from '../../lib/reports'
-import type { BillKind, Side, VoucherKind } from '../../lib/ledger'
+import type { Side, VoucherKind } from '../../lib/ledger'
 import {
-  againstAmount, allocated, billDueDate, billKindOrder, billKindTitles, billsCover, nextBillRow,
+  againstAmount, allocated, billDueDate, billKindOf, billKindOrder, billKindTitles, billsCover, nextBillRow, sideOf,
   parseCreditPeriod, parseEntryAmount, settleable, type BillDraft, type PendingChoice,
 } from '../../lib/voucher-entry'
 import { DialogKeys } from '../KeyboardShell'
@@ -21,8 +21,8 @@ const toRows = (drafts: readonly BillDraft[], date: string): EntryGridRow[] => d
   return { key: draft.key, values: { method: draft.method, bill: draft.bill, name: draft.name, credit: draft.credit, due, amount: draft.amount, side: draft.side } }
 })
 const fromRows = (rows: readonly EntryGridRow[]): BillDraft[] => rows.map(row => ({
-  key: row.key, method: (row.values.method ?? '') as BillKind | '', bill: row.values.bill ?? '', name: row.values.name ?? '',
-  credit: row.values.credit ?? '', amount: row.values.amount ?? '', side: (row.values.side ?? '') as Side | '',
+  key: row.key, method: billKindOf(row.values.method), bill: row.values.bill ?? '', name: row.values.name ?? '',
+  credit: row.values.credit ?? '', amount: row.values.amount ?? '', side: sideOf(row.values.side),
 }))
 
 /**
@@ -84,13 +84,25 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
 
   function change(next: BillDraft[]) { latest.current = next; setDrafts(next) }
 
-  function accept(rows: BillDraft[] = latest.current) {
+  const [over, setOver] = useState('')
+  /** Rows above the line's amount (or netting to its other side) are refused here, before the server would. */
+  function overProblem(rows: readonly BillDraft[]): string {
+    const taken = allocated(rows, line.side, exponent)
+    return taken > line.amount ? `The rows add up to ${formatMoney(taken, exponent)}, more than the line's ${formatMoney(line.amount, exponent)}: lower a row's amount.`
+      : taken < 0n ? 'The rows add up to the other side of the line: change a row\'s side or amount.' : ''
+  }
+
+  function accept(rows: BillDraft[] = latest.current): boolean {
     const kept = rows.filter(row => row.method !== '' && row.amount !== '')
+    const problem = overProblem(kept)
+    setOver(problem)
+    if (problem) return false
     const left = subtractMoney(line.amount, allocated(kept, line.side, exponent))
     // Accepted short of the line: the rest is on account.
     const filled = left > 0n ? [...kept, { key: key(), method: 'on_account' as const, bill: '', name: '', credit: '', amount: formatMoney(left, exponent), side: line.side }] : kept
     onAccept(filled)
     close()
+    return true
   }
 
   function onCellCommit(event: EntryCommitEvent) {
@@ -124,10 +136,12 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
             onEnd={context => {
               // Enter on a row's last cell: the panel closes once the rows cover the line (observed), else a row follows for the rest.
               const rows = fromRows(context.rows)
+              const problem = overProblem(rows)
+              if (problem) { setOver(problem); return problem }
               if (context.column !== 'side' || !billsCover(rows, line.side, line.amount, exponent)) return
-              accept(rows)
-              return true
+              return accept(rows) || undefined
             }} />
+          {over && <Alert tone='danger'>{over}</Alert>}
           <Text size='sm' tone='muted' aria-live='polite'>Left to allocate: {formatMoney(subtractMoney(line.amount, allocated(drafts, line.side, exponent)), exponent)} {line.side}</Text>
         </>}
     </Stack>

@@ -36,8 +36,8 @@ export function VoucherHeader({ date, dateText, dateError, onDateText, account, 
     </Stack>
     {account !== null && <Stack data-voucher-field='account' gap={1} onKeyDownCapture={event => {
       // Taken before the lookup opens its list on Down: only an empty Account skips (entry.skip-account).
-      const input = event.target as HTMLInputElement
-      if (event.key !== 'ArrowDown' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || input.value !== '') return
+      const input = event.target
+      if (!(input instanceof HTMLInputElement) || event.key !== 'ArrowDown' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || input.value !== '') return
       event.preventDefault(); event.stopPropagation(); onSkipAccount()
     }}>
       <LookupField label='Account' options={accountOptions} value={account} disabled={locked} error={accountError} required

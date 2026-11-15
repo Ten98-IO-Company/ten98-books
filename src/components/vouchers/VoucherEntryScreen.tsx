@@ -1,15 +1,17 @@
 import { Alert, Button, Field, Inline, Input, PageHeader, Stack, StatusLine, Textarea, type CommandPress, type EntryCommitEvent, type EntryEndContext, type EntryGridApi, type EntryGridPanel } from '@ten98/ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import { forgetDefaults } from '../reports/navigation'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import type { Company } from '../../lib/company'
 import type { GroupRow, LedgerRow } from '../../lib/masters'
-import type { CreditPeriod, VoucherType } from '../../lib/ledger'
+import type { VoucherType } from '../../lib/ledger'
 import { resolveTyped } from '../../lib/lookup-entry'
 import { longDate } from '../../lib/reports'
 import { useApp } from '../../lib/app-context'
 import {
   afterDate, afterDeclinedAccept, amountText, appendedLine, balanceText, bodyLines, bodyProblems, cashInHandIds, cashRuleProblem, creditPeriodText,
-  detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, isBlankLine, isCompleteLine, kindTitles, layoutTitles, ledgerOptions,
+  detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, escapeStep, isBlankLine, isCompleteLine, kindTitles, layoutTitles, layoutsOf, ledgerOptions,
   lineKey, listEnd, minorOf, negativeCashWarning, parseEntryDate, particularsSide, particularsTotal, proposedAmount, readLayout, refusalPlace,
   relayLines, writeLayout, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
 } from '../../lib/voucher-entry'
@@ -57,7 +59,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   // The latest state, for commands and grid events that run before React renders the last change.
   const latest = useRef(state)
   latest.current = state
-  const root = useRef<HTMLDivElement>(null)
+  const root = useRef<HTMLElement>(null)
   const grid = useRef<EntryGridApi>(null)
   const serial = useRef(0)
   serial.current = Math.max(serial.current, state.serial)
@@ -85,15 +87,21 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const [accountError, setAccountError] = useState<string>()
   const [prompt, setPrompt] = useState(false)
   const [announced, setAnnounced] = useState('')
+  // The screen's own notices (a refused switch) live apart from the grid's announcements, so a commit does not overwrite them.
+  const [notice, setNotice] = useState('')
+  // Text typed in a line cell and not committed yet counts as entered (the leave guard asks).
+  const [typing, setTyping] = useState(false)
   const [failure, setFailure] = useState<{ message: string; unknown?: boolean } | null>(null)
   const [saved, setSaved] = useState('')
   const [typeList, setTypeList] = useState(false)
   const [modeList, setModeList] = useState(false)
   const [confirm, dialog] = useConfirm()
-  const dirty = draftDirty(state)
+  const dirty = draftDirty(state) || typing
   const leave = useLeave({ to: '/app/c/$companyId', params: { companyId: company.id } })
   const askToLeave = useCallback(async () => {
+    // Text still in a cell's editor is committed first, then what was entered decides (a guard call with nothing entered passes).
     grid.current?.commit()
+    if (!draftDirty(latest.current)) return true
     const yes = await confirm({ title: `Leave this ${kindTitles[latest.current.kind].toLowerCase()} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' })
     // Kept: back to where the cursor was, also when the question came from a link or a key outside the voucher.
     if (!yes) window.setTimeout(() => focus(afterDate(lastOrigin.current)), 0)
@@ -130,7 +138,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     const holder = root.current
     if (!holder) return
     const onFocus = (event: FocusEvent) => {
-      const target = event.target as Element
+      const target = event.target
+      if (!(target instanceof Element)) return
       const field = fieldOf(holder, target)
       if (field && field !== 'date') { lastOrigin.current = { field }; return }
       if (!holder.querySelector('[role="grid"]')?.contains(target)) return
@@ -147,7 +156,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Lines ----
 
-  const setLines = (lines: EntryLine[]) => { latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved(''); setFailure(null) }
+  const setLines = (lines: EntryLine[]) => { latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved(''); setFailure(null); setTyping(false) }
   // A line appended before its counter-ledger read answered takes the answer while it is still empty (observed timing aside).
   const awaiting = useRef(new Map<string, string>())
   const counters = useCounterLedgers(company.id, voucherType?.id ?? null, (ledgerId, side, counter) => {
@@ -224,7 +233,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       const ledger = ledgerById.get(line.ledger)
       return <BillPanel key={row.key} companyId={company.id} kind={latest.current.kind} date={latest.current.date} exponent={exponent}
         line={{ ledger: line.ledger, side: lineSide(line), amount: minorOf(line.amount, exponent) }} previous={latest.current.bills[row.key]}
-        creditDefault={creditPeriodText((ledger?.creditPeriod ?? null) as CreditPeriod | null)}
+        creditDefault={creditPeriodText(ledger?.creditPeriod ?? null)}
         // The grid's dialog gives focus back to the amount cell as it closes; the cursor moves on after that.
         onAccept={rows => {
           dispatch({ type: 'bills', row: row.key, rows })
@@ -261,10 +270,11 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       : latest.current.layout === 'single' ? { field: 'account' } : { cell: { row: latest.current.lines[0]?.key ?? '', column: 'ledger' } }
     if (inGrid) grid.current?.commit()
     setDateError(undefined)
-    setDateText(longDate(latest.current.date))
+    // Rendered at once, so the text is selected before the next key: typing replaces the date (no appending).
+    flushSync(() => setDateText(longDate(latest.current.date)))
     const control = controlOf(root.current, 'date')
     control?.focus()
-    window.setTimeout(() => control?.select(), 0)
+    control?.select()
   }
   function closeDate() { setDateText(null); setDateError(undefined); focusSoon(afterDate(dateOrigin.current)) }
   function applyDate() {
@@ -285,7 +295,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     grid.current?.commit()
     setTypeList(false); setModeList(false); setPrompt(false); setFailure(null)
     const relaid = relayLines(latest.current, { kind, layout }, exponent, nextKey, ledgerId => ledgerById.get(ledgerId)?.cashOrBank === true)
-    if ('refused' in relaid) { setAnnounced(relaid.refused); return false }
+    if ('refused' in relaid) { setNotice(relaid.refused); return false }
+    setNotice('')
     latest.current = { ...latest.current, ...relaid }
     dispatch({ type: 'relaid', relaid })
     writeStored(sessionStore, lastTypeKey(userId, company.id), kind)
@@ -298,12 +309,12 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Accept and save ----
 
-  function problemBeforeSave(): { message: string; focus: EntryFocus } | null {
+  function problemBeforeSave(): { message: string; focus: EntryFocus; panel?: string } | null {
     const current = latest.current
     const lines = bodyLines(current, exponent)
     const problems = bodyProblems({ ...current, idempotencyKey: 'check-only', voucherTypeId: voucherType?.id ?? '' }, exponent)
     const incomplete = problems.find(problem => problem.line && problem.column)
-    if (incomplete?.line && incomplete.column) return { message: incomplete.message, focus: { cell: { row: incomplete.line, column: incomplete.column, edit: true } } }
+    if (incomplete?.line && incomplete.column) return { message: incomplete.message, focus: { cell: { row: incomplete.line, column: incomplete.column, edit: true } }, panel: incomplete.bills ? incomplete.line : undefined }
     if (current.layout === 'single' && current.account === '') return { message: 'Choose the Account: the cash or bank ledger of this voucher.', focus: { field: 'account' } }
     if (!lines.length || (current.layout === 'double' && lines.length < 2)) return { message: 'Enter the lines of the voucher: a ledger and an amount on each.', focus: firstLine() }
     if (current.layout === 'double') {
@@ -327,10 +338,12 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (grid.current?.commit() === false) return
     setPrompt(false)
     const problem = problemBeforeSave()
-    if (problem) { setFailure({ message: problem.message }); focusSoon(problem.focus); return }
+    if (problem) { showProblem(problem); return }
     setFailure(null)
     const current = latest.current
     const expected = number
+    // While the save runs the fields are read-only; the narration keeps the cursor (it was on the question or a field).
+    if (!root.current?.contains(document.activeElement) || document.activeElement === document.body) controlOf(root.current, 'narration')?.focus()
     const outcome = await draft.save(voucherType.id, current)
     if (!outcome) return
     if (outcome.kind === 'saved') {
@@ -340,26 +353,42 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       const differs = expected !== null && voucher.number !== expected ? ` (No. ${expected} was shown; another voucher took it first)` : ''
       const notes = warnings.length ? ` ${warnings.length === 1 ? 'Note' : 'Notes'}: ${warnings.map(warning => warning.code.replaceAll('_', ' ')).join(', ')}.` : ''
       setSaved(`Saved ${kindTitles[current.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${longDate(voucher.date)}${differs}.${notes}`)
+      setNotice('')
       onWorkingDate(voucher.date)
+      // The reports' cached last voucher date is stale now (the day book would open on the old day).
+      forgetDefaults(company.id)
       dispatch({ type: 'next' })
       setRefresh(value => value + 1)
       // The next voucher: same type, layout and date, the cursor on its first field (observed).
       window.setTimeout(() => focus(firstField()), 0)
       return
     }
-    if (outcome.kind === 'unknown') { setFailure({ message: `The answer did not arrive (${outcome.message}), so this voucher may or may not be saved. Check and retry sends the same voucher again and cannot save it twice.`, unknown: true }); return }
+    if (outcome.kind === 'unknown') { setFailure({ message: `No definite answer came (${outcome.message}), so this voucher may or may not be in the books. Check and retry sends the same voucher under the same key: the server saves it once, or answers that it already has it.`, unknown: true }); return }
     const place = refusalPlace(outcome.code)
     const message = place === 'maybe-saved' ? 'This voucher may already be saved under its key. Open the day book on its date to check before entering it again.' : outcome.message
     setFailure({ message })
     if (place === 'date') { setDateText(longDate(current.date)); setDateError(outcome.message); window.setTimeout(() => controlOf(root.current, 'date')?.focus(), 0) }
     else if (place === 'difference') { const last = [...current.lines].reverse().find(isCompleteLine); if (last) focusSoon({ cell: { row: last.key, column: 'amount', edit: true } }) }
     else if (place === 'cash-rule') focusSoon(current.layout === 'single' ? { field: 'account' } : firstLine())
+    else if (place === 'bills') {
+      // The server names the line ("line 2") in the order of the body: reopen that line's panel on its rows.
+      const lineNo = Number(/line (\d+)/i.exec(outcome.message)?.[1] ?? 0)
+      const key = bodyLines(current, exponent)[lineNo - 1]?.key
+      if (key) { focus({ cell: { row: key, column: 'amount' } }); window.setTimeout(() => grid.current?.openPanel(key), 0) }
+    }
+  }
+
+  function showProblem(problem: { message: string; focus: EntryFocus; panel?: string }) {
+    setFailure({ message: problem.message })
+    focusSoon(problem.focus)
+    const panelLine = problem.panel
+    if (panelLine) window.setTimeout(() => grid.current?.openPanel(panelLine), 30)
   }
 
   function openPrompt() {
     if (locked || grid.current?.commit() === false) return
     const problem = problemBeforeSave()
-    if (problem) { setFailure({ message: problem.message }); focusSoon(problem.focus); return }
+    if (problem) { showProblem(problem); return }
     setFailure(null)
     setPrompt(true)
   }
@@ -367,32 +396,32 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Commands ----
 
-  useAppCommand('entry.next-field', ((press?: CommandPress) => {
+  useAppCommand('entry.next-field', (press?: CommandPress) => {
     const field = fieldOf(root.current, press?.target ?? document.activeElement)
     if (!field) { press?.decline(); return }
     if (field === 'date') applyDate()
     else if (field === 'account') { if (!latest.current.account) setAccountError('Choose a cash or bank ledger.'); else focus(firstLine()) }
     else if (field === 'total') focus({ field: 'narration' })
     else openPrompt()
-  }) as () => void, { allowInTextInput: true })
-  useAppCommand('entry.previous-field', ((press?: CommandPress) => {
-    const target = press?.target as HTMLInputElement | null
+  }, { allowInTextInput: true })
+  useAppCommand('entry.previous-field', (press?: CommandPress) => {
+    const target = press?.target instanceof HTMLInputElement || press?.target instanceof HTMLTextAreaElement ? press.target : null
     const field = fieldOf(root.current, target)
     const last = latest.current.lines[latest.current.lines.length - 1]
     if (!field || (target?.value ?? '') !== '' || field === 'date' || field === 'account' || !last) { press?.decline(); return }
     if (field === 'narration' && latest.current.layout === 'single' && !cashInHand.has(latest.current.account)) focus({ field: 'total' })
     else focus({ cell: { row: last.key, column: field === 'total' ? 'ledger' : 'amount', edit: true } })
-  }) as () => void, { allowInTextInput: true })
-  useAppCommand('entry.skip-account', ((press?: CommandPress) => {
-    const target = press?.target as HTMLInputElement | null
+  }, { allowInTextInput: true })
+  useAppCommand('entry.skip-account', (press?: CommandPress) => {
+    const target = press?.target instanceof HTMLInputElement || press?.target instanceof HTMLTextAreaElement ? press.target : null
     if (fieldOf(root.current, target) !== 'account' || (target?.value ?? '') !== '') { press?.decline(); return }
     focus(firstLine())
-  }) as () => void, { allowInTextInput: true })
+  }, { allowInTextInput: true })
   useAppCommand('entry.accept', () => void save(), { allowInTextInput: true, enabled: !locked })
-  useAppCommand('entry.cancel', ((press?: CommandPress) => void cancel(press)) as () => void, { allowInTextInput: true })
+  useAppCommand('entry.cancel', ((press?: CommandPress) => void cancel(press)), { allowInTextInput: true })
   useAppCommand('entry.voucher.date', openDate, { enabled: !locked })
   useAppCommand('entry.voucher.list', () => { grid.current?.commit(); setTypeList(true) }, { enabled: !locked })
-  useAppCommand('entry.voucher.mode', () => { grid.current?.commit(); setModeList(true) }, { enabled: !locked && state.kind !== 'journal' })
+  useAppCommand('entry.voucher.mode', () => { grid.current?.commit(); setModeList(true) }, { enabled: !locked && layoutsOf(state.kind).length > 1 })
   useAppCommand('entry.voucher.payment', () => switchType('payment'), { enabled: !locked && state.kind !== 'payment' })
   useAppCommand('entry.voucher.receipt', () => switchType('receipt'), { enabled: !locked && state.kind !== 'receipt' })
   useAppCommand('entry.voucher.contra', () => switchType('contra'), { enabled: !locked && state.kind !== 'contra' })
@@ -413,18 +442,20 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (prompt) { declineAccept(); return }
     const quit = press !== undefined && press.event.key.toLowerCase() === 'q'
     if (!quit) {
-      const active = document.activeElement as HTMLInputElement | null
+      // The Escape ladder (escapeStep): a focused value is emptied first, prefilled ones included.
+      const active = document.activeElement
       const field = fieldOf(root.current, active)
       if (field === 'date') { if ((dateRef.current ?? '') !== '') setDateText(''); else closeDate(); return }
-      if (field === 'account' && (latest.current.account !== '' || (active?.value ?? '') !== '')) { setAccount(''); if (active) active.value = ''; return }
-      if (field === 'narration' && latest.current.narration !== '') { dispatch({ type: 'narration', text: '' }); return }
+      if (field === 'account' && escapeStep(latest.current.account, true) === 'clear') { setAccount(''); return }
+      if (field === 'narration' && escapeStep(latest.current.narration, true) === 'clear') { dispatch({ type: 'narration', text: '' }); return }
       const row = grid.current?.activeRow, column = grid.current?.activeColumn
       if (!field && row && (column === 'ledger' || column === 'amount') && root.current?.querySelector('[role="grid"]')?.contains(active)) {
         const line = latest.current.lines.find(entry => entry.key === row)
-        if (line && line[column] !== '') { setLines(latest.current.lines.map(entry => entry.key === row ? { ...entry, [column]: '' } : entry)); return }
+        if (line && escapeStep(line[column], true) === 'clear') { setLines(latest.current.lines.map(entry => entry.key === row ? { ...entry, [column]: '' } : entry)); return }
       }
     }
-    if (!draftDirty(latest.current)) { guard.pass(leave); return }
+    grid.current?.commit()
+    if (escapeStep('', draftDirty(latest.current)) === 'leave') { guard.pass(leave); return }
     if (await askToLeave()) guard.pass(leave)
   }
 
@@ -434,11 +465,12 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     .map(ledgerId => negativeCashWarning(ledgerById.get(ledgerId)?.name ?? 'Cash', balances.get(ledgerId), exponent)).filter(Boolean), [state.lines, balances, cashInHand, ledgerById, exponent])
   const total = particularsTotal(state.lines, exponent)
   const difference = state.layout === 'double' ? differenceText(state.lines, exponent) : null
-  const accountBalance = state.account && balances.has(state.account) ? balanceText(balances.get(state.account)!, exponent) : null
+  const accountKept = balances.get(state.account)
+  const accountBalance = state.account && accountKept !== undefined ? balanceText(accountKept, exponent) : null
   const title = kindTitles[state.kind]
   const summary = `${title} dated ${longDate(state.date)}${state.layout === 'single' ? `, ${amountText(total, exponent)} ${state.kind === 'payment' ? 'from' : 'into'} ${ledgerById.get(state.account)?.name ?? 'the account'}` : ''}, ${bodyLines(state, exponent).length} lines.`
 
-  return <Stack gap={5} ref={root as never}>
+  return <Stack gap={5} ref={root}>
     <PageHeader eyebrow={`Voucher entry · ${layoutTitles[state.layout]}`} title={title}
       description={`${number === null ? 'Number to be given on saving' : `No. ${number} (expected)`} · ${entryDateLabel(state.date)}`} />
     {draft.restorable && <Alert tone='info' title='A voucher was being entered before you signed in again'
@@ -447,7 +479,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     </Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
     {failure && <Alert tone='danger' title={failure.unknown ? 'Not known whether it was saved' : 'Not saved'}
-      actions={failure.unknown ? <Inline gap={2}><Button size='sm' onClick={() => void save()}>Check and retry</Button><Button size='sm' variant='secondary' onClick={() => { draft.discardUnknown(); setFailure(null) }}>Unlock and edit</Button></Inline> : undefined}>
+      actions={failure.unknown ? <Inline gap={2}><Button size='sm' onClick={() => void save()}>Check and retry</Button><Button size='sm' variant='secondary' onClick={() => void cancel()}>Leave</Button></Inline> : undefined}>
       {failure.message}
     </Alert>}
     {warnings.map(warning => <Alert key={warning} tone='warning'>{warning}</Alert>)}
@@ -455,8 +487,16 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       account={state.layout === 'single' ? state.account : null} accountOptions={accountOptions} accountError={accountError}
       onAccount={setAccount} onAccountTyped={accountTyped} onSkipAccount={() => focus(firstLine())} accountBalance={accountBalance}
       accountNegative={!!state.account && (balances.get(state.account) ?? 0n) < 0n} locked={locked} />
-    <LinesGrid kind={state.kind} layout={state.layout} number={number} lines={state.lines} ledgers={entryLedgers} balances={balances} exponent={exponent}
-      locked={locked} apiRef={grid} panel={panel} onLines={setLines} createRow={createRow} onEnd={onEnd} onCellCommit={onCellCommit} announce={setAnnounced} />
+    <Stack onKeyDownCapture={event => {
+      // Up on line 1 returns to the Account in single entry (observed), unless a list is open with a ledger typed in it.
+      const input = event.target
+      if (!(input instanceof HTMLInputElement) || event.key !== 'ArrowUp' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || state.layout !== 'single') return
+      if (grid.current?.activeRow !== state.lines[0]?.key || (input.getAttribute('aria-expanded') === 'true' && input.value !== '')) return
+      event.preventDefault(); event.stopPropagation(); focus({ field: 'account' })
+    }} onInput={event => { if (event.target instanceof HTMLInputElement && event.target.value) setTyping(true) }}>
+      <LinesGrid kind={state.kind} layout={state.layout} number={number} lines={state.lines} ledgers={entryLedgers} balances={balances} exponent={exponent}
+        locked={locked} apiRef={grid} panel={panel} onLines={setLines} createRow={createRow} onEnd={onEnd} onCellCommit={onCellCommit} announce={setAnnounced} />
+    </Stack>
     {state.layout === 'single' && <Stack data-voucher-field='total'>
       <Field label='Total' description='Enter goes on to the narration.'><Input readOnly value={amountText(total, exponent)} dir='ltr' /></Field>
     </Stack>}
@@ -466,9 +506,11 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       </Field>
     </Stack>
     {prompt && <AcceptPrompt title={`Save this ${title.toLowerCase()}?`} summary={summary} onYes={() => void save()} onNo={declineAccept} />}
-    <StatusLine live='polite' busy={draft.busy}>{draft.busy ? 'Saving…' : announced || difference || ' '}</StatusLine>
+    {notice && <StatusLine tone='warning' live='polite'>{notice}</StatusLine>}
+    {difference && <StatusLine live='polite'>{difference}</StatusLine>}
+    <StatusLine live='polite' busy={draft.busy}>{draft.busy ? 'Saving…' : announced || ' '}</StatusLine>
     <TypeList open={typeList} current={state.kind} onPick={switchType} onClose={() => setTypeList(false)} />
-    {state.kind !== 'journal' && <ModeList open={modeList} current={state.layout} onPick={switchLayout} onClose={() => setModeList(false)} />}
+    {layoutsOf(state.kind).length > 1 && <ModeList open={modeList} current={state.layout} onPick={switchLayout} onClose={() => setModeList(false)} />}
     <DialogKeys name='Confirm' open={!!dialog}>{dialog}</DialogKeys>
   </Stack>
 }
