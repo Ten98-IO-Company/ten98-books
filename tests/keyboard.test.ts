@@ -433,8 +433,9 @@ test('only the app confirmation hook imports the package confirmation pieces, so
   // the package guard's, asked through the form's `confirm` passed to `useLeaveGuard` (checked above), so it is no call site of its
   // own. A screen that adds a question (the voucher entry screen's leave question, a delete) raises the number by exactly its own
   // `confirm(` calls; on a merge of two branches, add what each one added to the number on `dev`.
-  // dev's 8, plus the voucher entry screen's own question (Leave this voucher unsaved?, one `confirm(` in askToLeave).
-  assert.equal(questions, 9, 'every question is asked through useConfirm');
+  // dev's 8, plus the voucher entry screen's own two: its leave question (one `confirm(` in askBefore) and discarding a kept
+  // voucher whose save is not settled (one in dropKept).
+  assert.equal(questions, 10, 'every question is asked through useConfirm');
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);

@@ -4,8 +4,8 @@ import { after, before, test } from 'node:test';
 import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtime';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { accountSide, createSaver, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
+import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, password, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
+import { accountSide, blankDraft, createDraftController, lockAlert, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
 import { join } from 'node:path';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
@@ -390,26 +390,115 @@ test('round 2, item 12: the balance preview also reports the ledgers named in `l
   assert.deepEqual(await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, intruder), { status: 404, body: { error: companyNotFound, code: 'not_found' } });
 });
 
-test('round 3, item 1: a refused body, changed, saved with its answer lost after the commit, then retried, is ONE voucher', async () => {
-  const c = await company('Entry Duplicate Guard');
-  const rent = await c.ledger('Guard Rent', 'indirect_expenses');
+// ---- The draft controller (the screen's save path) against the real server (docs/VOUCHERS.md, "The draft, its key and its lock") ----
+
+type Answer = { voucher: { id: string; number: number | null }; replayed: boolean };
+const memoryStore = (text: string | null = null): DraftStore & { text: string | null } => ({ text, read() { return this.text; }, write(value: string) { this.text = value; } });
+const failureOf = (error: unknown): SendFailure => ({
+  status: error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined,
+  code: error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+  message: error instanceof Error ? error.message : 'no answer',
+});
+
+/**
+ * A payment screen on a company: the controller the screen runs, its body built as the hook builds it, sent by `member`
+ * to the real server. `lose` makes the next answer a gateway error after the server has committed.
+ */
+async function entryScreen(name: string) {
+  const c = await company(name);
+  const rent = await c.ledger(`${name} Rent`, 'indirect_expenses');
   const cash = c.books.ledger('Cash');
-  let made = 0;
-  const saver = createSaver<any>(() => `guard-${randomUUID()}-${++made}`, error => (error as { status?: number }).status);
-  const body = (date: string) => ({ voucherTypeId: c.books.type('payment'), date, lines: [{ ledgerId: rent, side: 'Dr', amount: '10' }, { ledgerId: cash, side: 'Cr', amount: '10' }] });
-  // The real server answers; `lose` throws a gateway error after the server committed, as a lost answer would.
-  const send = (date: string, lose = false) => async (key: string) => {
-    const answer = await owner.browser.call(`${c.base}/vouchers`, { idempotencyKey: key, ...body(date) });
-    if (lose || answer.status >= 300) throw Object.assign(new Error('failed'), { status: lose ? 502 : answer.status });
-    return answer.body;
+  const member = await invite(owner.browser, c.id, 'admin');
+  let lose = false;
+  const mount = (store: DraftStore) => {
+    const controller = createDraftController<Answer>({
+      start: blankDraft('payment', 'single', '2026-01-05'), makeKey: () => `entry-${randomUUID()}`, store, failureOf,
+      send: async body => {
+        const value: unknown = JSON.parse(body);
+        const answer = await member.browser.call(`${c.base}/vouchers`, value);
+        if (answer.status < 300 && lose) { lose = false; throw Object.assign(new Error('Bad gateway'), { status: 502 }); }
+        if (answer.status >= 300) throw Object.assign(new Error(answer.body?.error ?? 'failed'), { status: answer.status, code: answer.body?.code });
+        return answer.body;
+      },
+    });
+    const fill = (amount: string, date = '2026-01-05') => {
+      controller.edit({ type: 'date', date });
+      controller.edit({ type: 'account', ledger: cash });
+      controller.edit({ type: 'lines', lines: [{ key: 'line-1', side: 'Dr', ledger: rent, amount }] });
+    };
+    const save = () => { const { draft, key } = controller.machine(); return controller.save(JSON.stringify(toVoucherBody({ ...draft, idempotencyKey: key, voucherTypeId: c.books.type('payment') }, 2))); };
+    return { controller, fill, save };
   };
-  const refused = await saver.save(JSON.stringify(body('2025-12-31')), send('2025-12-31'));
-  assert.deepEqual([refused?.outcome, refused?.outcome !== 'saved' && refused?.status], ['refused', 400], 'before the books begin: a definite refusal');
-  const lost = await saver.save(JSON.stringify(body('2026-01-05')), send('2026-01-05', true));
-  assert.equal(lost?.outcome, 'unknown');
-  const retried = await saver.save(JSON.stringify(body('2026-01-05')), send('2026-01-05'));
-  assert.equal(retried?.outcome, 'saved');
-  assert.equal(retried?.outcome === 'saved' && retried.answer.replayed, true, 'the server replays the committed voucher');
-  const listed = (await ok(owner.browser.call(`${c.base}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers;
-  assert.equal(listed.length, 1, 'one voucher, not two');
+  const vouchers = async () => (await ok(owner.browser.call(`${c.base}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers as { id: string }[];
+  const email = (await asAdmin(database.adminUrl, admin => admin.query<{ email: string }>('SELECT email FROM "user" WHERE id = $1', [member.userId]))).rows[0].email;
+  const endSession = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM session WHERE "userId" = $1', [member.userId]));
+  const signIn = async () => assert.equal((await member.browser.call('/api/auth/sign-in/email', { email, password })).status, 200);
+  return { mount, vouchers, endSession, signIn, loseNext: () => { lose = true; } };
+}
+
+test('the key rule: refused, changed, its answer lost after the commit, then retried is ONE voucher under one key', async () => {
+  const screen = await entryScreen('Entry Duplicate Guard');
+  const { controller, fill, save } = screen.mount(memoryStore());
+  const key = controller.machine().key;
+  fill('10.00', '2025-12-31');
+  assert.equal((await save())?.kind, 'refused', 'before the books begin: a definite refusal');
+  assert.equal(controller.machine().key, key, 'a refusal keeps the key');
+  controller.edit({ type: 'date', date: '2026-01-05' });
+  screen.loseNext();
+  assert.equal((await save())?.kind, 'none');
+  assert.deepEqual([controller.machine().phase, controller.machine().key], ['unknown', key]);
+  const retried = await controller.retry();
+  assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true, 'the server replays the committed voucher');
+  assert.equal((await screen.vouchers()).length, 1, 'one voucher, not two');
+});
+
+test('unknown, the session deleted, retried (401), signed in, restored and retried is ONE voucher', async () => {
+  const screen = await entryScreen('Entry Lost Session');
+  const store = memoryStore();
+  const first = screen.mount(store);
+  const key = first.controller.machine().key;
+  first.fill('999.00');
+  screen.loseNext();
+  assert.equal((await first.save())?.kind, 'none', 'committed, its answer lost');
+  await screen.endSession();
+  assert.equal((await first.controller.retry())?.kind, 'signed-out');
+  assert.equal(lockAlert(first.controller.machine())?.phase, 'unknown', 'the alert stays after the 401');
+  await screen.signIn();
+  // A new screen after signing in: offered the kept draft, which comes back locked under its own key.
+  const second = screen.mount(store);
+  assert.equal(second.controller.restore(), true);
+  assert.deepEqual([second.controller.machine().phase, second.controller.machine().key], ['unknown', key]);
+  second.fill('1.00');
+  assert.equal(second.controller.machine().draft.lines[0]?.amount, '999.00', 'nothing changes the restored draft');
+  const retried = await second.controller.retry();
+  assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true);
+  assert.equal((await screen.vouchers()).length, 1);
+});
+
+test('a kept draft saved in one tab and changed in another is a 409 conflict, frozen; the original body again is a replay', async () => {
+  const screen = await entryScreen('Entry Kept Conflict');
+  const store = memoryStore();
+  const first = screen.mount(store);
+  first.fill('4321.00');
+  await screen.endSession();
+  assert.equal((await first.save())?.kind, 'signed-out', 'nothing was sent to the handler: kept, editing');
+  await screen.signIn();
+  // The tab duplicated after signing in: both hold the same kept draft, under the same key.
+  const [tabA, tabB, tabC] = [screen.mount(store), screen.mount(memoryStore(store.text)), screen.mount(memoryStore(store.text))];
+  for (const tab of [tabA, tabB, tabC]) assert.equal(tab.controller.restore(), true);
+  const saved = await tabA.save();
+  assert.equal(saved?.kind, 'saved');
+  // Tab B changes the amount and saves: the server has that key with another body.
+  tabB.fill('4322.00');
+  assert.equal((await tabB.save())?.kind, 'conflict');
+  const conflict = tabB.controller.machine();
+  assert.deepEqual([conflict.phase, lockAlert(conflict)?.phase], ['conflict', 'conflict']);
+  tabB.fill('4321.00');
+  assert.equal(tabB.controller.machine(), conflict, 'frozen: no edit, no send');
+  assert.equal(tabB.save(), null);
+  // Tab C sends the kept body unchanged under the same key: the same voucher, replayed.
+  const replay = await tabC.save();
+  assert.ok(replay?.kind === 'saved' && saved?.kind === 'saved');
+  assert.deepEqual([replay.answer.replayed, replay.answer.voucher.id], [true, saved.answer.voucher.id]);
+  assert.equal((await screen.vouchers()).length, 1, 'one voucher across the three tabs');
 });

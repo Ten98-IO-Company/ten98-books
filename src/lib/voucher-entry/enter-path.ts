@@ -87,24 +87,7 @@ export type DraftAction =
   | { type: 'narration'; text: string }
   | { type: 'bills'; row: string; rows: readonly BillDraft[] }
   /** A type or layout switch that `relayLines` allowed. */
-  | { type: 'relaid'; relaid: Relaid }
-  | { type: 'next' }
-  /** The draft kept in the tab before a sign-in, taken back as it was. */
-  | { type: 'restore'; state: DraftState };
-
-/**
- * What may change the draft while a save runs or its outcome is unknown: only the save's own steps (the next voucher
- * after a save, a draft restored after a sign-in). Every edit, switch and line command waits, so "Check and retry" sends
- * exactly the voucher that may already be in the books.
- */
-export const allowedWhileLocked = (action: DraftAction): boolean => action.type === 'next' || action.type === 'restore';
-
-/**
- * The commands that change the draft, each switched off while it is locked (the screen registers each with
- * `enabled: !locked`, checked by a test). Moving the cursor, the leave keys and "Check and retry" stay on.
- */
-export const draftCommands = ['entry.accept', 'entry.voucher.date', 'entry.voucher.list', 'entry.voucher.mode', 'entry.voucher.payment',
-  'entry.voucher.receipt', 'entry.voucher.contra', 'entry.voucher.journal', 'entry.line.remove'] as const;
+  | { type: 'relaid'; relaid: Relaid };
 
 export const lineKey = (serial: number): string => `line-${serial}`;
 const serialOf = (lines: readonly EntryLine[], serial: number) => lines.reduce((top, line) => Math.max(top, Number(/^line-(\d+)$/.exec(line.key)?.[1] ?? 0) + 1), serial);
@@ -116,6 +99,9 @@ export function blankDraft(kind: EntryKind, layout: EntryLayout, date: string, s
   const side = layout === 'single' ? particularsSide(kind) : firstLineSide(kind);
   return { kind, layout, date, account: '', narration: '', bills: {}, lines: [{ key: lineKey(serial), side, ledger: '', amount: '' }], serial: serial + 1 };
 }
+
+/** The voucher after a save: same type, layout and date; everything else empty (optional and post-dated are never carried). */
+export const nextDraft = (state: DraftState): DraftState => blankDraft(state.kind, state.layout, state.date, state.serial);
 
 /** Whether anything was entered: a leave or quit then asks first. */
 export const draftDirty = (state: DraftState): boolean =>
@@ -129,8 +115,5 @@ export function draftReducer(state: DraftState, action: DraftAction): DraftState
     case 'lines': return { ...state, lines: action.lines, bills: billsOf(state.bills, action.lines), serial: serialOf(action.lines, state.serial) };
     case 'bills': return { ...state, bills: { ...state.bills, [action.row]: action.rows } };
     case 'relaid': return { ...state, ...action.relaid, bills: billsOf(state.bills, action.relaid.lines), serial: serialOf(action.relaid.lines, state.serial) };
-    // After a save: same type, layout and date; everything else empty (optional and post-dated are never carried).
-    case 'next': return blankDraft(state.kind, state.layout, state.date, state.serial);
-    case 'restore': return action.state;
   }
 }

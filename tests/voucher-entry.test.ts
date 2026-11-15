@@ -5,7 +5,7 @@ import { balancePreviewInput, counterLedgerQuery, ledgerErrorCodes, nextNumberQu
 import {
   afterDate, afterDeclinedAccept, againstAmount, allocated, appendedLine, billDueDate, billRowBody, billsCover,
   blankDraft, cashModeKey, cashRuleProblem, creditPeriodText, defaultBillMethod, detailSteps, differenceText, draftDirty, draftReducer,
-  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, keyForSend, saveOutcome, createSaver, allowedWhileLocked, draftCommands, allocationProblem, lineColumns, type DraftAction, negativeCashWarning,
+  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, allocationProblem, lineColumns, negativeCashWarning, nextDraft,
   nextBillRow, openBills, parseCreditPeriod, parseEntryAmount, parseEntryDate, proposedAmount, readLayout, refusalPlace, refusalPlaces,
   relayLines, toVoucherBody, writeLayout, bodyProblems, billRowProblem, cashInHandIds, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
 } from '../src/lib/voucher-entry/index.ts';
@@ -324,7 +324,7 @@ test('focus after No at accept, after the date key, after a ledger alteration; t
 test('the next voucher keeps the type, layout and date only; optional and post-dated are never carried; dirty means something entered', () => {
   const filled = { ...blankDraft('payment', 'double', '2026-01-12'), narration: 'Rent', lines: [ln('line-1', 'Dr', 'l-wages', '5.00')], account: '' };
   assert.equal(draftDirty(filled), true);
-  const next = draftReducer(filled, { type: 'next' });
+  const next = nextDraft(filled);
   assert.deepEqual([next.kind, next.layout, next.date, next.narration, next.account, next.lines.length, draftDirty(next)], ['payment', 'double', '2026-01-12', '', '', 1, false]);
   assert.ok(!next.lines.some(entry => filled.lines.some(old => old.key === entry.key)), 'fresh line keys');
   assert.equal(draftDirty(draftReducer(next, { type: 'lines', lines: [ln('line-9', 'Cr', '', '')] })), false, 'a side alone is nothing entered');
@@ -394,7 +394,7 @@ test('detail steps, the save refusal map (total over the codes) and the negative
   assert.deepEqual(Object.fromEntries(ledgerErrorCodes.map(code => [code, refusalPlace(code)])), {
     validation: 'alert', not_found: 'gone', stale_revision: 'stale', retry: 'retry', duplicate_name: 'master-form', in_use: 'master-form',
     seeded_row: 'master-form', nature_fixed: 'master-form', family_rule: 'master-form', cycle: 'master-form', locked_period: 'date',
-    before_books_beginning: 'date', unbalanced: 'difference', posting_rule: 'cash-rule', voucher_state: 'status', idempotency_mismatch: 'maybe-saved',
+    before_books_beginning: 'date', unbalanced: 'difference', posting_rule: 'cash-rule', voucher_state: 'status', idempotency_mismatch: 'conflict',
     not_set_up: 'setup', allocation_total: 'bills', bill_inactive: 'bills', feature_off: 'alert',
   });
   assert.equal(refusalPlace('unbalanced'), 'difference');
@@ -453,76 +453,6 @@ test('round 2, item 1: bill rows above the line\'s amount, or netting to its oth
   assert.deepEqual(bodyProblems(input([row('150.00')]), 2), [{ message: 'Line 1: its bill rows add up to more than the line\'s amount.', line: 'line-1', column: 'amount', bills: true }]);
   assert.match(bodyProblems(input([row('20.00'), row('50.00', 'Cr')]), 2)[0].message, /other side of the line/);
   assert.deepEqual(bodyProblems(input([row('60.00'), row('40.00')]), 2).filter(problem => problem.bills), [], 'exactly the line is fine');
-});
-
-test('round 2, item 4: no answer, a server or gateway error is an unknown outcome; a refusal renews the key only once the body changes', () => {
-  for (const status of [undefined, 0, 500, 502, 503, 504, 599]) assert.equal(saveOutcome(status), 'unknown', String(status));
-  for (const status of [400, 403, 404, 409, 422]) assert.equal(saveOutcome(status), 'refused', String(status));
-  assert.equal(saveOutcome(401), 'signed-out');
-  let made = 0;
-  const make = () => `key-new-${++made}`;
-  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: null }, 'body-a', make), { key: 'key-1', refusedBody: null }, 'nothing refused: the same key');
-  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: 'body-a' }, 'body-a', make), { key: 'key-1', refusedBody: 'body-a' }, 'the refused body again: the same key');
-  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: 'body-a' }, 'body-b', make), { key: 'key-new-1', refusedBody: null }, 'a changed body: a new key, and the refusal is forgotten');
-});
-
-/** A failure with an HTTP status, as the api helper throws it. */
-const failure = (status: number | undefined) => Object.assign(new Error(`status ${status}`), { status });
-const statusOf = (error: unknown) => error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined;
-
-test('round 3, item 1: refuse, change, unknown, retry sends the same key twice; only a changed body after a refusal gets a new one', async () => {
-  let made = 0;
-  const saver = createSaver<string>(() => `key-${++made}`, statusOf);
-  const sent: string[] = [];
-  const answer = (outcome: number | 'ok') => async (key: string) => { sent.push(key); if (outcome === 'ok') return key; throw failure(outcome); };
-  assert.equal((await saver.save('body-a', answer(400)))?.outcome, 'refused', 'a locked period, say');
-  assert.equal((await saver.save('body-b', answer(502)))?.outcome, 'unknown', 'changed, then the answer is lost after the commit');
-  assert.equal((await saver.save('body-b', answer('ok')))?.outcome, 'saved', 'Check and retry');
-  assert.deepEqual(sent, ['key-1', 'key-2', 'key-2'], 'the retry goes under the same key, so the server replays it');
-  assert.equal(saver.key(), 'key-3', 'the next voucher has a new key');
-  // An unknown outcome never renews the key, whatever the body; a 401 keeps it for the restored draft.
-  const second = createSaver<string>(() => `k-${++made}`, statusOf);
-  const before = second.key();
-  for (const status of [undefined, 500, 503, 401]) await second.save('body', answer(status ?? 0));
-  assert.equal(second.key(), before);
-});
-
-test('round 3, items 1 and 3: a second press while a save runs is dropped and renews nothing (the single flight)', async () => {
-  let made = 0;
-  const saver = createSaver<string>(() => `key-${++made}`, statusOf);
-  await saver.save('body-a', async () => { throw failure(400); });
-  let release = () => {};
-  const sent: string[] = [];
-  const first = saver.save('body-b', key => new Promise(resolve => { sent.push(key); release = () => resolve(key); }));
-  const second = await saver.save('body-c', async key => { sent.push(key); return key; });
-  assert.equal(second, undefined, 'dropped while the first runs');
-  release();
-  assert.equal((await first)?.outcome, 'saved');
-  assert.deepEqual(sent, ['key-2'], 'one send, under the key of the changed body; the dropped press made no key');
-  assert.equal(made, 3, 'key-1, key-2 for the changed body, key-3 for the next voucher: nothing for the dropped press');
-});
-
-test('round 3, item 2: while locked nothing changes the draft: only the save\'s own steps pass, and every draft command is off', () => {
-  const actions: DraftAction[] = [
-    { type: 'date', date: '2026-01-01' }, { type: 'account', ledger: 'l' }, { type: 'lines', lines: [] }, { type: 'narration', text: 'n' },
-    { type: 'bills', row: 'r', rows: [] }, { type: 'relaid', relaid: { kind: 'payment', layout: 'single', account: '', lines: [] } },
-    { type: 'next' }, { type: 'restore', state: blankDraft('payment', 'single', '2026-01-01') },
-  ];
-  assert.deepEqual(actions.filter(allowedWhileLocked).map(action => action.type), ['next', 'restore']);
-  // Every command the voucher screen registers is either a draft command, registered with `enabled: !locked`, or one
-  // that only moves the cursor, leaves, or is off for good.
-  const screens = ['VoucherEntryScreen.tsx', 'LinesGrid.tsx', 'BillPanel.tsx'].map(name => readFileSync(new URL(`../src/components/vouchers/${name}`, import.meta.url), 'utf8')).join('\n');
-  const calls = [...screens.matchAll(/useAppCommand\('([a-z.-]+)'([^\n]*)/g)].map(match => ({ id: match[1], rest: match[2] }));
-  const harmless = ['entry.next-field', 'entry.previous-field', 'entry.skip-account', 'entry.cancel'];
-  for (const call of calls) {
-    if ((draftCommands as readonly string[]).includes(call.id)) assert.match(call.rest, /enabled: !locked/, `${call.id} is off while locked`);
-    else if (!harmless.includes(call.id)) assert.match(call.rest, /enabled: false/, `${call.id} is off for good`);
-  }
-  for (const id of draftCommands) assert.ok(calls.some(call => call.id === id), `${id} is registered`);
-  const screen = readFileSync(new URL('../src/components/vouchers/VoucherEntryScreen.tsx', import.meta.url), 'utf8');
-  assert.match(screen, /const setLines = \(lines: EntryLine\[\]\) => \{\n\s+if \(draft\.isLocked\(\)\) return/, 'line changes wait while locked');
-  assert.match(screen, /setFailure\(previous => previous\?\.unknown \? previous : null\)/, 'a line change never clears an unknown outcome');
-  assert.match(screen, /if \(!quit && !draft\.isLocked\(\)\)/, 'Escape empties nothing while locked');
 });
 
 test('round 3, mutation gaps: the panel\'s over-allocation, the amount\'s required, both working-date fixes, both viewer hides', async () => {
