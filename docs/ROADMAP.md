@@ -99,3 +99,4 @@ Everything in the requirement inventory not covered above, in the order the evid
 | [KEYBOARD.md](KEYBOARD.md) | Commands and both keymaps |
 | [demo/README.md](../demo/README.md) | The demo dataset format, seeding and comparison |
 | [TENANCY.md](TENANCY.md) | Company model, roles, creation paths, what migration 0005 changes |
+| [ACCEPTANCE.md](ACCEPTANCE.md) | The feature inventory an acceptance walk of the production build is measured against, with the result columns left empty until a run |
