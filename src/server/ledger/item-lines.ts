@@ -1,5 +1,5 @@
 import { addMoney, assertMoneyInRange, multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
-import type { InventoryLine, ItemLineInput, Side, StockWarning, Voucher, VoucherKind } from '../../lib/ledger.ts';
+import { itemInvoiceKinds as invoiceKinds, type InventoryLine, type ItemLineInput, type Side, type StockWarning, type Voucher, type VoucherKind } from '../../lib/ledger.ts';
 import { lastRateQuery, stockQuantityQuery, type LastRate, type StockQuantity } from '../../lib/stock.ts';
 import { ledgerError, parseAmount, parseInput, refusal, type LedgerContext } from './context.ts';
 import { derivedRateFits, inventoryEnabled } from './stock-masters.ts';
@@ -18,11 +18,6 @@ import { derivedRateFits, inventoryEnabled } from './stock-masters.ts';
  * the same rows again, row by row, and finds them held).
  */
 
-/** The kinds that take item lines, with their direction and the side of their derived ledger lines. */
-const invoiceKinds: Partial<Record<VoucherKind, { direction: 'in' | 'out'; side: Side }>> = {
-  sales: { direction: 'out', side: 'Cr' }, purchase: { direction: 'in', side: 'Dr' },
-  credit_note: { direction: 'in', side: 'Dr' }, debit_note: { direction: 'out', side: 'Cr' },
-};
 export const takesItemLines = (kind: VoucherKind) => kind === 'stock_journal' || kind in invoiceKinds;
 
 export type PlannedItemLine = {

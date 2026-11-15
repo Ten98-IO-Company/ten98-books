@@ -205,9 +205,9 @@ test('the skipped-feature summary names every kind of content ten98-books does n
   raw.extraFiles = { 'employees.json': [] };
   const lines = unmodelled(parseDataset(raw, 'demo/sample-shop'));
   assert.deepEqual(lines, [
-    'company.json: feature "inventory" is not modelled', 'company.json: feature "payroll" is not modelled',
+    'company.json: feature "payroll" is not modelled',
     'ledgers.json: extras on 1 ledger(s) (address)', 'vouchers.json: extras on 1 voucher(s) (reference)', 'vouchers.json: extras on 1 voucher line(s) (costCentre)',
-    'vouchers.json: inventory on 1 voucher(s), 2 item line(s) (stock is not modelled)', 'employees.json: feature file not modelled (kept as is)',
+    'vouchers.json: inventory on 1 voucher(s), 2 item line(s), not read: the dataset has no items.json', 'employees.json: feature file not modelled (kept as is)',
   ]);
   assert.deepEqual(unmodelled(parseDataset(good(), 'demo/sample-shop')), []);
   assert.deepEqual(notComparable({ ...good().expected, payroll: {}, balanceSheet: { total: '1.00', ratios: {} } }), ['payroll (a feature block ten98-books cannot compute yet)', 'balanceSheet.ratios (not computed yet)']);
@@ -294,6 +294,10 @@ test('dispositionOf: post, unsupported type, or no entries to post', () => {
   assert.equal(dispositionOf(voucher('payment', [])), 'no-entries');
   assert.equal(dispositionOf(voucher('sales_order', [])), 'unsupported-type');
   assert.equal(dispositionOf(voucher('memorandum', good().vouchers[0].lines)), 'unsupported-type');
+  const items = { ...voucher('stock_journal', []), inventory: [{ item: 'lamp' }] };
+  assert.equal(dispositionOf(items), 'post', 'a voucher with item lines and no ledger lines is posted (a stock journal)');
+  assert.equal(dispositionOf({ ...items, status: 'cancelled' }), 'post', 'and posted before it is cancelled, never as a void');
+  assert.equal(dispositionOf({ ...items, type: 'sales_order' }), 'unsupported-type');
 });
 
 /** A small items.json: one unit, location, stock group and item with an opening at that location. */
@@ -341,16 +345,42 @@ test('a unit may carry decimals (a whole number from 0 to 4), which is kept; any
   }
 });
 
-test('inventory lines name items and locations that items.json has, once the file is present', () => {
+test('item lines are checked once items.json is present: items, locations, units, fields, an invoice\'s direction and amount, and the kinds that take them', () => {
   const raw = good();
   raw.extraFiles = { 'items.json': stock() };
-  raw.vouchers[0].inventory = [{ item: 'lamp', location: 'main', quantity: '1' }, { item: 'ghost', location: 'attic' }];
-  const found = problems(raw);
-  mentions(found, 'vouchers.json', '"pay-1"', 'inventory[1]', 'item "ghost"');
-  mentions(found, 'vouchers.json', '"pay-1"', 'inventory[1]', 'location "attic"');
+  Object.assign(raw.vouchers[0], { key: 'move-1', type: 'stock_journal', lines: [], extras: { noAccountingEffect: true }, inventory: [
+    { item: 'lamp', location: 'main', direction: 'in', quantity: '1', unit: 'Nos', orderNo: 'kept' }, { item: 'ghost', location: 'attic', direction: 'out', quantity: '1' }] });
+  let found = problems(raw);
+  mentions(found, 'vouchers.json', '"move-1"', 'inventory[1]', 'item "ghost"');
+  mentions(found, 'vouchers.json', '"move-1"', 'inventory[1]', 'location "attic"');
   assert.equal(found.length, 2);
+  raw.vouchers[0].inventory = [{ item: 'lamp', direction: 'sideways', quantity: '1,5', unit: 'Kg' }];
+  found = problems(raw);
+  mentions(found, 'inventory[0]: direction');
+  mentions(found, 'inventory[0]: quantity');
+  raw.vouchers[0].inventory = [{ item: 'lamp', direction: 'in', quantity: '1', unit: 'Kg' }];
+  mentions(problems(raw), 'inventory[0]', 'unit "Kg" is not the unit of item "lamp" ("Nos")');
+  raw.vouchers[0].inventory = [{ item: 'lamp', direction: 'in', quantity: '1', unit: 'nos' }];
+  assert.deepEqual(problems(raw), [], 'a unit is matched by key or name, under the name match key');
+  raw.vouchers[0].lines = good().vouchers[0].lines;
+  delete raw.vouchers[0].extras;
+  mentions(problems(raw), '"move-1"', 'a stock journal posts no ledger lines');
+  // An invoice moves its items in its kind's direction and needs each amount.
+  Object.assign(raw.vouchers[0], { type: 'purchase', inventory: [{ item: 'lamp', direction: 'out', quantity: '1', amount: '40.001' }, { item: 'lamp', direction: 'in', quantity: '1' }] });
+  found = problems(raw);
+  mentions(found, 'inventory[0]', 'direction "out" is not the direction of a purchase voucher ("in")');
+  mentions(found, 'inventory[0]', 'amount "40.001" has more than 2 decimal places');
+  mentions(found, 'inventory[1]', 'amount is required on an invoice\'s item line');
+  raw.vouchers[0].type = 'payment';
+  assert.deepEqual(problems(raw).map(issue => issue.replace(/^.*?: /, '')), ['voucher "move-1": a payment voucher takes no item lines; only sales, purchase, credit note, debit note and stock journal vouchers do']);
+  raw.vouchers[0].type = 'sales_order';
+  assert.ok(!problems(raw).some(issue => issue.includes('item line')), 'an order is skipped whole, its item lines unchecked');
+  // Without items.json an invoice's item lines are kept unchecked (its ledger lines post alone); a stock journal's need the file.
   delete raw.extraFiles;
+  raw.vouchers[0].type = 'purchase';
   assert.deepEqual(problems(raw), [], 'without items.json the inventory content is kept untouched and unchecked');
+  Object.assign(raw.vouchers[0], { type: 'stock_journal', lines: [], extras: { noAccountingEffect: true } });
+  mentions(problems(raw), '"move-1"', "a stock journal's item lines need items.json");
 });
 
 test('the opening stock value is quantity times rate for every item and location, rounded half up to the minor unit', () => {

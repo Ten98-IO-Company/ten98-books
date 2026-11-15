@@ -5,6 +5,8 @@ import { FoundationError } from '../auth.ts';
 import { ledgerContext } from '../ledger/context.ts';
 import { listLedgers } from '../ledger/masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
+import { readStockQuantity } from '../ledger/item-lines.ts';
+import { listItems } from '../ledger/stock-masters.ts';
 import { listVouchers } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
 import { compareBills } from './compare-bills.ts';
@@ -48,13 +50,28 @@ const blockReasons: Record<string, string> = {
 
 /** Blocks and fields of expected.json that the comparison does not read, named with their reason. */
 export function notComparable(expected: Record<string, unknown>): string[] {
-  const names = Object.keys(expected).filter(key => !comparable.top.includes(key) && !annotations.includes(key)).map(key => `${key} (${blockReasons[key] ?? 'a feature block ten98-books cannot compute yet'})`);
+  // The stock summary's quantities are compared (see compareDataset); its values need valuation.
+  const items = (expected.stockSummary as { items?: unknown } | undefined)?.items;
+  const named = (key: string) => key === 'stockSummary' && items && typeof items === 'object' ? "stockSummary values (closingValue and each item's value)" : key;
+  const names = Object.keys(expected).filter(key => !comparable.top.includes(key) && !annotations.includes(key)).map(key => `${named(key)} (${blockReasons[key] ?? 'a feature block ten98-books cannot compute yet'})`);
   for (const block of ['trialBalance', 'profitAndLoss', 'balanceSheet'] as const) {
     const value = expected[block];
     if (value && typeof value === 'object') for (const key of Object.keys(value)) if (!comparable[block].includes(key) && !annotations.includes(key)) names.push(`${block}.${key} (not computed yet)`);
   }
   return names;
 }
+
+/** A quantity as an exact count of ten-thousandths (quantities carry at most four places), and back. */
+const scaledQuantity = (text: string) => {
+  const [whole, fraction = ''] = text.replace(/^-/, '').split('.');
+  const value = BigInt(whole) * 10000n + BigInt(fraction.padEnd(4, '0').slice(0, 4));
+  return text.startsWith('-') ? -value : value;
+};
+const quantityText = (value: bigint) => {
+  const magnitude = value < 0n ? -value : value;
+  const fraction = String(magnitude % 10000n).padStart(4, '0').replace(/0+$/, '');
+  return `${value < 0n ? '-' : ''}${magnitude / 10000n}${fraction ? `.${fraction}` : ''}`;
+};
 
 export async function compareDataset(userId: string, dataset: Dataset): Promise<CompareResult> {
   const company = await findDemoCompany(userId, dataset, 'read');
@@ -138,6 +155,24 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     }
     const unsupportedNumbered = dataset.vouchers.filter(voucher => voucher.expectedNumber !== undefined && dispositionOf(voucher) === 'unsupported-type').length;
     if (unsupportedNumbered) skipped.push(`voucher numbers: expectedNumber of ${unsupportedNumbered} voucher(s) of types ten98-books does not have (not checked)`);
+
+    // Stock summary: each listed item's closing quantity at the end of the period, in all locations, read by the stock
+    // read (opening rows plus the item lines of regular vouchers). Quantities are compared exactly as decimals.
+    const summaryItems = (expected.stockSummary as { items?: Record<string, { quantity?: unknown }> } | undefined)?.items;
+    if (summaryItems && typeof summaryItems === 'object') {
+      const entries = (dataset.extraFiles['items.json'] as ItemsFile | undefined)?.items ?? [];
+      const stored = new Map((await listItems(context)).map(item => [nameMatchKey(item.name), item.id]));
+      for (const [key, figure] of Object.entries(summaryItems)) {
+        const entry = entries.find(item => item.key === key);
+        const label = `Closing quantity of ${entry?.name ?? key}`;
+        const id = entry && stored.get(nameMatchKey(entry.name));
+        if (typeof figure?.quantity !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(figure.quantity)) { push('Stock summary', label, String(figure?.quantity), 'not read', 'n/a', false); continue; }
+        if (!id) { push('Stock summary', label, figure.quantity, 'item missing', 'n/a', false); continue; }
+        const actual = (await readStockQuantity(context, id, { date: to })).quantity;
+        const difference = scaledQuantity(actual) - scaledQuantity(figure.quantity);
+        push('Stock summary', label, figure.quantity, actual, quantityText(difference), difference === 0n);
+      }
+    }
 
     // Trial balance: totals, each named ledger's closing balance and side, and every ledger the file leaves out.
     const trial = expected.trialBalance;

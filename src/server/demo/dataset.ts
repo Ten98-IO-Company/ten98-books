@@ -5,7 +5,7 @@ import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
 import { daysInMonth, financialYearOf, isCalendarDate } from '../../lib/company.ts';
 import { currencyDecimals, rateKinds, rateText } from '../../lib/currencies.ts';
-import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
+import { itemInvoiceKinds, natures, sides, voucherKinds, type VoucherKind } from '../../lib/ledger.ts';
 import { nameMatchKey } from '../../lib/names.ts';
 import { isForeignLine, parseDueDate, readLedgerBills, readLineBills } from './bill-rows.ts';
 
@@ -35,8 +35,7 @@ export const seededGroupKeys = [
   'duties_taxes', 'provisions', 'payables', 'bank_overdraft', 'secured_loans', 'unsecured_loans',
 ] as const;
 /** The voucher types every company is seeded with: their system keys are the voucher kinds. */
-// Stock journals are seeded from the datasets in M2b slice b2; until then they are left out like an unknown type.
-export const seededVoucherTypeKeys: readonly string[] = voucherKinds.filter(kind => kind !== 'stock_journal');
+export const seededVoucherTypeKeys: readonly string[] = voucherKinds;
 export const standardLedgers = ['cash', 'profit_and_loss'] as const;
 
 const knownFiles = ['company', 'groups', 'ledgers', 'vouchers', 'expected'] as const;
@@ -120,6 +119,16 @@ const itemsFile = z.looseObject({
   })).optional(),
 });
 export type ItemsFile = z.infer<typeof itemsFile>;
+/**
+ * An item line on a voucher, checked once items.json is present (the seeder then posts it; other fields such as `unit`,
+ * `orderNo` or `trackingNo` are kept as they are). An invoice's line moves in its kind's direction and needs its
+ * amount, by which the seeder finds the voucher line that holds the items' sum.
+ */
+const inventoryLine = z.looseObject({
+  item: z.string().min(1), direction: z.enum(['in', 'out']), quantity: amount, rate: amount.optional(), amount: amount.optional(),
+  discountPercent: amount.optional(), location: z.string().min(1).optional(),
+});
+export type InventoryEntry = z.infer<typeof inventoryLine>;
 
 /**
  * Further feature files whose shape and references are checked: cost categories and centres and currencies with their
@@ -170,14 +179,15 @@ export const numbersKind = (dataset: Pick<Dataset, 'expected'>) =>
 
 /**
  * What ten98-books can do with a voucher: `post` it through the ledger module, skip it because its type is not one of the
- * seeded eight (`unsupported-type`), post it as a void (`void`: a cancelled voucher without lines, which the ledger module
- * posts as cancelled without lines so that it takes its number), or skip it because it has no lines and is not cancelled
- * (`no-entries`: no accounting effect; a regular voucher needs two lines here). Seeder and comparison share this so what
+ * seeded nine (`unsupported-type`), post it as a void (`void`: a cancelled voucher without lines or item lines, which the
+ * ledger module posts as cancelled so that it takes its number), or skip it because it has neither and is not cancelled
+ * (`no-entries`: no accounting effect; a regular voucher needs two lines or an item line here). A voucher with item lines
+ * is posted even without ledger lines (a stock journal). Seeder and comparison share this so what
  * is skipped is also what is left out of the figures compared.
  */
 export function dispositionOf(voucher: VoucherEntry): 'post' | 'void' | 'unsupported-type' | 'no-entries' {
   if (!seededVoucherTypeKeys.includes(voucher.type)) return 'unsupported-type';
-  if (voucher.lines.length > 0) return 'post';
+  if (voucher.lines.length > 0 || voucher.inventory?.length) return 'post';
   return voucher.status === 'cancelled' ? 'void' : 'no-entries';
 }
 
@@ -328,7 +338,7 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   for (const voucher of vouchers) {
     const at = `voucher "${voucher.key}": `;
     const unposted = voucher.status === 'cancelled' || voucher.extras?.noAccountingEffect === true;
-    if (voucher.lines.length === 0 && !unposted) problem('vouchers', at, 'a voucher without lines must be cancelled or carry extras.noAccountingEffect: true');
+    if (voucher.lines.length === 0 && !unposted && !voucher.inventory?.length) problem('vouchers', at, 'a voucher without lines or item lines must be cancelled or carry extras.noAccountingEffect: true');
     if (voucher.extras?.noAccountingEffect === true && voucher.lines.length > 0) problem('vouchers', at, 'a voucher marked extras.noAccountingEffect carries no lines');
     if (voucher.date < company.booksBeginning) problem('vouchers', at, `date ${voucher.date} is before the books begin on ${company.booksBeginning}`);
     let debit = 0n, credit = 0n;
@@ -351,6 +361,9 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     const locationKeys = new Set((items.locations ?? []).map(location => location.key));
     const stockGroupKeys = new Set((items.stockGroups ?? []).map(group => group.key));
     const units = new Set((items.units ?? []).flatMap(unit => [unit.key, unit.name]));
+    const unitNames = new Map((items.units ?? []).map(unit => [unit.key, unit.name]));
+    const unitNameOf = (unit: string | undefined) => unit === undefined ? undefined : unitNames.get(unit) ?? unit;
+    const itemUnit = new Map((items.items ?? []).map(item => [item.key, item.unit]));
     for (const item of items.items ?? []) {
       const at = `item "${item.key}": `;
       if (item.group !== undefined && !stockGroupKeys.has(item.group)) problem('items', at, `group "${item.group}" is not a stock group key`);
@@ -360,12 +373,29 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
         if ((line.rate.split('.')[1] ?? '').length > exponent) problem('items', `${at}opening: `, `rate "${line.rate}" has more than ${exponent} decimal places (the company's minor units)`);
       }
     }
-    for (const voucher of vouchers) for (const [index, line] of (voucher.inventory ?? []).entries()) {
-      const detail = line as { item?: unknown; location?: unknown } | null;
-      const at = `voucher "${voucher.key}": inventory[${index}]: `;
-      if (typeof detail?.item === 'string' && !itemKeys.has(detail.item)) problem('vouchers', at, `item "${detail.item}" is not an item key in items.json`);
-      if (typeof detail?.location === 'string' && !locationKeys.has(detail.location)) problem('vouchers', at, `location "${detail.location}" is not a location key in items.json`);
+    for (const voucher of vouchers) {
+      if (!voucher.inventory?.length) continue;
+      // Orders and notes (types ten98-books does not have) are skipped whole, their item lines with them.
+      if (!seededVoucherTypeKeys.includes(voucher.type)) continue;
+      const kind = voucher.type as VoucherKind, invoice = itemInvoiceKinds[kind];
+      if (!invoice && kind !== 'stock_journal') { problem('vouchers', `voucher "${voucher.key}": `, `a ${kind.replace(/_/g, ' ')} voucher takes no item lines; only sales, purchase, credit note, debit note and stock journal vouchers do`); continue; }
+      if (kind === 'stock_journal' && voucher.lines.length) problem('vouchers', `voucher "${voucher.key}": `, 'a stock journal posts no ledger lines; its lines must be empty');
+      for (const [index, line] of voucher.inventory.entries()) {
+        const at = `voucher "${voucher.key}": inventory[${index}]: `;
+        const parsed = inventoryLine.safeParse(line);
+        if (!parsed.success) { for (const issue of parsed.error.issues) problem('vouchers', `${at}${issue.path.join('.')}${issue.path.length ? ': ' : ''}`, issue.message); continue; }
+        const detail = parsed.data;
+        if (!itemKeys.has(detail.item)) problem('vouchers', at, `item "${detail.item}" is not an item key in items.json`);
+        const unit = unitNameOf(itemUnit.get(detail.item)), written = typeof detail.unit === 'string' ? unitNameOf(detail.unit) : undefined;
+        if (unit !== undefined && written !== undefined && nameMatchKey(unit) !== nameMatchKey(written)) problem('vouchers', at, `unit "${detail.unit}" is not the unit of item "${detail.item}" ("${unit}")`);
+        if (detail.location !== undefined && !locationKeys.has(detail.location)) problem('vouchers', at, `location "${detail.location}" is not a location key in items.json`);
+        if (invoice && detail.direction !== invoice.direction) problem('vouchers', at, `direction "${detail.direction}" is not the direction of a ${kind.replace(/_/g, ' ')} voucher ("${invoice.direction}")`);
+        if (invoice && detail.amount === undefined) problem('vouchers', at, "amount is required on an invoice's item line");
+        if (detail.amount !== undefined) fits('vouchers', at, detail.amount);
+      }
     }
+  } else {
+    for (const voucher of vouchers) if (voucher.type === 'stock_journal' && voucher.inventory?.length) problem('vouchers', `voucher "${voucher.key}": `, "a stock journal's item lines need items.json, which names their items and locations");
   }
 
   // Cost categories and centres, currencies and checkpoints: references, and the lines that use them.

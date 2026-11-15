@@ -14,6 +14,11 @@ export type Side = (typeof sides)[number];
 export const voucherKinds = ['contra', 'payment', 'receipt', 'journal', 'sales', 'purchase', 'credit_note', 'debit_note', 'stock_journal'] as const;
 export type VoucherKind = (typeof voucherKinds)[number];
 export type VoucherStatus = 'regular' | 'cancelled' | 'optional';
+/** The invoice kinds that take item lines, with the direction their items move and the side of their derived ledger lines. */
+export const itemInvoiceKinds: Partial<Record<VoucherKind, { direction: 'in' | 'out'; side: Side }>> = {
+  sales: { direction: 'out', side: 'Cr' }, purchase: { direction: 'in', side: 'Dr' },
+  credit_note: { direction: 'in', side: 'Dr' }, debit_note: { direction: 'out', side: 'Cr' },
+};
 
 /**
  * Stable reasons the ledger API sends as `code` beside the plain-language `error`, so screens branch on the reason, not
