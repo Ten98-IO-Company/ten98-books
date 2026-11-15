@@ -73,7 +73,7 @@ const trees = {
   'stock-locations': {
     table: 'stock_location', entity: 'stock_location', what: 'location', title: 'Location',
     extra: { select: ', t.system_key AS "systemKey"', columns: [], values: () => [] },
-    usedSql: 'EXISTS (SELECT 1 FROM stock_opening x WHERE x.location_id = t.id AND x.company_id = t.company_id)',
+    usedSql: 'EXISTS (SELECT 1 FROM stock_opening x WHERE x.location_id = t.id AND x.company_id = t.company_id) OR EXISTS (SELECT 1 FROM inventory_line x WHERE x.location_id = t.id AND x.company_id = t.company_id)',
     refusals: { ...treeRefusals('stock_location', 'location'), stock_location_builtin: ledgerError(409, 'The main location can be renamed but not deleted.', 'seeded_row') },
     createInput: stockLocationCreateInput, alterInput: stockLocationAlterInput,
   },
@@ -151,7 +151,7 @@ export async function deleteTree(context: LedgerContext, name: TreeKindName, id:
   const before = await readTree(context, kind, id, true);
   if (before.revision !== input.revision) throw conflict(kind.what);
   if (before.systemKey) throw kind.refusals.stock_location_builtin;
-  const inUse = ledgerError(409, `This ${kind.what} holds sub-${kind.what}s or is used${kind.table === 'stock_location' ? ' by opening stock' : ' by stock items'} and cannot be deleted.`, 'in_use');
+  const inUse = ledgerError(409, `This ${kind.what} holds sub-${kind.what}s or is used${kind.table === 'stock_location' ? ' by opening stock or item lines' : ' by stock items'} and cannot be deleted.`, 'in_use');
   await context.client.query(`DELETE FROM ${kind.table} WHERE company_id = $1 AND id = $2`, [context.company.companyId, id])
     .catch(error => refusal(error, { ...kind.refusals, '23503': inUse }));
   await logRevision(context, kind.entity, id, 'delete', before, null);
@@ -163,7 +163,7 @@ const unitColumns = 'u.id, u.symbol, u.formal_name AS "formalName", u.decimals, 
 const unitInUseSql = 'EXISTS (SELECT 1 FROM stock_item x WHERE x.unit_id = u.id AND x.company_id = u.company_id)';
 const unitRefusals = {
   stock_unit_symbol_idx: ledgerError(409, 'A unit with this symbol already exists.', 'duplicate_name'),
-  stock_unit_decimals: ledgerError(409, 'This unit is used by opening stock, so its decimal places cannot be lowered. Raising them is allowed.', 'in_use'),
+  stock_unit_decimals: ledgerError(409, 'This unit is used by opening stock or item lines, so its decimal places cannot be lowered. Raising them is allowed.', 'in_use'),
 };
 
 export async function listUnits(context: LedgerContext): Promise<StockUnitListItem[]> {
@@ -237,7 +237,7 @@ export async function deleteUnit(context: LedgerContext, unitId: string, value: 
 
 const itemRefusals = {
   stock_item_name_idx: ledgerError(409, 'A stock item with this name already exists.', 'duplicate_name'),
-  stock_item_unit_fixed: ledgerError(409, 'This item has opening stock, so its unit cannot change.', 'in_use'),
+  stock_item_unit_fixed: ledgerError(409, 'This item has opening stock or item lines, so its unit cannot change.', 'in_use'),
   stock_opening_quantity_places: ledgerError(400, 'An opening quantity has more decimal places than the item\'s unit allows.', 'validation'),
   stock_opening_locked: ledgerError(409, 'Opening stock is locked: the books are locked through the books beginning.', 'locked_period'),
   stock_unit_decimals: unitRefusals.stock_unit_decimals,
@@ -245,6 +245,8 @@ const itemRefusals = {
   stock_item_company_id_unit_id_fkey: ledgerError(400, 'The unit was not found.', 'not_found'),
   stock_item_company_id_group_id_fkey: ledgerError(400, 'The stock group was not found.', 'not_found'),
   stock_item_company_id_category_id_fkey: ledgerError(400, 'The stock category was not found.', 'not_found'),
+  // An item delete refused by the item lines' key (M2b slice b1).
+  inventory_line_company_id_item_id_fkey: ledgerError(409, 'This item has item lines and cannot be deleted.', 'in_use'),
 };
 
 type ItemRow = Omit<StockItem, 'openings' | 'openingValue'>;
@@ -420,7 +422,7 @@ export async function deleteItem(context: LedgerContext, itemId: string, value: 
  * shared ledger context stays readable on a database before migration 0011. A writer already share-locks the company
  * row (ledgerContext), so a switch in flight, which locks it for update, commits before this reads.
  */
-async function inventoryEnabled(context: LedgerContext): Promise<boolean> {
+export async function inventoryEnabled(context: LedgerContext): Promise<boolean> {
   const { rows } = await context.client.query<{ enabled: boolean }>('SELECT inventory_enabled AS enabled FROM company WHERE company_id = $1', [context.company.companyId]);
   return rows[0].enabled;
 }

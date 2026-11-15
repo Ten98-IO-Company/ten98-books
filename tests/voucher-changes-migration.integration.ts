@@ -8,6 +8,7 @@ import { alterVoucher, createVoucher, readVoucher } from '../src/server/ledger/v
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { moneyToWire } from '../src/lib/money.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
+import { earlierVoucher } from './helpers/earlier-voucher.ts';
 import { inCompany } from './helpers/ledger.ts';
 
 /**
@@ -31,9 +32,9 @@ let before0009: unknown;
 const types = async (company: string, kind: string) => (await admin.query('SELECT id FROM voucher_type WHERE company_id = $1 AND kind = $2', [company, kind])).rows[0].id as string;
 
 /**
- * One company as the earlier release left it: a sales voucher posted by the server code with a cost row on the sales line
- * and, written as that release stored them, new bills on the party line named `billNames` (the current posting code
- * already needs 0009's bill key).
+ * One company as the earlier release left it: a sales voucher with a cost row on the sales line and new bills on the
+ * party line named `billNames`, written as that release stored them (the current posting code needs 0009's bill key,
+ * and its read of the voucher needs the later tables). The cost masters are made by the server code.
  */
 async function earlierCompany(client: pg.Client, company: string, billNames: string[]): Promise<string> {
   await client.query("INSERT INTO workspace (id, name) VALUES ($1, 'Earlier Changes')", [company]);
@@ -44,24 +45,26 @@ async function earlierCompany(client: pg.Client, company: string, billNames: str
     VALUES ($1, 'AED', 2, 1, 1, '2026-01-01', 'Asia/Dubai')`, [company]);
   await client.query("SELECT ledger_seed_company($1)", [company]);
   await client.query("COMMIT");
-  const posted = await inCompany(user, company, async context => {
+  const masters = await inCompany(user, company, async context => {
     context.role = "owner";
     await saveCostCentresSetting(context, { enabled: true });
     const group = async (key: string) => (await context.client.query("SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2", [company, key])).rows[0].id;
     const sales = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, cost_centres) VALUES ($1, $2, $3, true) RETURNING id', [company, await group("sales"), "Sales"])).rows[0].id;
     const party = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, bill_wise) VALUES ($1, $2, $3, true) RETURNING id', [company, await group("receivables"), "Party"])).rows[0].id;
-    const centre = (await createCostCentre(context, { name: "Showroom", categoryId: (await createCostCategory(context, { name: "Channel" })).id, parentId: null })).id;
-    const type = (await context.client.query("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'sales'", [company])).rows[0].id;
-    return (await createVoucher(context, { idempotencyKey: `earlier-${randomUUID()}`, voucherTypeId: type, date: "2026-02-01", lines: [
-      { ledgerId: party, side: "Dr", amount: "100" }, { ledgerId: sales, side: "Cr", amount: "100", costAllocations: [{ costCentreId: centre, amount: "100" }] }] })).voucher;
+    const categoryId = (await createCostCategory(context, { name: "Channel" })).id;
+    const costCentreId = (await createCostCentre(context, { name: "Showroom", categoryId, parentId: null })).id;
+    return { sales, party, categoryId, costCentreId };
   }, "write");
+  const posted = { id: await earlierVoucher(client, company, user, 'sales', '2026-02-01', [
+    { ledgerId: masters.party, side: 'Dr', amount: 10000 }, { ledgerId: masters.sales, side: 'Cr', amount: 10000, cost: { categoryId: masters.categoryId, costCentreId: masters.costCentreId } }]),
+  partyId: masters.party };
   await client.query("BEGIN");
   await client.query("SELECT set_config('app.company_ids', $1, true)", [company]);
   for (const name of billNames) {
-    const bill = (await client.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, 'AED') RETURNING id", [company, posted.lines[0].ledgerId, name])).rows[0].id;
+    const bill = (await client.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, 'AED') RETURNING id", [company, posted.partyId, name])).rows[0].id;
     const amount = 10000 / billNames.length;
     await client.query(`INSERT INTO bill_allocation (company_id, ledger_id, voucher_id, line_no, kind, bill_id, currency, side, amount, currency_amount, due_date)
-      VALUES ($1, $2, $3, 1, 'new_ref', $4, 'AED', 'Dr', $5, $5, '2026-02-01')`, [company, posted.lines[0].ledgerId, posted.id, bill, amount]);
+      VALUES ($1, $2, $3, 1, 'new_ref', $4, 'AED', 'Dr', $5, $5, '2026-02-01')`, [company, posted.partyId, posted.id, bill, amount]);
   }
   await client.query("COMMIT");
   return posted.id;
