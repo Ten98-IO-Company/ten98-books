@@ -1,4 +1,4 @@
-import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, Button, Field, Option, Select, SidebarFooter, SidebarNav, Stack } from '@ten98/ui'
+import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, WorkspaceProjectSwitcher } from '@ten98/ui'
 import type { NavLinkComponent, SidebarNavGroup } from '@ten98/ui'
 import { AppBrand } from '@ten98/ui/app'
 import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
@@ -109,7 +109,7 @@ function AppLayout() {
     <AppShell sidebarLabel='Application navigation' skipLinkLabel='Skip to main content' mainLabel='Main content' navigation={{ open: menuOpen, onOpenChange: setMenuOpen }}
       sidebar={<>
         <AppBrand product='Books' href='/app' />
-        <CompanySwitcher companies={companies} currentId={shown?.id} onChange={openCompany} />
+        <WorkspaceProjectSwitcher workspaces={workspaceOptions(companies)} workspaceId={shown?.id ?? null} onWorkspaceChange={openCompany} create={createCompany} labels={switcherLabels} linkComponent={ShellLink} />
         {groups.length > 0 && <SidebarNav label='Company sections' linkComponent={ShellLink} groups={groups} />}
         <SidebarFooter version={version}>
           <SidebarNav label='Company team and account' linkComponent={ShellLink} groups={[{ id: 'account', items: [
@@ -139,22 +139,13 @@ function AppLayout() {
   </PresentationProvider></AppContext>
 }
 
-/**
- * One control for the company: a company is a workspace (D-03), so changing company is changing workspace. Composed
- * from `@ten98/ui` primitives because the shared switcher pairs a workspace with a project inside it.
- */
-function CompanySwitcher({ companies, currentId, onChange }: { companies: CompanySummary[] | null; currentId?: string; onChange: (id: string) => void }) {
-  const current = companies?.find(item => item.id === currentId)
-  return <Stack gap={2}>
-    <Field label='Company' description={current ? `${roleLabels[current.role]}${current.company || current.twoFactorLocked ? '' : ' · not set up yet'}` : undefined}>
-      <Select value={current?.id ?? ''} disabled={!companies?.length} aria-busy={companies === null || undefined} onChange={event => { if (event.target.value) onChange(event.target.value) }}>
-        {!current && <Option value='' disabled>{companies === null ? 'Loading companies…' : companies.length ? 'Change company' : 'No companies yet'}</Option>}
-        {companies?.map(item => <Option key={item.id} value={item.id}>{item.name}</Option>)}
-      </Select>
-    </Field>
-    <Button variant='secondary' size='sm' href='/app/companies/new' component={ShellLink}>Create company</Button>
-  </Stack>
-}
+/** The switcher's options: a company is a workspace (D-03), with its role as the caption under the select. */
+const workspaceOptions = (companies: CompanySummary[] | null) => companies?.map(item => ({
+  id: item.id, name: item.name, roleLabel: `${roleLabels[item.role]}${item.company || item.twoFactorLocked ? '' : ' · not set up yet'}`,
+})) ?? null
+
+const switcherLabels = { workspace: 'Company', chooseWorkspace: 'Choose a company', loadingWorkspaces: 'Loading companies…', noWorkspaces: 'No companies yet' }
+const createCompany = { label: 'Create company', href: '/app/companies/new' }
 
 function PresentationProvider({ userId, onUnauthorized, children }: { userId: string; onUnauthorized: () => void; children: ReactNode }) {
   return <AccountPresentationContext value={useAccountPresentationState(userId, onUnauthorized)}>{children}</AccountPresentationContext>

@@ -70,7 +70,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const fields = groupFields(values)
   // A new entry is dirty once something is typed (the kept parent after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, confirm)
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'

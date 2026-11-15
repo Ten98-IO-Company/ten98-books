@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chordFromEvent, findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
+import { chordFromEvent, findChordConflicts, useLeaveGuard, type ConfirmRequest, type LeaveGuard, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
 import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
@@ -342,17 +344,44 @@ test('only chords with Ctrl, Alt or Meta, and function keys, are ever claimed', 
 
 test('every entry screen guards typed work against leaving: route changes ask first and unload warns', () => {
   const entry = readFileSync(new URL('../src/components/masters/entry.tsx', import.meta.url), 'utf8');
-  const guard = entry.slice(entry.indexOf('export function useLeaveGuard'));
-  assert.match(guard, /useBlocker\(/);
-  assert.match(guard, /shouldBlockFn/);
-  assert.match(guard, /enableBeforeUnload/);
+  // The router adapter is the package guard's hook: defined once at module level, never inside the wrapper or a component.
+  const adapter = entry.indexOf('const useRouterBlocker: LeaveGuardBlocker');
+  assert.ok(adapter > 0 && adapter < entry.indexOf('export function useLeaveGuard'), 'the adapter is a module-level constant');
+  assert.match(entry, /const useRouterBlocker: LeaveGuardBlocker = shouldBlock => \{ useBlocker\(\{ shouldBlockFn: shouldBlock, enableBeforeUnload: false \}\) \}/);
+  const guard = entry.slice(entry.indexOf('export function useLeaveGuard'), entry.indexOf('export type Failure'));
+  assert.match(guard, /usePackageLeaveGuard\(dirty, \{ useBlocker: useRouterBlocker, confirm \}\)/, 'the package guard gets the adapter and the app confirm');
+  assert.doesNotMatch(guard, /\bdialog\b/, 'the package guard has no dialog of its own to render here');
+  assert.match(guard, /confirm: \(request: AppConfirmRequest\) => Promise<boolean>\)/, 'the confirm is a required argument');
   const screens = sources(new URL('../src/components/', import.meta.url)).filter(file => /<EntryScope[\s>]/.test(readFileSync(file, 'utf8')));
   assert.ok(screens.length >= 2, 'the group and ledger forms render EntryScope');
   for (const file of screens) {
     const source = readFileSync(file, 'utf8');
-    assert.match(source, /useLeaveGuard\(dirty/, `${file.pathname} guards its dirty state`);
+    assert.match(source, /useLeaveGuard\(dirty.*, confirm\)/, `${file.pathname} guards its dirty state with the app confirm`);
     assert.doesNotMatch(source, /setFlash\([^)]*\); leave\(\)/, `${file.pathname} leaves after a save or delete through guard.pass`);
   }
+  // The package hook is reached from entry.tsx only, and there always with the app confirm.
+  for (const file of sources(new URL('../src/', import.meta.url))) {
+    if (file.pathname.endsWith('/src/components/masters/entry.tsx')) continue;
+    for (const statement of readFileSync(file, 'utf8').matchAll(/(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]@ten98\/ui['"]/g)) {
+      assert.doesNotMatch(statement[1], /\buseLeaveGuard\b|\bLeaveGuardBlocker\b/, `${file.pathname} reaches the package guard through entry.tsx`);
+    }
+  }
+});
+
+test('the package leave guard, given the app confirm: no dialog of its own, its default question through that confirm, one question at a time', async () => {
+  let guard!: LeaveGuard;
+  const asked: ConfirmRequest[] = [];
+  const confirm = (request: ConfirmRequest) => new Promise<boolean>(resolve => { asked.push(confirmRequest(request)); setTimeout(() => resolve(false), 5); });
+  const Screen = () => { guard = useLeaveGuard(true, { confirm }); return null; };
+  renderToString(createElement(Screen));
+  assert.equal(guard.dialog, null, 'with a confirm the guard renders no dialog, so its own (confirm-first) dialog is unreachable');
+  const exits: string[] = [];
+  const first = guard.leave(() => exits.push('first'));
+  const second = guard.leave(() => exits.push('second'));
+  assert.deepEqual(await Promise.all([first, second]), [false, false]);
+  assert.equal(asked.length, 1, 'a second attempt while the question is open waits for the same answer');
+  assert.deepEqual(exits, [], 'Keep editing runs no exit');
+  assert.deepEqual(asked[0], { title: 'Discard unsaved changes?', description: 'Your changes have not been saved.', confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', danger: true, initialFocus: 'cancel' });
 });
 
 test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
@@ -374,8 +403,9 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
-  // Six deletes, switching cost centres off, four "Leave without saving?" and the preferences page's question.
-  assert.equal(questions, 12, 'every question is asked through useConfirm');
+  // Six deletes, switching cost centres off and the preferences page's question. The leave question of the four master forms is the
+  // package guard's, asked through the form's `confirm` (checked above), so it is no call site of its own.
+  assert.equal(questions, 8, 'every question is asked through useConfirm');
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);

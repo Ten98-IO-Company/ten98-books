@@ -1,4 +1,5 @@
 import {readResponseText} from '@ten98/runtime/browser';
+import {useTheme} from '@ten98/ui';
 import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import {ApiError,errMsg} from './api';
 import {accountPreferencesWireDtoSchema,type AccountPreferencesDto} from './account-preferences';
@@ -16,7 +17,9 @@ export const useAccountPresentation=()=>useContext(AccountPresentationContext);
 
 /**
  * The signed-in shell's saved preferences: read once per account, replaced by a verified save, and applied as the
- * document theme. Without saved preferences the browser's own light or dark setting applies.
+ * document theme through the package's `useTheme`, which also caches the theme (the value only) in this browser for the
+ * script in the document head (`createThemeScript`, src/routes/__root.tsx). Until the account is loaded the cached theme
+ * applies, and without one the browser's own light or dark setting.
  */
 export function useAccountPresentationState(userId:string,onUnauthorized:()=>void):AccountPresentation {
   const [state,setState]=useState<{data:AccountPreferencesDto|null;loading:boolean;error:string}>({data:null,loading:false,error:''});
@@ -36,10 +39,7 @@ export function useAccountPresentationState(userId:string,onUnauthorized:()=>voi
     }finally{if(request.current===controller)request.current=null;}
   },[userId,onUnauthorized]);
   useEffect(()=>{void reload();return()=>{request.current?.abort();request.current=null;};},[reload]);
-  useEffect(()=>{
-    document.documentElement.dataset.theme=state.data?.user.id===userId?state.data.preferences.theme:'system';
-    return()=>{document.documentElement.dataset.theme='system';};
-  },[state.data,userId]);
+  useTheme({value:state.data?.user.id===userId?state.data.preferences.theme:null});
   return useMemo(()=>({...state,reload,
     accept:(data:AccountPreferencesDto)=>{if(data.user.id!==userId)return false;request.current?.abort();request.current=null;setState({data,loading:false,error:''});return true;},
     unavailable:(message:string)=>{request.current?.abort();request.current=null;setState({data:null,loading:false,error:message});},

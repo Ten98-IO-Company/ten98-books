@@ -56,7 +56,7 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
   const deleteReason = existing ? categoryDeleteReason(existing) : null
   // A new entry is dirty once something is typed (the kept settings after a save are not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, confirm)
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
 
   const specs: Record<LookupName, LookupSpec<CategoryFormValues, CategoryFormAction>> = {

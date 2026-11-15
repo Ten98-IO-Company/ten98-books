@@ -1,4 +1,4 @@
-import { Alert, Button, ShortcutScope } from '@ten98/ui'
+import { Alert, Button, ShortcutScope, useLeaveGuard as usePackageLeaveGuard, type LeaveGuardBlocker } from '@ten98/ui'
 import { useBlocker, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { ApiError, errMsg } from '../../lib/api'
@@ -6,6 +6,7 @@ import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
 import { ReservedKeys, useAppCommand } from '../KeyboardShell'
+import type { AppConfirmRequest } from '../useConfirm'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
 export function EntryScope({ children }: { children: ReactNode }) {
@@ -94,33 +95,23 @@ export function useLeave(fallback: { to: string; params: Record<string, string> 
   }, [canGoBack, router, navigate, fallback.to, JSON.stringify(fallback.params)])
 }
 
+// The router adapter of the package's leave guard. It is a hook the guard calls on every render, so it is defined once, here,
+// and never changes. The guard adds the browser's own unload warning itself, so the router's is off.
+const useRouterBlocker: LeaveGuardBlocker = shouldBlock => { useBlocker({ shouldBlockFn: shouldBlock, enableBeforeUnload: false }) }
+
 /**
- * Keeps typed work from being lost: while `dirty`, any route change away from the screen (go-to, the company switcher,
- * a link, the browser's back) waits for `ask` and goes ahead only on a yes, and closing or reloading the tab gets the
- * browser's own warning. `pass` runs an exit the screen has already settled (after a save or a delete) without asking;
- * `leave` asks first (when dirty) and then leaves, for the screen's own exits.
- * Every entry screen guards itself with this; tests/keyboard.test.ts checks that each one rendering `EntryScope` does.
+ * Keeps typed work from being lost: the package's `useLeaveGuard`, with this app's router and its own `confirm` (useConfirm,
+ * so one dialog serves every question on the screen and each one opens on Cancel). While `dirty`, any route change away
+ * from the screen (go-to, the company switcher, a link, the browser's back) waits for the question and goes ahead only on a
+ * yes, and closing or reloading the tab gets the browser's own warning. `pass` runs an exit the screen has already settled
+ * (after a save or a delete) without asking; `leave` asks first (when dirty) and then leaves, for the screen's own exits.
+ * `confirm` is required and always handed on: the guard renders a dialog of its own only when it gets none, and that
+ * dialog would open on the confirm button for a question that is not marked `danger`; tests/keyboard.test.ts pins both.
+ * Every entry screen guards itself with this; the same test checks that each one rendering `EntryScope` does.
  */
-export function useLeaveGuard(dirty: boolean, ask: () => Promise<boolean>) {
-  const latest = useRef({ dirty, ask })
-  latest.current = { dirty, ask }
-  // One settled exit may pass unasked, for a moment: a history step lands asynchronously.
-  const passUntil = useRef(0)
-  useBlocker({
-    shouldBlockFn: async () => {
-      if (passUntil.current > Date.now()) { passUntil.current = 0; return false }
-      return latest.current.dirty && !await latest.current.ask()
-    },
-    enableBeforeUnload: () => latest.current.dirty && passUntil.current <= Date.now(),
-  })
-  const pass = useCallback((exit: () => void) => { passUntil.current = Date.now() + 2000; exit() }, [])
-  // The screen's own exits (Escape, Ctrl+Q, the Leave button) ask before navigating, so the address does not change
-  // while the question is open; only the browser's back moves the address first.
-  const leave = useCallback(async (exit: () => void) => {
-    if (latest.current.dirty && !await latest.current.ask()) return
-    pass(exit)
-  }, [pass])
-  return { pass, leave }
+export function useLeaveGuard(dirty: boolean, confirm: (request: AppConfirmRequest) => Promise<boolean>) {
+  const { leave, pass } = usePackageLeaveGuard(dirty, { useBlocker: useRouterBlocker, confirm })
+  return { leave, pass }
 }
 
 export type Failure = ReturnType<typeof describeFailure>

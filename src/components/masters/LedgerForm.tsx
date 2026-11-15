@@ -94,7 +94,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const side = effectiveSide(values, groups)
   // A new entry is dirty once something is typed (the kept group after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, confirm)
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
