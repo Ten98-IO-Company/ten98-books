@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chordFromEvent, findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
+import { chordFromEvent, findChordConflicts, type ConfirmRequest, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
 import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
+import { acceptPress } from '../src/components/masters/accept-press.ts';
+import { createLeaveGuard } from '../src/components/masters/leave-guard.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
 
@@ -342,17 +346,59 @@ test('only chords with Ctrl, Alt or Meta, and function keys, are ever claimed', 
 
 test('every entry screen guards typed work against leaving: route changes ask first and unload warns', () => {
   const entry = readFileSync(new URL('../src/components/masters/entry.tsx', import.meta.url), 'utf8');
-  const guard = entry.slice(entry.indexOf('export function useLeaveGuard'));
-  assert.match(guard, /useBlocker\(/);
-  assert.match(guard, /shouldBlockFn/);
-  assert.match(guard, /enableBeforeUnload/);
+  // The router adapter is the package guard's hook: defined once at module level, never inside a function or a component.
+  const adapter = entry.indexOf('const useRouterBlocker: LeaveGuardBlocker');
+  assert.ok(adapter > 0 && adapter < entry.indexOf('export const useLeaveGuard'), 'the adapter is a module-level constant');
+  assert.match(entry, /const useRouterBlocker: LeaveGuardBlocker = shouldBlock => \{ useBlocker\(\{ shouldBlockFn: shouldBlock, enableBeforeUnload: false \}\) \}/);
+  assert.match(entry, /export const useLeaveGuard = createLeaveGuard\(useRouterBlocker\)/, 'the guard of the screens is the factory\'s, built once with that adapter');
+  const factory = readFileSync(new URL('../src/components/masters/leave-guard.ts', import.meta.url), 'utf8');
+  assert.match(factory, /usePackageLeaveGuard\(dirty, \{ useBlocker, confirm \}\)/, 'the package guard gets the adapter and the confirm of the screen');
+  assert.doesNotMatch(factory.slice(factory.indexOf('export function')), /\bdialog\b/, 'the package guard has no dialog of its own to render here');
+  assert.match(factory, /confirm: \(request: AppConfirmRequest\) => Promise<boolean>\)/, 'the confirm is a required argument');
   const screens = sources(new URL('../src/components/', import.meta.url)).filter(file => /<EntryScope[\s>]/.test(readFileSync(file, 'utf8')));
   assert.ok(screens.length >= 2, 'the group and ledger forms render EntryScope');
   for (const file of screens) {
     const source = readFileSync(file, 'utf8');
-    assert.match(source, /useLeaveGuard\(dirty/, `${file.pathname} guards its dirty state`);
+    // A dirty flag and a second argument: the form's confirm, or (the voucher screen) a function that settles its grid and then asks.
+    assert.match(source, /useLeaveGuard\(dirty[^)]*, \w+\)/, `${file.pathname} guards its dirty state`);
     assert.doesNotMatch(source, /setFlash\([^)]*\); leave\(\)/, `${file.pathname} leaves after a save or delete through guard.pass`);
   }
+  // The package hook is reached from the factory only.
+  for (const file of sources(new URL('../src/', import.meta.url))) {
+    if (file.pathname.endsWith('/src/components/masters/leave-guard.ts')) continue;
+    for (const statement of readFileSync(file, 'utf8').matchAll(/(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]@ten98\/ui['"]/g)) {
+      assert.doesNotMatch(statement[1], /\buseLeaveGuard\b/, `${file.pathname} reaches the package guard through the factory`);
+    }
+  }
+});
+
+test('the leave guard of the screens at run time: the app confirm asks the package question on Cancel, one at a time; a settled exit passes unasked once', async () => {
+  let shouldBlock!: () => Promise<boolean>;
+  let guard!: { leave: (exit: () => void) => Promise<boolean>; pass: (exit: () => void) => void };
+  const useGuard = createLeaveGuard(block => { shouldBlock = block; });
+  const asked: ConfirmRequest[] = [];
+  const confirm = (request: AppConfirmRequest) => new Promise<boolean>(resolve => { asked.push(confirmRequest(request)); setTimeout(() => resolve(false), 5); });
+  const Screen = () => { guard = useGuard(true, confirm); return null; };
+  renderToString(createElement(Screen));
+  assert.deepEqual(Object.keys(guard).sort(), ['leave', 'pass'], 'the package guard\'s own dialog is not handed on');
+  // Two exits while one question is open share it; Keep editing runs neither.
+  const exits: string[] = [];
+  assert.deepEqual(await Promise.all([guard.leave(() => exits.push('first')), guard.leave(() => exits.push('second'))]), [false, false]);
+  assert.equal(asked.length, 1, 'a second attempt while the question is open waits for the same answer');
+  assert.equal(exits.length, 0, 'Keep editing runs no exit');
+  assert.deepEqual(asked[0], { title: 'Discard unsaved changes?', description: 'Your changes have not been saved.', confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', danger: true, initialFocus: 'cancel' });
+  // A route change asks, and Keep editing holds it (true stays).
+  asked.length = 0;
+  assert.equal(await shouldBlock(), true);
+  assert.equal(asked.length, 1);
+  // After a save or delete the screen passes its exit: nothing is asked, for that one navigation only.
+  asked.length = 0;
+  guard.pass(() => exits.push('left'));
+  assert.deepEqual(exits, ['left']);
+  assert.equal(await shouldBlock(), false, 'the exit the screen settled goes through');
+  assert.equal(asked.length, 0, 'save then leave asks nothing');
+  assert.equal(await shouldBlock(), true, 'the next route change asks again');
+  assert.equal(asked.length, 1);
 });
 
 test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
@@ -374,8 +420,12 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
-  // Six deletes, switching cost centres off, four "Leave without saving?" and the preferences page's question.
-  assert.equal(questions, 12, 'every question is asked through useConfirm');
+  // What this counts: every `confirm(` call in a file that calls `useConfirm()`, which is every question a screen asks on its own.
+  // Here: six deletes, switching cost centres off and the preferences page's question. The leave question of the master forms is
+  // the package guard's, asked through the form's `confirm` passed to `useLeaveGuard` (checked above), so it is no call site of its
+  // own. A screen that adds a question (the voucher entry screen's leave question, a delete) raises the number by exactly its own
+  // `confirm(` calls; on a merge of two branches, add what each one added to the number on `dev`.
+  assert.equal(questions, 8, 'every question is asked through useConfirm');
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
@@ -729,4 +779,29 @@ test('docs/KEYBOARD.md states the parity counts the code has', () => {
   const doc = readFileSync(new URL('../docs/KEYBOARD.md', import.meta.url), 'utf8');
   const count = (status: string) => Object.values(classicParity).filter(entry => entry.status === status).length;
   assert.ok(doc.includes(`Counts: ${count('same')} same, ${count('alternate')} alternate, ${count('ours')} ours, over ${commandIds.length} commands.`), 'the counts line matches classicParity');
+});
+
+test('only a fresh press answers the Save panel: a held Enter, Y or N does nothing, and the panel keeps every other key and chord as before', () => {
+  const press = (key: string, extra: { repeat?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } = {}) =>
+    acceptPress({ key, repeat: false, ctrlKey: false, altKey: false, metaKey: false, ...extra });
+  // Fresh: Y accepts, N keeps editing (either case), Enter is left to the focused button (Save saves, Keep editing keeps editing).
+  assert.equal(press('y'), 'accept');
+  assert.equal(press('Y'), 'accept');
+  assert.equal(press('n'), 'keep-editing');
+  assert.equal(press('N'), 'keep-editing');
+  assert.equal(press('Enter'), 'native');
+  // Held down (auto-repeat): swallowed, so the panel's Save button is not activated and nothing is saved or dismissed.
+  for (const key of ['Enter', 'y', 'Y', 'n', 'N']) assert.equal(press(key, { repeat: true }), 'swallow', `a repeating ${key}`);
+  // Everything else is the browser's or the form's own: Escape (the cancel command), other letters, modified chords.
+  for (const key of ['Escape', 'Tab', 'a', ' ']) assert.equal(press(key), 'native', key);
+  for (const key of ['Escape', 'a']) assert.equal(press(key, { repeat: true }), 'native', `a repeating ${key}`);
+  for (const modifier of ['ctrlKey', 'altKey', 'metaKey'] as const) {
+    assert.equal(press('y', { [modifier]: true }), 'native', modifier);
+    assert.equal(press('Enter', { [modifier]: true, repeat: true }), 'native', `${modifier} with a repeat`);
+  }
+  // The panel acts on the decision: it swallows with preventDefault and calls the answers only for a fresh Y or N.
+  const entry = readFileSync(new URL('../src/components/masters/entry.tsx', import.meta.url), 'utf8');
+  const panel = entry.slice(entry.indexOf('export function SaveConfirm'));
+  assert.match(panel, /const press = acceptPress\(event\)\n\s+if \(press === 'native'\) return\n\s+event\.preventDefault\(\)\n\s+if \(press === 'accept'\) onConfirm\(\); else if \(press === 'keep-editing'\) onCancel\(\)/);
+  assert.match(panel, /<Alert [^>]*onKeyDown=\{answer\}/);
 });

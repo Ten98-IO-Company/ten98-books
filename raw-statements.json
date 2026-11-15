@@ -1,0 +1,114 @@
+{
+  "src/server/account-security.ts": {
+    "count": 28,
+    "reason": "App-owned identity controller: statements that lock the user, session, credential and verification rows (FOR UPDATE) in the same transaction as the sign-in library call, delete sessions and challenges, and record used codes. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/api/http.ts": {
+    "count": 2,
+    "reason": "Two rate-limit statements, each a data-modifying CTE with ON CONFLICT on the key and minute. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/api/session.ts": {
+    "count": 1,
+    "reason": "One read of whether the installation has been claimed. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/api/settings.ts": {
+    "count": 2,
+    "reason": "Reads and upserts the signed-in user's keymap choice. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/api/team.ts": {
+    "count": 1,
+    "reason": "One read of the caller's workspaces with their role and two-factor state. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/auth.ts": {
+    "count": 11,
+    "reason": "First-user setup in one transaction: locks the installation row, inserts the user, credential, workspace, owner membership and operator rows, and marks the installation claimed. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/cli.ts": {
+    "count": 2,
+    "reason": "Operator health check: a connection probe and a read of the worker heartbeat. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/companies.ts": {
+    "count": 10,
+    "reason": "Company creation and books settings: row locks, an advisory lock, the idempotency row and the settings rows, in the same transaction as the shared team controller call. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/demo/compare.ts": {
+    "count": 1,
+    "reason": "One read of the seeded vouchers' numbers by idempotency key. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/demo/seed.ts": {
+    "count": 5,
+    "reason": "Demo seeder: finds the owner by email, reads the markers of an earlier seed, and takes and releases a session advisory lock. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/jobs.ts": {
+    "count": 2,
+    "reason": "Worker heartbeat: one upsert and one delete. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/bills.ts": {
+    "count": 10,
+    "reason": "Bill rows of voucher lines: inserts with ON CONFLICT on the bill's name key, and reads with CTEs and bigint sums. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/context.ts": {
+    "count": 1,
+    "reason": "One read of the company's books settings. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/cost-centres.ts": {
+    "count": 22,
+    "reason": "Cost categories and centres: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/currencies.ts": {
+    "count": 18,
+    "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/masters.ts": {
+    "count": 28,
+    "reason": "Groups, ledgers and voucher types: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/reports.ts": {
+    "count": 3,
+    "reason": "The shared ledger read: a recursive CTE over the group tree with bigint sums, one ledger lookup, and SET LOCAL statement_timeout. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/revisions.ts": {
+    "count": 2,
+    "reason": "Revision log: one insert and one read joined to the actor's name. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/seed.ts": {
+    "count": 1,
+    "reason": "One call of the database function that seeds a company's chart. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/stock-masters.ts": {
+    "count": 31,
+    "reason": "Stock masters and opening stock: writes with RETURNING under FOR UPDATE and share row locks, and sums of opening values. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/voucher-entry.ts": {
+    "count": 5,
+    "reason": "Voucher entry reads: the next number, ledger checks, the balance preview and the counter ledger (one CTE). Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/ledger/vouchers.ts": {
+    "count": 19,
+    "reason": "Voucher posting, alter, cancel and delete: row locks (FOR UPDATE, key share), an advisory lock, the numbering counter with ON CONFLICT, a row-value keyset read and bigint sums. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/reports/bills.ts": {
+    "count": 16,
+    "reason": "Bill reports: CTEs, a row-value keyset and bigint sums; it also writes the ageing bucket settings. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/reports/cost-centres.ts": {
+    "count": 3,
+    "reason": "Cost reports: grouped bigint sums per centre and ledger, and two lookups. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/reports/day-book.ts": {
+    "count": 3,
+    "reason": "Day book: a keyset page in a CTE, totals with filtered sums, and the last voucher date. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/reports/ledger.ts": {
+    "count": 3,
+    "reason": "Ledger reports: a header read and a CTE with bigint sums per voucher. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/tenancy.ts": {
+    "count": 6,
+    "reason": "Sets the company scope read by the row-level security policy, reads the caller's memberships under a share lock, runs BEGIN, COMMIT and ROLLBACK for company transactions, and reads the catalog to assert the database roles. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  },
+  "src/server/workspace-team.ts": {
+    "count": 3,
+    "reason": "BEGIN, COMMIT and ROLLBACK around the shared team controller on a connection the app owns. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+  }
+}

@@ -101,6 +101,19 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 - **Reversal trigger.** Written advice from counsel, or the owner's instruction.
 - **Confidence.** Medium (not legal advice).
 
+## D-12 Typed queries and generated schema changes
+
+- **Decision (L3, owner, 2026-11-15).** Books follows the stack shared by the Ten98 applications. Application queries become typed Drizzle queries wherever a builder form emits the same statement; schema changes are generated with drizzle-kit and applied by the shared migration ledger. The database-side ledger guards (functions, triggers, row-level security policies, grants, generated key columns and the indexes chosen from measured plans) stay hand-written SQL, carried as a custom migration step.
+- **How it is reached.** In steps, each reviewed like any other change:
+  1. `raw-statements.json` records the hand-written SQL per source file, and the architecture check of `@ten98/runtime` refuses a rise.
+  2. A pilot converts one stable module (cost categories and centres, with their reports) and reports, for every query shape it meets, whether a builder form emits the same statement or the query stays hand-written and why: row-value keysets, `ON CONFLICT` on a named arbiter, explicit row locks in a fixed order, `SET LOCAL`, advisory locks, recursive and data-modifying CTEs, transaction-id comparisons.
+  3. The other modules follow the pilot's findings.
+  4. One generated baseline replaces the numbered migration files at a quiet point, after a schema-only comparison shows the generated schema and the migrated one are identical. Until then migrations stay hand-written, numbered and immutable, and the coordinator assigns the numbers.
+- **Constraints.** A query is never bent to fit the builder where a measured plan, a lock order or a leakproof comparison under the row-level security policy depends on its shape; it stays hand-written with its reason. Money stays `bigint` and the guards stay in the database (D-03, D-04).
+- **Rejected.** Converting everything at once, which would touch the posting paths while inventory and currencies are changing them; and keeping hand-written SQL throughout, which leaves books apart from the other applications' tooling and review habits.
+- **Reversal trigger.** The pilot showing that a material share of the ledger's statements has no builder form with the same emitted shape; the owner then decides the scope again.
+- **Confidence.** Medium until the pilot reports.
+
 ## Open owner decisions (L3)
 
 | ID | Question |
