@@ -1,4 +1,4 @@
-export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string }
+export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string; /** The answer was this application's own JSON, not a proxy's page or nothing. */ json = false }
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   let res: Response
@@ -23,6 +23,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     const err = new ApiError(fromBody !== '' ? fromBody : res.status === 401 ? 'Your session has expired. Sign in again.' : `Request failed with status ${res.status}.`)
     err.status = res.status
     if (d !== null && typeof d.code === 'string') err.code = d.code
+    err.json = typeof data === 'object' && data !== null
     throw err
   }
   return data as T

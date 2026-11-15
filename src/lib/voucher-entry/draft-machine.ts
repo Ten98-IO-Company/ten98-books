@@ -5,7 +5,7 @@ import { isEntryKind, type EntryLine } from './layout.ts';
 
 /**
  * The voucher on screen as one state machine (docs/VOUCHERS.md, "The draft, its key and its lock"): its content, its
- * idempotency key, the state of its save, and the drafts kept in the tab from before a sign-in. Every change goes
+ * idempotency key, the state of its save, and the drafts kept in the tab. Every change goes
  * through `step`, which refuses whatever the state does not allow, so no caller has to check a lock of its own.
  *
  * The key rule: a draft has one key from its creation until a voucher is known saved under it (`saved`) or the user
@@ -16,9 +16,15 @@ import { isEntryKind, type EntryLine } from './layout.ts';
 
 export type DraftPhase = 'editing' | 'sending' | 'unknown' | 'conflict';
 /** What an answer to a create means (`classifyAnswer`). */
-export type AnswerClass = 'saved' | 'refused' | 'conflict' | 'signed-out' | 'limited' | 'none';
+export type AnswerClass = 'saved' | 'refused' | 'denied' | 'conflict' | 'signed-out' | 'limited' | 'none';
+/** The answers whose request never reached the replay, so they say nothing about an earlier send under the key. */
+const beforeTheReplay: readonly AnswerClass[] = ['signed-out', 'limited', 'denied'];
 
-/** A draft kept in the tab before a sign-in: the machine's whole state, so a restore gives back exactly that state. */
+/**
+ * A draft kept in the tab: the machine's whole state, so a restore gives back exactly that state. A draft whose state
+ * is `sending`, `unknown` or `conflict` is kept from the moment it enters that state; an `editing` one only on a lost
+ * session.
+ */
 export type StoredDraft = {
   phase: 'editing' | 'unknown' | 'conflict';
   key: string; draft: DraftState; sent: string | null; message: string | null; savedAt: string;
@@ -30,11 +36,13 @@ export type DraftMachine = {
   draft: DraftState;
   /** The exact body sent, while sending and in `unknown` and `conflict`: "Check and retry" sends it again unchanged. */
   sent: string | null;
-  /** The state a send returns to when its request did not run (a lost session, too many requests). */
+  /** The state a send returns to when its request did not reach the replay (a lost session, a limit, a denial). */
   resume: 'editing' | 'unknown' | null;
   /** In `editing` a refusal or a check before sending; in `unknown` and `conflict` what the user is told. */
   message: string | null;
-  /** Drafts kept in this tab from before a sign-in, the first one offered. */
+  /** In `unknown`, the latest retry's answer when it said nothing about the first send (a limit, a denial). */
+  note: string | null;
+  /** Drafts kept in this tab, the first one offered. */
   offered: readonly StoredDraft[];
 };
 
@@ -47,13 +55,13 @@ export type DraftEvent =
   | { type: 'retry' }
   | { type: 'saved'; nextKey: string }
   | { type: 'answered'; answer: Exclude<AnswerClass, 'saved'>; message: string }
-  /** The user leaves the draft, or starts a new voucher: from `unknown` and `conflict` only after the warning question. */
+  /** The user discards the draft ("Start a new voucher"): from `unknown` and `conflict` only after the warning question. */
   | { type: 'discard'; nextKey: string; draft: DraftState }
   | { type: 'restore' }
   | { type: 'drop' };
 
 export function startMachine(key: string, draft: DraftState, offered: readonly StoredDraft[] = []): DraftMachine {
-  return { phase: 'editing', key, draft, sent: null, resume: null, message: null, offered };
+  return { phase: 'editing', key, draft, sent: null, resume: null, message: null, note: null, offered };
 }
 
 /** Whether the draft can be changed: only while `editing`. Everything the screen locks reads this. */
@@ -61,26 +69,35 @@ export const isLocked = (machine: DraftMachine): boolean => machine.phase !== 'e
 /** A kept draft can be restored or dropped only while the draft on screen is `editing` and empty. */
 export const canTakeStored = (machine: DraftMachine): boolean => machine.phase === 'editing' && !draftDirty(machine.draft) && machine.offered.length > 0;
 /** The alert that locks the voucher, shown exactly in `unknown` and `conflict`. */
-export const lockAlert = (machine: DraftMachine): { phase: 'unknown' | 'conflict'; message: string } | null =>
-  machine.phase === 'unknown' || machine.phase === 'conflict' ? { phase: machine.phase, message: machine.message ?? '' } : null;
+export const lockAlert = (machine: DraftMachine): { phase: 'unknown' | 'conflict'; message: string; note: string | null } | null =>
+  machine.phase === 'unknown' || machine.phase === 'conflict' ? { phase: machine.phase, message: machine.message ?? '', note: machine.note } : null;
 /** The refusal or check shown while editing ("Not saved"). */
 export const refusal = (machine: DraftMachine): string | null => machine.phase === 'editing' ? machine.message : null;
 
+/** An answer as the controller hands it over: its status, the server's code and whether it was the application's own JSON. */
+export type FailedAnswer = { ok: false; status: number | undefined; code: string | undefined; json: boolean };
+
 /**
- * The one classification of an answer to a create. A 4xx that carries a ledger code is a definite refusal (the
- * transaction rolled back; for the same body under the same key it also proves no earlier send committed, or the server
- * would have replayed). A 4xx without a code is not the server's answer (a proxy's page): like no answer at all.
+ * The one classification of an answer to a create (the full table is in docs/VOUCHERS.md):
+ * - 2xx saved; 401 signed out; 429 limited; 409 `idempotency_mismatch` conflict (a voucher exists under the key).
+ * - 403 and 404 from the application (origin, role, membership, a route) denied: those checks run before the replay, so
+ *   they say nothing about an earlier send; from `editing` they read as a refusal, from `unknown` it stays unknown.
+ * - Any other 4xx from the application, coded or not, refused: the request ran and rolled back, and for the same body
+ *   under the same key it also proves no earlier send committed (the server would have replayed).
+ * - A 5xx, a 4xx that is not the application's JSON (a proxy's page), an unreadable answer or none at all: none.
  */
 export function classifyAnswer(answer: { ok: true }): 'saved';
-export function classifyAnswer(answer: { ok: false; status: number | undefined; code: string | undefined }): Exclude<AnswerClass, 'saved'>;
-export function classifyAnswer(answer: { ok: true } | { ok: false; status: number | undefined; code: string | undefined }): AnswerClass {
+export function classifyAnswer(answer: FailedAnswer): Exclude<AnswerClass, 'saved'>;
+export function classifyAnswer(answer: { ok: true } | FailedAnswer): AnswerClass {
   if (answer.ok) return 'saved';
-  const { status, code } = answer;
+  const { status, code, json } = answer;
+  if (status === undefined || status < 400 || status >= 500) return 'none';
   if (status === 401) return 'signed-out';
   if (status === 429) return 'limited';
+  if (!json) return 'none';
   if (status === 409 && code === 'idempotency_mismatch') return 'conflict';
-  if (status !== undefined && status >= 400 && status < 500 && code !== undefined) return 'refused';
-  return 'none';
+  if (status === 403 || status === 404) return 'denied';
+  return 'refused';
 }
 
 export function step(machine: DraftMachine, event: DraftEvent): DraftMachine {
@@ -93,38 +110,45 @@ export function step(machine: DraftMachine, event: DraftEvent): DraftMachine {
     case 'problem': return machine.phase === 'editing' ? { ...machine, message: event.message } : machine;
     case 'accept': return machine.phase === 'editing' ? { ...machine, phase: 'sending', sent: event.body, resume: 'editing', message: null } : machine;
     case 'retry': return machine.phase === 'unknown' && machine.sent !== null ? { ...machine, phase: 'sending', resume: 'unknown' } : machine;
-    // The only place a key is made, besides discard.
-    // A kept draft under the saved key is that voucher: it is no longer offered.
+    // The only place a key is made, besides discard. A kept draft under the saved key is that voucher: no longer offered.
     case 'saved': return machine.phase === 'sending' ? startMachine(event.nextKey, nextDraft(machine.draft), machine.offered.filter(kept => kept.key !== machine.key)) : machine;
     case 'answered': {
       if (machine.phase !== 'sending') return machine;
-      switch (event.answer) {
-        case 'refused': return { ...machine, phase: 'editing', sent: null, resume: null, message: event.message };
-        case 'conflict': return { ...machine, phase: 'conflict', resume: null, message: event.message };
-        case 'none': return { ...machine, phase: 'unknown', resume: null, message: event.message };
-        // The request did not run: back where the send started. From `unknown` the alert stays.
-        case 'signed-out': case 'limited':
-          return machine.resume === 'unknown'
-            ? { ...machine, phase: 'unknown', resume: null }
-            : { ...machine, phase: 'editing', sent: null, resume: null, message: event.message };
+      const { answer, message } = event;
+      // The request did not reach the replay: from `unknown` it stays unknown, with that answer as a note; from
+      // `editing` the draft is editable again with the answer shown.
+      if (beforeTheReplay.includes(answer)) {
+        return machine.resume === 'unknown'
+          ? { ...machine, phase: 'unknown', resume: null, note: message }
+          : { ...machine, phase: 'editing', sent: null, resume: null, message, note: null };
       }
+      if (answer === 'refused') return { ...machine, phase: 'editing', sent: null, resume: null, message, note: null };
+      if (answer === 'conflict') return { ...machine, phase: 'conflict', resume: null, message, note: null };
+      return { ...machine, phase: 'unknown', resume: null, message, note: null };
     }
     // While a request is in flight nothing is discarded: its answer still has to arrive.
     case 'discard': return machine.phase === 'sending' ? machine : startMachine(event.nextKey, event.draft, machine.offered);
     case 'restore': {
       if (!canTakeStored(machine)) return machine;
       const [kept, ...rest] = machine.offered;
-      return { phase: kept.phase, key: kept.key, draft: kept.draft, sent: kept.sent, resume: null, message: kept.message, offered: rest };
+      return { phase: kept.phase, key: kept.key, draft: kept.draft, sent: kept.sent, resume: null, message: kept.message, note: null, offered: rest };
     }
     case 'drop': return canTakeStored(machine) ? { ...machine, offered: machine.offered.slice(1) } : machine;
   }
 }
 
-/** The draft as kept in the tab when the session is lost (the state the send returned to). */
+/** What a draft kept while its request was in flight is told: its answer never reached this tab. */
+export const answerNeverArrived = 'Its answer never reached this tab: the page was left, reloaded or closed while it was being saved.';
+
+/**
+ * The draft as kept in the tab. A `sending` draft is kept as `unknown`: whatever its answer was, it never arrived here,
+ * so all that can be proved is that a voucher may be saved under its key.
+ */
 export function storedOf(machine: DraftMachine, savedAt: string): StoredDraft {
   const phase = machine.phase === 'sending' ? 'unknown' : machine.phase;
   // An editing draft's message is the lost session's own ("sign in"): stale once restored.
-  return { phase, key: machine.key, draft: machine.draft, sent: machine.sent, message: phase === 'editing' ? null : machine.message, savedAt };
+  const message = machine.phase === 'sending' ? answerNeverArrived : phase === 'editing' ? null : machine.message;
+  return { phase, key: machine.key, draft: machine.draft, sent: machine.sent, message, savedAt };
 }
 
 // ---- Reading the kept drafts back: everything is checked, nothing is taken on trust ----

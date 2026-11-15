@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom'
 import { Alert, EntryGrid, formatChord, Stack, StatusLine, Text, useCommandKeys, type EntryCommitEvent, type EntryGridApi, type EntryGridColumn, type EntryGridRow } from '@ten98/ui'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime/browser'
@@ -32,7 +33,7 @@ const fromRows = (rows: readonly EntryGridRow[]): BillDraft[] => rows.map(row =>
  * panel closes by itself once the rows cover the line. Ctrl+A accepts with the rest on account; Escape keeps the
  * line's earlier rows.
  */
-export function BillPanel({ companyId, kind, date, line, previous, creditDefault, exponent, onAccept, close }: {
+export function BillPanel({ companyId, kind, date, line, previous, creditDefault, exponent, onAccept, onClosed, close }: {
   companyId: string; kind: VoucherKind; date: string
   line: { ledger: string; side: Side; amount: bigint }
   previous: readonly BillDraft[] | undefined
@@ -40,6 +41,8 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
   creditDefault: string
   exponent: MoneyExponent
   onAccept: (rows: BillDraft[]) => void
+  /** The panel has closed after an accept. */
+  onClosed: () => void
   close: () => void
 }) {
   const [pending, setPending] = useState<PendingChoice[] | null>(null)
@@ -98,7 +101,9 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
     // Accepted short of the line: the rest is on account.
     const filled = left > 0n ? [...kept, { key: key(), method: 'on_account' as const, bill: '', name: '', credit: '', amount: formatMoney(left, exponent), side: line.side }] : kept
     onAccept(filled)
-    close()
+    // Closed at once, so the screen moves the cursor on inside the accept key's own handler.
+    flushSync(() => close())
+    onClosed()
     return true
   }
 

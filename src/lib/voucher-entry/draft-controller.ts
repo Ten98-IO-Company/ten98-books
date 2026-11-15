@@ -5,9 +5,16 @@ import type { DraftAction, DraftState } from './enter-path.ts';
  * The voucher on screen with its saves: the state machine of draft-machine.ts plus the requests and the tab's store,
  * which are handed in, so the same code runs in the screen (`useVoucherDraft`) and in the tests against a fake or the
  * real server. It holds the machine synchronously: a key pressed before React renders the last change sees it.
+ *
+ * The tab's kept list holds the on-screen draft whenever its state is `sending`, `unknown` or `conflict`, written the
+ * moment it enters that state; it is taken out on a save, on a discard, when the draft is refused or editable again, and
+ * when it is restored as editable. A lost session keeps an `editing` draft too. Leaving, reloading or closing the tab
+ * therefore never forgets a voucher that may be in the books. Writes are by key against what the store holds now, and a
+ * screen no longer shown (`onScreen(false)`) only adds or updates its draft, never takes one out: a newer screen in the
+ * same tab may have restored that draft, and its user was told it is kept (a late "saved" then shows as a replay).
  */
 
-export type SendFailure = { status: number | undefined; code: string | undefined; message: string };
+export type SendFailure = { status: number | undefined; code: string | undefined; message: string; json: boolean };
 export type SaveResult<T> =
   | { kind: 'saved'; answer: T; key: string }
   | { kind: Exclude<AnswerClass, 'saved'>; message: string; code: string | undefined };
@@ -15,6 +22,8 @@ export type SaveResult<T> =
 export type DraftStore = { read: () => string | null; write: (text: string) => void };
 
 export type DraftController<T> = ReturnType<typeof createDraftController<T>>;
+
+const locked = (machine: DraftMachine) => machine.phase !== 'editing';
 
 export function createDraftController<T>(options: {
   start: DraftState;
@@ -29,14 +38,33 @@ export function createDraftController<T>(options: {
   now?: () => string;
 }) {
   let machine = startMachine(options.makeKey(), options.start, storedDraftsOf(options.store.read()));
-  const keep = (drafts: readonly StoredDraft[]) => options.store.write(drafts.length ? JSON.stringify(drafts) : '');
+  const now = () => options.now?.() ?? new Date().toISOString();
+  /** When the on-screen draft entered its locked state, so rewriting it does not change the time it shows. */
+  let lockedSince = now();
+
+  let shown = true;
+  /** Puts `kept` in the store in place of any draft under its key (or only removes that key). */
+  function keep(key: string, kept: StoredDraft | null) {
+    if (!kept && !shown) return;
+    const others = storedDraftsOf(options.store.read()).filter(entry => entry.key !== key);
+    const next = kept ? [...others, kept] : others;
+    options.store.write(next.length ? JSON.stringify(next) : '');
+  }
 
   function apply(event: DraftEvent): boolean {
-    const next = step(machine, event);
-    if (next === machine) return false;
-    const offeredChanged = next.offered !== machine.offered;
+    const before = machine;
+    const next = step(before, event);
+    if (next === before) return false;
     machine = next;
-    if (offeredChanged) keep(next.offered);
+    if (locked(next) && !locked(before)) lockedSince = now();
+    if (event.type === 'restore' || event.type === 'drop') {
+      const taken = before.offered[0];
+      // A draft restored locked stays kept (below); one restored editable, or dropped, is taken out.
+      if (taken && !(event.type === 'restore' && locked(next))) keep(taken.key, null);
+    }
+    if (locked(next)) keep(next.key, storedOf(next, lockedSince));
+    // Out of a locked state: saved (a new draft and key), discarded, refused, or editable again.
+    else if (locked(before)) keep(before.key, null);
     options.onChange?.(next);
     return true;
   }
@@ -56,11 +84,11 @@ export function createDraftController<T>(options: {
       return { kind: 'saved', answer, key };
     } catch (error) {
       const failure = options.failureOf(error);
-      const answer = classifyAnswer({ ok: false, status: failure.status, code: failure.code });
+      const answer = classifyAnswer({ ok: false, status: failure.status, code: failure.code, json: failure.json });
       apply({ type: 'answered', answer, message: failure.message });
       if (answer === 'signed-out') {
-        // Kept with its key and its state, beside any draft kept earlier and not taken back yet.
-        keep([...machine.offered.filter(kept => kept.key !== machine.key), storedOf(machine, options.now?.() ?? new Date().toISOString())]);
+        // Kept with its key and its state; an editable one too, since the screen leaves for signing in.
+        keep(machine.key, storedOf(machine, now()));
         options.onSignedOut?.();
       }
       return { kind: answer, message: failure.message, code: failure.code };
@@ -84,5 +112,7 @@ export function createDraftController<T>(options: {
     discard: (draft: DraftState): boolean => apply({ type: 'discard', nextKey: options.makeKey(), draft }),
     restore: (): boolean => apply({ type: 'restore' }),
     drop: (): boolean => apply({ type: 'drop' }),
+    /** Whether the screen is shown: one that is not (left, unmounted) still keeps its draft but takes none out. */
+    onScreen: (value: boolean): void => { shown = value; },
   };
 }

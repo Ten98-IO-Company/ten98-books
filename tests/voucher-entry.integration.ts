@@ -5,12 +5,14 @@ import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtim
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, password, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { accountSide, blankDraft, createDraftController, lockAlert, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
+import { accountSide, blankDraft, classifyAnswer, createDraftController, lockAlert, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
 import { join } from 'node:path';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
 import { listLedgers } from '../src/server/ledger/masters.ts';
 import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
+import { handleApi } from '../src/server/api.ts';
+import { getConfig } from '../src/server/config.ts';
 
 /**
  * The voucher entry reads (docs/LEDGER.md, "Voucher entry reads"): the previewed next number, the balance preview and the
@@ -398,7 +400,12 @@ const failureOf = (error: unknown): SendFailure => ({
   status: error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined,
   code: error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined,
   message: error instanceof Error ? error.message : 'no answer',
+  json: error instanceof Error && 'json' in error && error.json === true,
 });
+/** A failed answer as the api helper throws it: whether the body was the application's JSON decides its class. */
+const failed = (answer: { status: number; body: unknown }) =>
+  Object.assign(new Error(typeof answer.body === 'object' && answer.body !== null && 'error' in answer.body && typeof answer.body.error === 'string' ? answer.body.error : 'failed'),
+    { status: answer.status, code: typeof answer.body === 'object' && answer.body !== null && 'code' in answer.body && typeof answer.body.code === 'string' ? answer.body.code : undefined, json: typeof answer.body === 'object' && answer.body !== null });
 
 /**
  * A payment screen on a company: the controller the screen runs, its body built as the hook builds it, sent by `member`
@@ -416,8 +423,8 @@ async function entryScreen(name: string) {
       send: async body => {
         const value: unknown = JSON.parse(body);
         const answer = await member.browser.call(`${c.base}/vouchers`, value);
-        if (answer.status < 300 && lose) { lose = false; throw Object.assign(new Error('Bad gateway'), { status: 502 }); }
-        if (answer.status >= 300) throw Object.assign(new Error(answer.body?.error ?? 'failed'), { status: answer.status, code: answer.body?.code });
+        if (answer.status < 300 && lose) { lose = false; throw Object.assign(new Error('Bad gateway'), { status: 502, json: false }); }
+        if (answer.status >= 300) throw failed(answer);
         return answer.body;
       },
     });
@@ -433,7 +440,8 @@ async function entryScreen(name: string) {
   const email = (await asAdmin(database.adminUrl, admin => admin.query<{ email: string }>('SELECT email FROM "user" WHERE id = $1', [member.userId]))).rows[0].email;
   const endSession = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM session WHERE "userId" = $1', [member.userId]));
   const signIn = async () => assert.equal((await member.browser.call('/api/auth/sign-in/email', { email, password })).status, 200);
-  return { mount, vouchers, endSession, signIn, loseNext: () => { lose = true; } };
+  const removeMember = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM membership WHERE user_id = $1 AND workspace_id = $2', [member.userId, c.id]));
+  return { mount, vouchers, endSession, signIn, removeMember, loseNext: () => { lose = true; } };
 }
 
 test('the key rule: refused, changed, its answer lost after the commit, then retried is ONE voucher under one key', async () => {
@@ -502,3 +510,60 @@ test('a kept draft saved in one tab and changed in another is a 409 conflict, fr
   assert.deepEqual([replay.answer.replayed, replay.answer.voucher.id], [true, saved.answer.voucher.id]);
   assert.equal((await screen.vouchers()).length, 1, 'one voucher across the three tabs');
 });
+
+test('LOW 5: unknown, then the member removed, then retried: the denial says nothing about the first send, so it stays unknown', async () => {
+  const screen = await entryScreen('Entry Removed Member');
+  const { controller, fill, save } = screen.mount(memoryStore());
+  fill('77.00');
+  screen.loseNext();
+  assert.equal((await save())?.kind, 'none', 'committed, its answer lost');
+  await screen.removeMember();
+  const retried = await controller.retry();
+  assert.equal(retried?.kind, 'denied', 'membership is checked before the replay');
+  const machine = controller.machine();
+  assert.deepEqual([machine.phase, lockAlert(machine)?.phase, typeof lockAlert(machine)?.note], ['unknown', 'unknown', 'string'], 'still unknown, the denial noted, not unlocked');
+  assert.equal((await screen.vouchers()).length, 1);
+});
+
+test('the answer classes against the real server: every row it can produce', async () => {
+  const c = await company('Entry Answer Classes');
+  const rent = await c.ledger('Classes Rent', 'indirect_expenses');
+  const viewer = await invite(owner.browser, c.id, 'viewer');
+  const other = await company('Entry Answer Elsewhere');
+  const intruder = await invite(owner.browser, other.id, 'admin');
+  const body = (key: string, amount = '10') => ({ idempotencyKey: key, voucherTypeId: c.books.type('payment'), date: '2026-01-05', lines: [{ ledgerId: rent, side: 'Dr', amount }, { ledgerId: c.books.ledger('Cash'), side: 'Cr', amount }] });
+  const classOf = (answer: { status: number; body: unknown }) => {
+    const error = failed(answer);
+    return classifyAnswer({ ok: false, status: error.status, code: error.code, json: error.json });
+  };
+  const raw = async (method: string, path: string, headers: Record<string, string>, text: string) => {
+    const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method, headers: { cookie: [...owner.browser.cookies].map(([name, value]) => `${name}=${value}`).join('; '), ...headers }, body: text }));
+    const answer = await response.text();
+    let parsed: unknown = answer;
+    try { parsed = JSON.parse(answer); } catch { /* not JSON */ }
+    return { status: response.status, body: parsed };
+  };
+  const key = `classes-${randomUUID()}`;
+  assert.equal((await owner.browser.call(`${c.base}/vouchers`, body(key))).status, 201);
+  const rows: [string, { status: number; body: unknown }, number, string][] = [
+    ['the same key, another body', await owner.browser.call(`${c.base}/vouchers`, body(key, '11')), 409, 'conflict'],
+    ['a validation refusal', await owner.browser.call(`${c.base}/vouchers`, { ...body(`classes-${randomUUID()}`), date: '2025-12-31' }), 400, 'refused'],
+    ['no session', await browser().call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 401, 'signed-out'],
+    ['another origin', await owner.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`), 'https://elsewhere.test'), 403, 'denied'],
+    ['a viewer (the write is refused as an unavailable company)', await viewer.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['not a member (membership)', await intruder.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['an unknown route', await owner.browser.call(`${c.base}/voucherz`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['another method', await raw('PUT', `${c.base}/vouchers`, { origin: getConfig().appUrl, 'content-type': 'application/json' }, JSON.stringify(body(`classes-${randomUUID()}`))), 405, 'refused'],
+  ];
+  for (const [name, answer, status, expected] of rows) {
+    assert.equal(answer.status, status, `${name}: ${JSON.stringify(answer.body)}`);
+    assert.equal(typeof answer.body === 'object' && answer.body !== null, true, `${name}: the application's JSON`);
+    assert.equal(classOf(answer), expected, name);
+  }
+  // A body that is not JSON: the application answers 415 with its own JSON, a definite refusal.
+  const notJson = await raw('POST', `${c.base}/vouchers`, { origin: getConfig().appUrl, 'content-type': 'text/plain' }, 'not json');
+  assert.deepEqual([notJson.status, typeof notJson.body, classOf(notJson)], [415, 'object', 'refused']);
+  assert.equal((await listVoucherCount(c.id)), 1, 'none of them made a voucher');
+});
+
+const listVoucherCount = async (companyId: string) => (await ok(owner.browser.call(`/api/companies/${companyId}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers.length;

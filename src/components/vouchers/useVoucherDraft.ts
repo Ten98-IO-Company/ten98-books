@@ -1,4 +1,4 @@
-import { useReducer, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
@@ -13,8 +13,8 @@ const draftKey = (userId: string, companyId: string) => `voucherDrafts:${userId}
 const newKey = () => `voucher-${crypto.randomUUID()}`
 const failureOf = (error: unknown): SendFailure => error instanceof ApiError
   // Status 0: no answer, or one that could not be read.
-  ? { status: error.status === 0 ? undefined : error.status, code: error.code, message: errMsg(error) }
-  : { status: undefined, code: undefined, message: errMsg(error) }
+  ? { status: error.status === 0 ? undefined : error.status, code: error.code, message: errMsg(error), json: error.json }
+  : { status: undefined, code: undefined, message: errMsg(error), json: false }
 
 /**
  * The voucher on screen: the draft controller of src/lib/voucher-entry/ (one state machine for the content, the key,
@@ -35,6 +35,8 @@ export function useVoucherDraft(userId: string, companyId: string, start: { kind
     onChange: render,
     onSignedOut: () => signedOut.current(),
   }))
+  // Development mode mounts effects twice, running the cleanup in between: shown again on every mount.
+  useEffect(() => { controller.onScreen(true); return () => controller.onScreen(false) }, [controller])
   const machine = controller.machine()
   /** Sends the draft on screen under its key; null when the machine refuses (a save running, or the draft locked). */
   const save = (voucherTypeId: string) => {

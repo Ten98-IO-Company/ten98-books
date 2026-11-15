@@ -11,5 +11,6 @@ export * from './enter-path.ts';
 export * from './refusals.ts';
 export * from './draft-machine.ts';
 export * from './draft-controller.ts';
+export * from './questions.ts';
 export * from './columns.ts';
 export { billDueDate } from '../bills.ts';

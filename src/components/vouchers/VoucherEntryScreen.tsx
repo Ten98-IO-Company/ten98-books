@@ -1,5 +1,5 @@
 import { Alert, Button, Field, Inline, Input, PageHeader, Stack, StatusLine, Textarea, type CommandPress, type EntryCommitEvent, type EntryEndContext, type EntryGridApi, type EntryGridPanel } from '@ten98/ui'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { flushSync } from 'react-dom'
 import { forgetDefaults } from '../reports/navigation'
@@ -11,7 +11,7 @@ import { resolveTyped } from '../../lib/lookup-entry'
 import { longDate } from '../../lib/reports'
 import { useApp } from '../../lib/app-context'
 import {
-  afterDate, afterDeclinedAccept, amountText, appendedLine, balanceText, blankDraft, bodyLines, bodyProblems, canTakeStored, cashInHandIds, cashRuleProblem, creditPeriodText,
+  afterDate, afterDeclinedAccept, amountText, appendedLine, askBeforeLeaving, balanceText, blankDraft, bodyLines, dropKeptDraft, startNewVoucher, bodyProblems, canTakeStored, cashInHandIds, cashRuleProblem, creditPeriodText,
   detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, escapeStep, isBlankLine, isCompleteLine, kindTitles, layoutTitles, layoutsOf, ledgerOptions,
   lineKey, listEnd, minorOf, negativeCashWarning, parseEntryDate, particularsSide, particularsTotal, proposedAmount, readLayout, refusalPlace,
   isLocked, lockAlert, refusal, relayLines, writeLayout, type DraftState, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
@@ -108,29 +108,20 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const dirty = draftDirty(state) || typing || locked
   const leave = useLeave({ to: '/app/c/$companyId', params: { companyId: company.id } })
   const retryButton = useRef<HTMLButtonElement>(null)
+  const savingSpot = useRef<HTMLElement>(null)
   /**
-   * The question before the voucher is left or discarded, by its state: while a save runs or its outcome is unknown the
-   * voucher may already be in the books (leaving forgets its key); in a conflict it was not saved; else what was entered.
+   * The leave question, by the draft's state (`askBeforeLeaving` in src/lib/voucher-entry/questions.ts): while a save is
+   * on its way it is asked again, or not at all, once the answer arrives; a draft that may be in the books is kept here.
    */
-  const askBefore = useCallback(async (verb: 'Leave' | 'Discard') => {
+  const askToLeave = useCallback(async () => {
     // Text still in a cell's editor is committed first, then what was entered decides (a guard call with nothing entered passes).
     grid.current?.commit()
-    // A save on its way decides first (for a few seconds at most): right after a saved voucher there is nothing to ask about.
-    await Promise.race([draft.settled(), new Promise(resolve => window.setTimeout(resolve, 3000))])
-    const { phase, draft: current } = draft.current()
     // Text the grid dropped as focus left the cell (it named no ledger) counts too: it was typed (the guard asks).
-    if (phase === 'editing' && !draftDirty(current) && !typingRef.current) return true
-    const kind = kindTitles[current.kind].toLowerCase()
-    const yes = await confirm(phase === 'sending' || phase === 'unknown'
-      ? { title: `${verb} this ${kind}? It may already be saved`, description: `No definite answer came for its save, so it may be in the books. ${verb === 'Leave' ? 'Leaving' : 'Discarding it'} forgets its key: entering it again could save it twice. Check and retry first, or look in the day book.`, confirmLabel: verb, cancelLabel: 'Stay' }
-      : phase === 'conflict'
-        ? { title: `${verb} this ${kind}? It was not saved`, description: 'Its key is already used by a voucher in the books with other content. Open the day book to compare them first.', confirmLabel: verb, cancelLabel: 'Stay' }
-        : { title: `${verb} this ${kind} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: verb, cancelLabel: 'Keep entering' })
+    const yes = await askBeforeLeaving(draft.current, draft.settled, () => typingRef.current, confirm)
     // Kept: back to "Check and retry" when that is the way on, else where the cursor was (also after a link or a key outside the voucher).
     if (!yes) window.setTimeout(() => { if (draft.current().phase === 'unknown') retryButton.current?.focus(); else focus(afterDate(lastOrigin.current)) }, 0)
     return yes
   }, [confirm])
-  const askToLeave = useCallback(() => askBefore('Leave'), [askBefore])
   const guard = useLeaveGuard(dirty, askToLeave)
   const { unauthorized } = useApp()
   // A lost session keeps the draft in the tab first, so signing in again needs no question.
@@ -162,29 +153,47 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const focusSoon = (target: EntryFocus) => window.setTimeout(() => focus(target), 0)
   const firstField = (from = now()): EntryFocus => from.layout === 'single' ? { field: 'account' } : { cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } }
   const firstLine = (from = now()): EntryFocus => ({ cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } })
-  useEffect(() => { focusSoon(firstField()) }, [])
+  // Before the first paint, so keys typed as the screen appears land in its first field.
+  useLayoutEffect(() => { focus(firstField()) }, [])
   // Where the cursor last was inside the voucher, for keys and bar buttons that take focus away (the date button, a question).
   const lastOrigin = useRef<FocusOrigin>({ field: 'account' })
-  // A line whose bill panel was just accepted: the cursor moves on once the panel has given focus back to the grid.
-  const continuing = useRef<string | null>(null)
+  // Where the cursor moved as a bill panel closed: the panel's dialog gives focus back to the amount cell one task later
+  // (its close event), and that return is undone at once, so keys typed straight after accepting stay where they went.
+  const reassert = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const holder = root.current
     if (!holder) return
+    const inGrid = (node: EventTarget | null) => node instanceof Element && !!holder.querySelector('[role="grid"]')?.contains(node)
+    // The bill panel's late return of focus to a grid cell, while the cursor is held where it moved: the grid never sees
+    // it (these listeners sit below React's own), so it keeps what is being typed, and the cursor goes straight back.
+    let returning = false
+    const onBlur = (event: FocusEvent) => {
+      const held = reassert.current
+      if (returning || (held && event.target === held && inGrid(event.relatedTarget))) event.stopPropagation()
+    }
     const onFocus = (event: FocusEvent) => {
       const target = event.target
       if (!(target instanceof Element)) return
+      const held = reassert.current
+      if (held && held !== target && held.isConnected && inGrid(target)) {
+        reassert.current = null
+        event.stopPropagation()
+        returning = true
+        try { held.focus() } finally { returning = false }
+        return
+      }
+      if (held && held !== target) reassert.current = null
       const field = fieldOf(holder, target)
       if (field && field !== 'date') { lastOrigin.current = { field }; return }
       if (!holder.querySelector('[role="grid"]')?.contains(target)) return
       window.setTimeout(() => {
         const row = grid.current?.activeRow, column = grid.current?.activeColumn
         if (row && (column === 'side' || column === 'ledger' || column === 'amount')) lastOrigin.current = { cell: { row, column } }
-        const pending = continuing.current
-        if (pending) { continuing.current = null; continueAfter(pending) }
       }, 0)
     }
     holder.addEventListener('focusin', onFocus)
-    return () => holder.removeEventListener('focusin', onFocus)
+    holder.addEventListener('focusout', onBlur)
+    return () => { holder.removeEventListener('focusin', onFocus); holder.removeEventListener('focusout', onBlur) }
   }, [])
 
   // ---- Lines ----
@@ -227,7 +236,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     const lines = fromGridRows(context.rows)
     const line = lines.find(entry => entry.key === context.row)
     // A bill-wise line opens its bills first, also on Enter over an unchanged amount (observed).
-    if (context.column === 'amount' && needsBills(line) && continuing.current !== context.row) {
+    if (context.column === 'amount' && needsBills(line)) {
       grid.current?.openPanel(context.row)
       return true
     }
@@ -255,6 +264,16 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     }
   }
 
+  /** After a line's bills are accepted and the panel has closed: on at once, inside the accept key's handler. */
+  function moveOnAfterBills(row: string) {
+    if (lockedNow()) return
+    flushSync(() => continueAfter(row))
+    const at = document.activeElement
+    if (!(at instanceof HTMLElement) || at === document.body) return
+    reassert.current = at
+    window.setTimeout(() => { if (reassert.current === at) reassert.current = null }, 1000)
+  }
+
   const lineSide = (line: EntryLine) => (now().layout === 'single' ? particularsSide(now().kind) : line.side || 'Dr')
   const panel: EntryGridPanel = {
     title: row => { const ledger = ledgerById.get(row.values.ledger ?? ''); return `Bills of ${ledger?.name ?? 'the line'}, up to ${amountText(minorOf(row.values.amount ?? '', exponent), exponent)} ${lineSide(fromGridRows([row])[0])}` },
@@ -264,18 +283,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       return <BillPanel key={row.key} companyId={company.id} kind={now().kind} date={now().date} exponent={exponent}
         line={{ ledger: line.ledger, side: lineSide(line), amount: minorOf(line.amount, exponent) }} previous={now().bills[row.key]}
         creditDefault={creditPeriodText(ledger?.creditPeriod ?? null)}
-        // The grid's dialog gives focus back to the amount cell as it closes; the cursor moves on after that.
-        onAccept={rows => {
-          if (!edit({ type: 'bills', row: row.key, rows })) return
-          continuing.current = row.key
-          const from = document.activeElement
-          // Should the grid not give focus back (nothing to restore), move on anyway, unless the user has put focus elsewhere.
-          window.setTimeout(() => {
-            const active = document.activeElement
-            const moved = !!active && active !== document.body && active !== from && active.isConnected
-            if (mounted.current && continuing.current === row.key && !moved) { continuing.current = null; continueAfter(row.key) }
-          }, 800)
-        }} close={close} />
+        onAccept={rows => { edit({ type: 'bills', row: row.key, rows }) }} onClosed={() => moveOnAfterBills(row.key)} close={close} />
     },
   }
 
@@ -311,13 +319,19 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     control?.focus()
     control?.select()
   }
-  function closeDate() { setDateText(null); setDateError(undefined); focusSoon(afterDate(dateOrigin.current)) }
+  /** Closes the date field and returns the cursor inside the key's own handler, so keys typed straight after land there. */
+  function closeDate() {
+    flushSync(() => { setDateText(null); setDateError(undefined) })
+    flushSync(() => focus(afterDate(dateOrigin.current)))
+  }
   function applyDate() {
     const parsed = parseEntryDate(dateRef.current ?? '', now().date)
     if ('error' in parsed) { setDateError(parsed.error); return }
     const problem = entryDateProblem(parsed.value, company, workingDate)
     if (problem) { setDateError(problem); return }
-    if (!edit({ type: 'date', date: parsed.value })) return
+    let changed = false
+    flushSync(() => { changed = edit({ type: 'date', date: parsed.value }) })
+    if (!changed) return
     // The date becomes the tab's working date even if the voucher is not saved (observed).
     onWorkingDate(parsed.value)
     closeDate()
@@ -378,24 +392,25 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     // Locked, the only send is "Check and retry" (the same body under the same key); the machine drops a second press.
     if (!voucherType || lockedNow()) return
     if (grid.current?.commit() === false) return
-    // Saving from the question: the cursor moves to the narration before the question (and its focused button) goes.
-    if (promptHolder.current?.contains(document.activeElement)) controlOf(root.current, 'narration')?.focus()
+    // Saving from the question: the cursor leaves the question (and its focused button) before it goes.
+    if (promptHolder.current?.contains(document.activeElement)) savingSpot.current?.focus()
     setPrompt(false)
     const problem = problemBeforeSave()
     if (problem) { showProblem(problem); return }
     const sent = now()
     const expected = number
-    // While the save runs the fields are read-only; the narration keeps the cursor (it was on the question or a field).
-    if (!root.current?.contains(document.activeElement) || document.activeElement === document.body) controlOf(root.current, 'narration')?.focus()
+    // While the save runs, keys typed are not kept: the cursor waits on the "Saving…" line, which says so, never in a
+    // read-only field; the next voucher's first field takes it as soon as the answer comes.
+    savingSpot.current?.focus()
     const pending = draft.save(voucherType.id)
     if (pending) settle(await pending, sent, expected)
   }
 
-  /** "Check and retry": the cursor waits on the (read-only) narration while the alert is away, and comes back with it. */
+  /** "Check and retry": the cursor waits on the "Saving…" line while the alert is away, and comes back with it. */
   async function retry() {
     const sent = now()
     const expected = number
-    controlOf(root.current, 'narration')?.focus()
+    savingSpot.current?.focus()
     const pending = draft.retry()
     if (pending) settle(await pending, sent, expected)
   }
@@ -411,19 +426,24 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       const differs = result.answer.replayed ? ' (it was already in the books: saved by an earlier send whose answer was lost)'
         : expected !== null && voucher.number !== expected ? ` (No. ${expected} was shown; another voucher took it first)` : ''
       const notes = warnings.length ? ` ${warnings.length === 1 ? 'Note' : 'Notes'}: ${warnings.map(warning => warning.code.replaceAll('_', ' ')).join(', ')}.` : ''
-      setSaved(`Saved ${kindTitles[sent.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${longDate(voucher.date)}${differs}.${notes}`)
-      setNotice('')
-      setDateText(null); setDateError(undefined)
+      // Rendered at once with the next voucher (same type, layout and date), the cursor on its first field (observed).
+      flushSync(() => {
+        setSaved(`Saved ${kindTitles[sent.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${longDate(voucher.date)}${differs}.${notes}`)
+        setNotice('')
+        setDateText(null); setDateError(undefined)
+        setRefresh(value => value + 1)
+      })
+      flushSync(() => focus(firstField()))
       onWorkingDate(voucher.date)
       // The reports' cached last voucher date is stale now (the day book would open on the old day).
       forgetDefaults(company.id)
-      setRefresh(value => value + 1)
-      // The next voucher: same type, layout and date, the cursor on its first field (observed).
-      window.setTimeout(() => focus(firstField()), 0)
       return
     }
-    if (result.kind !== 'refused') return
-    const place = refusalPlace(result.code)
+    // Editable again (a refusal, a limit, a denial): the cursor goes where the answer points, else back to the narration.
+    if (result.kind !== 'refused' && result.kind !== 'limited' && result.kind !== 'denied') return
+    if (draft.current().phase !== 'editing') return
+    const place = result.kind === 'refused' ? refusalPlace(result.code) : 'alert'
+    if (place !== 'date' && place !== 'difference' && place !== 'cash-rule' && place !== 'bills') focusSoon({ field: 'narration' })
     if (place === 'date') {
       setDateText(longDate(sent.date)); setDateError(result.message)
       // Selected, so the corrected date replaces the refused one.
@@ -461,8 +481,9 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   }
   async function startNew() {
     const { kind, layout, date } = now()
-    if (!(await askBefore('Discard'))) return
-    if (draft.discard(blankDraft(kind, layout, date))) { setTyping(false); focusSoon(firstField()) }
+    if (!(await startNewVoucher(draft.current, confirm, draft.discard, blankDraft(kind, layout, date)))) return
+    // A new voucher: its expected number is read again.
+    setTyping(false); setRefresh(value => value + 1); focusSoon(firstField())
   }
   function restoreKept() {
     if (!draft.restore()) return
@@ -471,11 +492,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (draft.current().phase === 'editing') focusSoon(firstField())
   }
   async function dropKept() {
-    const kept = draft.current().offered[0]
-    if (!kept || !canTakeStored(draft.current())) return
-    const kind = kindTitles[kept.draft.kind].toLowerCase()
-    if (kept.phase !== 'editing' && !(await confirm({ title: `Discard the kept ${kind}? It may already be saved`, description: kept.phase === 'unknown' ? 'Its save got no definite answer, so it may be in the books. Discarding it forgets its key: entering it again could save it twice. Restore it and check and retry instead, or look in the day book.' : 'Its key is already used by a voucher in the books with other content.', confirmLabel: 'Discard', cancelLabel: 'Keep it' }))) return
-    draft.drop()
+    if (canTakeStored(draft.current())) await dropKeptDraft(draft.current, confirm, draft.drop)
   }
 
   function declineAccept() { setPrompt(false); focusSoon(afterDeclinedAccept(now().layout, now().lines)) }
@@ -503,7 +520,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (fieldOf(root.current, target) !== 'account' || (target?.value ?? '') !== '') { press?.decline(); return }
     focus(firstLine())
   }, { allowInTextInput: true })
-  useAppCommand('entry.accept', () => void save(), { allowInTextInput: true, enabled: !locked })
+  // Claimed in every state, so classic Ctrl+A never selects the page; while the voucher is locked it does nothing.
+  useAppCommand('entry.accept', () => { if (!lockedNow()) void save() }, { allowInTextInput: true })
   useAppCommand('entry.cancel', ((press?: CommandPress) => void cancel(press)), { allowInTextInput: true })
   useAppCommand('entry.voucher.date', openDate, { enabled: !locked })
   useAppCommand('entry.voucher.list', () => { grid.current?.commit(); setTypeList(true) }, { enabled: !locked })
@@ -564,7 +582,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   return <Stack gap={5} ref={root}>
     <PageHeader eyebrow={`Voucher entry · ${layoutTitles[state.layout]}`} title={title}
       description={`${number === null ? 'Number to be given on saving' : `No. ${number} (expected)`} · ${entryDateLabel(state.date)}`} />
-    {kept && <Alert tone='info' title={kept.phase === 'editing' ? 'A voucher was being entered before you signed in again' : 'A voucher whose save is not settled was kept before you signed in again'}
+    {kept && <Alert tone='info' title={kept.phase === 'editing' ? 'A voucher was being entered before you signed in again' : kept.phase === 'conflict' ? 'A voucher that was not saved is kept in this tab' : 'A voucher whose save is not settled is kept in this tab'}
       actions={<Inline gap={2}><Button size='sm' disabled={!canTake} onClick={restoreKept}>Restore it</Button><Button size='sm' variant='secondary' disabled={!canTake} onClick={() => void dropKept()}>Discard it</Button></Inline>}>
       {keptText}{canTake ? '' : ' Save or leave the voucher on screen first: a kept voucher can be restored or discarded only while the one on screen is empty.'}
     </Alert>}
@@ -572,6 +590,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     {alert?.phase === 'unknown' && <Alert tone='danger' title='Not known whether it was saved'
       actions={<Inline gap={2}><Button ref={retryButton} size='sm' autoFocus onClick={() => void retry()}>Check and retry</Button><Button size='sm' variant='secondary' onClick={() => void cancel()}>Leave</Button></Inline>}>
       No definite answer came ({alert.message}), so this voucher may or may not be in the books. Check and retry sends the same voucher under the same key: the server saves it once, or answers that it already has it.
+      {alert.note && ` The last retry was answered "${alert.note}", which says nothing about the first send, so it stays as it is.`}
     </Alert>}
     {alert?.phase === 'conflict' && <Alert tone='danger' title='Not saved: its key is already used'
       actions={<Inline gap={2}><Button size='sm' autoFocus onClick={openDayBook}>Open the day book</Button><Button size='sm' variant='secondary' onClick={() => void startNew()}>Start a new voucher</Button><Button size='sm' variant='secondary' onClick={() => void cancel()}>Leave</Button></Inline>}>
@@ -606,7 +625,10 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     {/* Mounted while empty, so a screen reader announces each new text. */}
     <StatusLine tone='warning' live='polite'>{notice}</StatusLine>
     <StatusLine live='polite'>{difference ?? ''}</StatusLine>
-    <StatusLine live='polite' busy={draft.busy}>{draft.busy ? 'Saving…' : announced || ' '}</StatusLine>
+    {/* The cursor's place while a save runs: named, not editable, so keys typed then are visibly not kept anywhere. */}
+    <Stack ref={savingSpot} tabIndex={-1} aria-label={draft.busy ? `Saving the ${title.toLowerCase()}; keys typed now are not kept` : undefined}>
+      <StatusLine live='polite' busy={draft.busy}>{draft.busy ? 'Saving…' : announced || ' '}</StatusLine>
+    </Stack>
     <TypeList open={typeList} current={state.kind} onPick={switchType} onClose={() => setTypeList(false)} />
     {layoutsOf(state.kind).length > 1 && <ModeList open={modeList} current={state.layout} onPick={switchLayout} onClose={() => setModeList(false)} />}
     <DialogKeys name='Confirm' open={!!dialog}>{dialog}</DialogKeys>
