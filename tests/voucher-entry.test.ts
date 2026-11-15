@@ -30,6 +30,11 @@ test('voucher entry read inputs are strict: a real date, known sides, preview li
     { date: '2026-01-31', voucherId: 'not-an-id', lines: [] },
     { lines: [] },
   ]) assert.equal(balancePreviewInput.safeParse(value).success, false, JSON.stringify(value).slice(0, 80));
+  // Round 2, item 12: `ledgers` is optional; with it a draft may have no lines; lines and ledgers together at most 500.
+  assert.equal(balancePreviewInput.safeParse({ date: '2026-01-31', lines: [], ledgers: [randomUUID()] }).success, true);
+  assert.equal(balancePreviewInput.safeParse({ date: '2026-01-31', lines: Array.from({ length: 499 }, () => line), ledgers: [randomUUID()] }).success, true);
+  assert.equal(balancePreviewInput.safeParse({ date: '2026-01-31', lines: Array.from({ length: 499 }, () => line), ledgers: [randomUUID(), randomUUID()] }).success, false);
+  assert.equal(balancePreviewInput.safeParse({ date: '2026-01-31', lines: [], ledgers: ['not-an-id'] }).success, false);
   assert.equal(counterLedgerQuery.safeParse({ voucherTypeId: randomUUID(), side: 'Cr' }).success, true);
   for (const value of [{ voucherTypeId: randomUUID() }, { voucherTypeId: randomUUID(), side: 'cr' }, { side: 'Dr' }]) {
     assert.equal(counterLedgerQuery.safeParse(value).success, false, JSON.stringify(value));

@@ -352,3 +352,40 @@ test('round 2, item 11: the screen\'s bodies for the twelve starter vouchers sto
   });
   assert.deepEqual(await stored(copy.companyId), await stored(full.companyId));
 });
+
+test('round 2, item 12: the balance preview also reports the ledgers named in `ledgers`, signed and with the draft applied, each once; a draft without lines is allowed', async () => {
+  const c = await company('Preview Named Ledgers');
+  const bank = await c.ledger('Named Bank', 'bank_accounts', { amount: '1000', side: 'Dr' });
+  const rent = await c.ledger('Named Rent', 'indirect_expenses');
+  const cash = c.books.ledger('Cash');
+  await c.post('payment', '2026-01-05', [[rent, 'Dr', '250'], [bank, 'Cr', '250']]);
+  const preview = (body: unknown, member: Member = owner) => member.browser.call(`${c.base}/vouchers/balance-preview`, body);
+  // The Account before its first line: no lines, the bank named; its balance as the ledger balance read gives it.
+  const alone = await preview({ date: '2026-01-31', lines: [], ledgers: [bank] });
+  assert.equal(alone.status, 200, JSON.stringify(alone.body));
+  assert.deepEqual(alone.body, { balances: [{ ledgerId: bank, balance: '750.00' }] });
+  const read = (await ok(owner.browser.call(`${c.base}/ledgers/${bank}/balance?from=2026-01-01&to=2026-01-31`))).balance;
+  assert.equal(formatMoney(subtractMoney(parseMoney(read.closingDebit, 2), parseMoney(read.closingCredit, 2)), 2), '750.00', 'the same figure as the balance read');
+  // With lines: each ledger once, the lines' first, then the named; the draft applied to a ledger named in both.
+  const both = await ok(preview({ date: '2026-01-31', lines: [{ ledgerId: rent, side: 'Dr', amount: '50' }, { ledgerId: bank, side: 'Cr', amount: '50' }], ledgers: [bank, cash, bank] }));
+  assert.deepEqual(both.balances, [{ ledgerId: rent, balance: '300.00' }, { ledgerId: bank, balance: '700.00' }, { ledgerId: cash, balance: '0.00' }]);
+  // A body without `ledgers` behaves as before.
+  assert.deepEqual((await ok(preview({ date: '2026-01-31', lines: [{ ledgerId: rent, side: 'Dr', amount: '50' }] }))).balances, [{ ledgerId: rent, balance: '300.00' }]);
+  assert.deepEqual((await ok(preview({ date: '2026-01-31', lines: [] }))).balances, [], 'nothing named: nothing reported');
+  // An unknown id, or another company's ledger, inside `ledgers` answers as a line's ledger does: 400 not_found.
+  const other = await company('Preview Named Elsewhere');
+  const otherRent = await other.ledger('Elsewhere Rent', 'indirect_expenses');
+  for (const ledgerId of [randomUUID(), otherRent]) {
+    const answer = await preview({ date: '2026-01-31', lines: [], ledgers: [bank, ledgerId] });
+    assert.deepEqual([answer.status, answer.body.code, answer.body.error], [400, 'not_found', 'Ledger 2 of the ledgers was not found in this company.']);
+  }
+  // Bounds: lines and ledgers together at most 500; ids validated.
+  const many = Array.from({ length: 450 }, () => ({ ledgerId: rent, side: 'Dr', amount: '1' }));
+  assert.equal((await preview({ date: '2026-01-31', lines: many, ledgers: Array.from({ length: 50 }, () => bank) })).status, 200);
+  assert.deepEqual([(await preview({ date: '2026-01-31', lines: many, ledgers: Array.from({ length: 51 }, () => bank) })).status, (await preview({ date: '2026-01-31', lines: [], ledgers: ['not-an-id'] })).body.code], [400, 'validation']);
+  // A viewer reads it; a member of another company only gets the missing company's answer.
+  const viewer = await invite(owner.browser, c.id, 'viewer');
+  assert.deepEqual((await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, viewer)).body, { balances: [{ ledgerId: bank, balance: '750.00' }] });
+  const intruder = await invite(owner.browser, other.id, 'admin');
+  assert.deepEqual(await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, intruder), { status: 404, body: { error: companyNotFound, code: 'not_found' } });
+});

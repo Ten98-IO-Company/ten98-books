@@ -46,7 +46,8 @@ export async function nextNumber(context: LedgerContext, voucherTypeId: string, 
  * unbalanced or break a voucher type's rule, because it is not posted.
  */
 export async function balancePreview(context: LedgerContext, value: unknown): Promise<BalancePreview> {
-  const input = parseInput(balancePreviewInput, value, path => path[0] === 'date' ? 'the date' : path[0] === 'voucherId' ? 'the voucher' : path[0] === 'lines' ? `line ${Number(path[1] ?? 0) + 1}` : 'the preview');
+  const input = parseInput(balancePreviewInput, value, path => path[0] === 'date' ? 'the date' : path[0] === 'voucherId' ? 'the voucher' : path[0] === 'lines' ? `line ${Number(path[1] ?? 0) + 1}`
+    : path[0] === 'ledgers' ? (path[1] === undefined ? 'the ledgers' : `ledger ${Number(path[1]) + 1} of the ledgers`) : 'the preview');
   const { client, company } = context;
   const lines = input.lines.map((line, index) => {
     const amount = parseAmount(line.amount, company.exponent, `The amount on line ${index + 1}`);
@@ -60,12 +61,16 @@ export async function balancePreview(context: LedgerContext, value: unknown): Pr
   catch { throw ledgerError(400, 'The voucher total is too large.', 'validation'); }
   await reportBudget(context, budgetSeconds);
   // The draft's ledgers are checked before the company-wide aggregate runs.
-  const named = [...new Set(lines.map(line => line.ledgerId))];
+  // Each ledger once, in order of first appearance: the lines', then those `ledgers` adds (the Account before its first line).
+  const extra = input.ledgers ?? [];
+  const named = [...new Set([...lines.map(line => line.ledgerId), ...extra])];
   if (named.length) {
     const { rows: found } = await client.query<{ id: string }>('SELECT id FROM ledger WHERE company_id = $1 AND id = ANY($2::uuid[])', [company.companyId, named]);
     const known = new Set(found.map(row => row.id));
     const missing = lines.find(line => !known.has(line.ledgerId));
     if (missing) throw ledgerError(400, `The ledger on line ${missing.lineNo} was not found in this company.`, 'not_found');
+    const unknown = extra.findIndex(ledgerId => !known.has(ledgerId));
+    if (unknown >= 0) throw ledgerError(400, `Ledger ${unknown + 1} of the ledgers was not found in this company.`, 'not_found');
   }
   const yearStart = financialYearOf(company.financialYearStart, input.date).from;
   const { rows } = await ledgerRows(context, yearStart, input.date);
