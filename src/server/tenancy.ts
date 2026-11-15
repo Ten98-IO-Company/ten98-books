@@ -10,7 +10,7 @@ import { getDatabase } from './db.ts';
  * security on `current_setting('app.company_ids', true)` and is read and written only inside `withCompany` (or, for
  * reads across the user's own companies, `withCompanies`). Better Auth, team and pg-boss tables stay outside it.
  */
-export const accountingTables = ['company', 'account_group', 'ledger', 'voucher_type', 'voucher_numbering_restart', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log', 'bill', 'bill_allocation', 'ageing_bucket', 'cost_category', 'cost_centre', 'cost_allocation'] as const;
+export const accountingTables = ['company', 'account_group', 'ledger', 'voucher_type', 'voucher_numbering_restart', 'voucher_counter', 'voucher', 'voucher_line', 'revision_log', 'bill', 'bill_allocation', 'ageing_bucket', 'cost_category', 'cost_centre', 'cost_allocation', 'currency', 'exchange_rate'] as const;
 
 export type CompanyMode = 'read' | 'write';
 /** The authorized company (workspace) with its name and the caller's role in it. */

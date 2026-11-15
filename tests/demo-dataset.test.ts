@@ -512,6 +512,20 @@ test('cost centres name an existing category; keys are unique; checkpoint dates 
   const shapeFound = problems(shape);
   mentions(shapeFound, 'costCentres.json', 'category');
   mentions(shapeFound, 'currencies.json', 'three-letter currency code');
+  // A rate kind the product does not have, a rate of five places and decimals the runtime does not support are refused.
+  const kinds = good();
+  kinds.extraFiles = { 'currencies.json': [{ code: 'USD', name: 'US Dollar', minorUnits: 4, rates: [{ kind: 'average', date: '2026-01-01', rate: '3.67' }, { kind: 'standard', date: '2026-01-01', rate: '3.67255' }] }] };
+  const kindFound = problems(kinds);
+  mentions(kindFound, 'currencies.json', 'standard, selling or buying');
+  mentions(kindFound, 'currencies.json', 'at most 10 digits before the point and 4 after it');
+  mentions(kindFound, 'currencies.json', '0, 2 or 3');
+  // The base currency is seeded with the company; a currency's row of one kind and date is listed once.
+  const references = good();
+  references.extraFiles = { 'currencies.json': [{ code: references.company.baseCurrency, name: 'Base' }, { code: 'USD', name: 'US Dollar', rates: [
+    { kind: 'standard', date: '2026-01-01', rate: '3.67' }, { kind: 'standard', date: '2026-01-01', rate: '3.68' }] }] };
+  const referenceFound = problems(references);
+  mentions(referenceFound, 'currencies.json', `currency "${references.company.baseCurrency}"`, 'base currency');
+  mentions(referenceFound, 'currencies.json', 'rate "standard 2026-01-01"', 'more than once');
 });
 
 test('expected exchange differences are amounts that fit the currency, and the new blocks are named with their reason', () => {
@@ -532,9 +546,10 @@ test('the skipped-feature summary counts bills, cost centres, foreign currencies
   for (const expectedLine of [
     'vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled',
     'vouchers.json: bank details (instrument and bank date) on 1 voucher line(s) (not modelled)',
-    'currencies.json: foreign currencies not yet supported (USD; 1 rate(s))', 'checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports and the cost centre figures with the cost category summary',
+    'checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports and the cost centre figures with the cost category summary',
   ]) assert.ok(lines.includes(expectedLine), expectedLine + '\n' + lines.join('\n'));
   assert.ok(!lines.some(text => /cost (centre|categor)/i.test(text) && !text.startsWith('checkpoints.json')), 'cost keys are read by the seeder, so they are not listed as skipped');
+  assert.ok(!lines.some(text => text.startsWith('currencies.json')), 'currencies and their rates are read by the seeder');
 });
 
 /** Bill keys the seeder reads: both spellings of the two generators, with plain-language problems for anything else. */

@@ -11,7 +11,7 @@ const group = (id: string, name: string, parentId: string | null, nature: GroupR
   ({ id, name, parentId, nature, grossProfit: false, systemKey, secondLanguageName: null, revision: 1 });
 const ledger = (id: string, name: string, groupId: string | null, nature: LedgerRow['nature'], extra: Partial<LedgerRow> = {}): LedgerRow =>
   ({ id, name, groupId, groupName: null, nature, systemKey: null, secondLanguageName: null, cashOrBank: false, opening: { amount: '0.00', side: 'Dr' }, revision: 1, inUse: false,
-    billWise: false, creditPeriod: null, creditDaysCheck: false, openingBills: [], costCentres: false, ...extra });
+    billWise: false, creditPeriod: null, creditDaysCheck: false, openingBills: [], costCentres: false, currency: 'AED', ...extra });
 
 const groups = [
   group('assets', 'Current Assets', null, 'asset', 'current_assets'), group('cash', 'Cash on Hand', 'assets', 'asset', 'cash_in_hand'), group('bank', 'Bank Accounts', 'assets', 'asset', 'bank_accounts'),

@@ -23,13 +23,13 @@ export const ledgerErrorCodes = [
   'not_found', // the company, master or voucher (or one it refers to) is not there or not reachable
   'stale_revision', // someone changed the row since the client read it
   'retry', // a deadlock or serialization failure; nothing was saved
-  'duplicate_name', // another group, ledger, voucher type, cost category or cost centre (across categories) has the name under the name match key (0010)
-  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference)
-  'seeded_row', // a built-in row (also the seeded cost category) cannot be deleted
+  'duplicate_name', // another group, ledger, voucher type, cost category or cost centre (across categories) has the name under the name match key (0010); a currency code or symbol equals another currency's code or symbol under the key
+  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference); a currency is named by a ledger, or a ledger's currency is fixed by its postings, opening, bill rows or cost rows
+  'seeded_row', // a built-in row (also the seeded cost category) cannot be deleted; the base currency keeps its code and decimals
   'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
   'family_rule', // a built-in ledger would leave its behaviour family
   'cycle', // a group or cost centre would sit under its own sub-group or sub-centre
-  'locked_period', // the date or the opening balances are inside the locked period
+  'locked_period', // the date or the opening balances are inside the locked period (also: a rate row dated in it)
   'before_books_beginning', // the date is before the company's books begin
   'unbalanced', // fewer than two lines, or debits differ from credits
   'posting_rule', // the voucher type's rule for cash and bank ledgers is broken
@@ -47,6 +47,8 @@ const name = z.string().trim().min(1).max(120).refine(clean);
 const secondLanguageName = z.string().trim().max(120).refine(clean).nullish().transform(value => value || null);
 const revision = z.number().int().positive();
 export const calendarDate = z.string().refine(isCalendarDate, { message: 'Enter a real date as YYYY-MM-DD.' });
+/** A currency code: three capital letters (M2a currencies). */
+export const currencyCode = z.string().regex(/^[A-Z]{3}$/, { message: 'A currency code is three capital letters.' });
 
 export const groupCreateInput = z.object({
   name, secondLanguageName,
@@ -112,6 +114,8 @@ export const ledgerCreateInput = z.object({
   creditDaysCheck: z.boolean().optional(),
   /** Whether the ledger's lines take cost centres; new income and expense ledgers do by default. */
   costCentres: z.boolean().optional(),
+  /** The ledger's currency (default: the base). A foreign ledger is not bill-wise, has no credit terms and takes no cost centres. */
+  currency: currencyCode.optional(),
 }).strict();
 export const ledgerAlterInput = ledgerCreateInput.extend({ revision }).strict();
 
@@ -191,6 +195,8 @@ export type Ledger = {
   billWise: boolean; creditPeriod: CreditPeriod | null; creditDaysCheck: boolean; openingBills: OpeningBill[];
   /** Whether the ledger's lines take cost centres (M2a slice 2). */
   costCentres: boolean;
+  /** The ledger's currency code (M2a currencies); the base currency unless set. */
+  currency: string;
 };
 /**
  * A group or ledger as the list and read routes return it: plus `inUse`, true when a delete would be refused because
@@ -252,7 +258,7 @@ export type TrialBalance = {
 };
 
 export type Revision = {
-  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher' | 'cost_category' | 'cost_centre'; entityId: string;
+  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher' | 'cost_category' | 'cost_centre' | 'currency' | 'exchange_rate'; entityId: string;
   /** `actorName` is the user's display name, or null once that user no longer exists; never an email. */
   action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; actorName: string | null; at: string; before: unknown; after: unknown;
 };

@@ -208,7 +208,9 @@ test('keys, guards, policies and grants are back as before; company now referenc
   const companyKey = (keys: typeof keysAfter) => keys.find(key => key.table === 'company' && key.name === 'company_company_id_fkey');
   assert.match(companyKey(keysBefore)!.definition, /REFERENCES project\(id\) ON DELETE CASCADE/);
   assert.equal(companyKey(keysAfter)!.definition, 'FOREIGN KEY (company_id) REFERENCES workspace(id) ON DELETE CASCADE');
-  assert.deepEqual(keysAfter.filter(key => key !== companyKey(keysAfter)), keysBefore.filter(key => key !== companyKey(keysBefore)));
+  // Migration 0012 adds the keys of ledgers and lines to their currency; every key that was there before is unchanged.
+  const added = ['ledger_currency_fkey', 'voucher_line_currency_fkey'];
+  assert.deepEqual(keysAfter.filter(key => key !== companyKey(keysAfter) && !added.includes(key.name)), keysBefore.filter(key => key !== companyKey(keysBefore)));
   // The dormant project table is closed to the application role; the key table is open for reads and inserts only.
   assert.deepEqual((await admin.query(`SELECT has_table_privilege('books_app', 'project', 'SELECT') AS project,
     has_table_privilege('books_app', 'company_creation', 'SELECT,INSERT') AS keys, has_table_privilege('books_app', 'company_creation', 'UPDATE') AS rewrite`)).rows,

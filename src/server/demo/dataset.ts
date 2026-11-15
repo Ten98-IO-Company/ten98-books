@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
 import { daysInMonth, financialYearOf, isCalendarDate } from '../../lib/company.ts';
+import { currencyDecimals, rateKinds, rateText } from '../../lib/currencies.ts';
 import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
 import { nameMatchKey } from '../../lib/names.ts';
 import { isForeignLine, parseDueDate, readLedgerBills, readLineBills } from './bill-rows.ts';
@@ -120,16 +121,19 @@ const itemsFile = z.looseObject({
 export type ItemsFile = z.infer<typeof itemsFile>;
 
 /**
- * Further feature files whose shape and references are checked and whose content is kept as it is, because ten98-books
- * does not model them yet: cost categories and centres, currencies with their rates, and checkpoint figures.
+ * Further feature files whose shape and references are checked: cost categories and centres and currencies with their
+ * rates (read by the seeder), items and checkpoint figures. A currency's symbol defaults to its code and its decimal
+ * places to 2; a rate is a kind (standard, selling or buying), a date and a rate of at most four decimal places.
  */
 const costCategoriesFile = z.array(z.looseObject({ key: slug, name: text, allocateRevenue: z.boolean().optional(), allocateNonRevenue: z.boolean().optional() }));
 /** A centre may name the centre it sits under in `parent` (a centre key; it then sits in that centre's category). */
 const costCentresFile = z.array(z.looseObject({ key: slug, name: text, category: z.string().min(1), parent: z.string().min(1).optional() }));
 const currenciesFile = z.array(z.looseObject({
-  code: z.string().regex(/^[A-Z]{3}$/, 'must be a three-letter currency code'), name: text,
-  rates: z.array(z.looseObject({ kind: z.string().min(1), date, rate: amount })).optional(),
+  code: z.string().regex(/^[A-Z]{3}$/, 'must be a three-letter currency code'), name: text, symbol: z.string().trim().min(1).max(20).optional(),
+  minorUnits: z.union(currencyDecimals.map(value => z.literal(value)) as [z.ZodLiteral<0>, z.ZodLiteral<2>, z.ZodLiteral<3>], 'must be 0, 2 or 3').optional(),
+  rates: z.array(z.looseObject({ kind: z.enum(rateKinds, 'must be standard, selling or buying'), date, rate: rateText })).optional(),
 }));
+export type CurrencyEntry = z.infer<typeof currenciesFile>[number];
 const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({ outstanding: pendingByLedger(false).optional(), costCentres: z.record(z.string(), costFigures).optional() })).optional() });
 const extraFileSchemas: Record<string, z.ZodType> = {
   'items.json': itemsFile, 'costCategories.json': costCategoriesFile, 'costCentres.json': costCentresFile, 'currencies.json': currenciesFile, 'checkpoints.json': checkpointsFile,
@@ -366,7 +370,7 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   // Cost categories and centres, currencies and checkpoints: references, and the lines that use them.
   const categories = extras['costCategories.json'] as { key: string; name: string }[] | undefined;
   const centres = extras['costCentres.json'] as { key: string; name: string; category: string; parent?: string }[] | undefined;
-  const currencies = extras['currencies.json'] as { code: string }[] | undefined;
+  const currencies = extras['currencies.json'] as CurrencyEntry[] | undefined;
   if (categories) {
     duplicates('costCategories', 'cost category', categories.map(category => category.key));
     duplicateNames('costCategories', 'cost category name', categories.map(category => category.name));
@@ -388,7 +392,13 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     const categoryKeys = new Set((categories ?? []).map(category => category.key));
     for (const centre of centres) if (!categoryKeys.has(centre.category)) problem('costCentres', `centre "${centre.key}": `, `category "${centre.category}" is not a cost category key in costCategories.json`);
   }
-  if (currencies) duplicates('currencies', 'currency', currencies.map(currency => currency.code));
+  if (currencies) {
+    duplicates('currencies', 'currency', currencies.map(currency => currency.code));
+    for (const currency of currencies) {
+      if (currency.code === company.baseCurrency) problem('currencies', `currency "${currency.code}": `, 'is the base currency of the company, which is seeded with the company and has no rates');
+      duplicates('currencies', `currency "${currency.code}": rate`, (currency.rates ?? []).map(rate => `${rate.kind} ${rate.date}`));
+    }
+  }
   for (const day of Object.keys((extras['checkpoints.json'] as { dates?: object } | undefined)?.dates ?? {})) if (!isCalendarDate(day)) problem('checkpoints', `dates "${day}": `, 'is not a real date written YYYY-MM-DD');
   const centreKeys = new Map((centres ?? []).map(centre => [centre.key, centre.category]));
   const currencyCodes = new Set((currencies ?? []).map(currency => currency.code));

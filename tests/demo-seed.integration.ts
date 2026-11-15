@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test';
 import { demoRoot, DemoError, loadDataset, parseDataset, seededGroupKeys, type Dataset } from '../src/server/demo/dataset.ts';
 import { compareDataset, compareDemo, formatCompareResult } from '../src/server/demo/compare.ts';
 import { findUserId, formatSeedReport, seedDataset, seedDemo } from '../src/server/demo/seed.ts';
+import { ratesOn } from '../src/server/ledger/currencies.ts';
 import { alterLedger, listGroups, listLedgers } from '../src/server/ledger/masters.ts';
 import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
 import { companyNotFound } from '../src/server/tenancy.ts';
@@ -475,7 +476,8 @@ test('a foreign-currency restatement and an unrealised row that reconcile to the
   const user = await invite(owner.browser, owner.workspaceId, 'viewer');
   const report = await seedDataset(user.userId, currencyDataset('3.00'));
   assert.ok(report.skipped.includes('vouchers.json: foreign-currency amounts on 2 voucher line(s) (USD 2): posted at their base-currency amounts; currency, currencyAmount and rate are kept, not modelled'));
-  assert.ok(report.skipped.includes('currencies.json: foreign currencies not yet supported (USD; 1 rate(s))'));
+  assert.deepEqual(report.currencies, { masters: { created: 1, present: 0 }, rates: { created: 1, present: 0 } }, 'the currency and its rate are seeded');
+  assert.ok(!report.skipped.some(line => line.startsWith('currencies.json')));
 
   const reconciled = await compareDataset(user.userId, currencyDataset('3.00'));
   const pending = reconciled.lines.filter(line => line.reason).map(line => line.label).sort();
@@ -487,4 +489,18 @@ test('a foreign-currency restatement and an unrealised row that reconcile to the
   const off = await compareDataset(user.userId, currencyDataset('4.00'));
   assert.deepEqual(off.lines.filter(line => !line.ok && !line.reason).map(line => line.label).sort(), ['Closing balance of Debtor USD', 'Total credit', 'Total debit']);
   assert.match(off.lines.find(line => line.label.startsWith('Unrealised'))!.reason!, /could not be reconciled with this row/);
+});
+
+test('harbourview: the seeder creates USD and EUR with their nine standard rate rows, the lookups answer, and seeding again adds nothing', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const harbourview = await loadDataset(join(demoRoot, 'harbourview'));
+  const first = await seedDataset(user.userId, harbourview, true);
+  assert.deepEqual(first.currencies, { masters: { created: 2, present: 0 }, rates: { created: 9, present: 0 } });
+  assert.ok(formatSeedReport(first).includes('  currencies: 2 created, 0 already present; rate rows 9 created, 0 already present'));
+  const standard = (date: string, code: string) => inCompany(user.userId, first.companyId, async context =>
+    (await ratesOn(context, { date })).currencies.find(row => row.currency === code)?.standard?.rate);
+  assert.deepEqual([await standard('2026-02-28', 'USD'), await standard('2026-03-31', 'USD'), await standard('2026-12-31', 'USD')], ['3.6725', '3.70', '3.67']);
+  assert.deepEqual([await standard('2026-06-30', 'EUR'), await standard('2026-12-31', 'EUR')], ['4.10', '4.20']);
+  const again = await seedDataset(user.userId, harbourview, true);
+  assert.deepEqual(again.currencies, { masters: { created: 0, present: 2 }, rates: { created: 0, present: 9 } });
 });
