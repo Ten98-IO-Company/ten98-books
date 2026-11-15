@@ -1,7 +1,8 @@
+import pg from 'pg';
 import { z } from 'zod';
 import { FoundationError } from './auth.ts';
 import { getConfig } from './config.ts';
-import { assertSchema, getDatabase } from './db.ts';
+import { assertSchema, getDatabase, migrationLedger } from './db.ts';
 import { handleAccountSecurity } from './account-security.ts';
 import { requireWorkspaceFactor } from './teams.ts';
 import { assertDatabaseRoles, DatabaseRoleError } from './tenancy.ts';
@@ -26,6 +27,26 @@ const assertRoles = () => (rolesChecked ??= assertDatabaseRoles(getDatabase().po
 
 const accountApi: ApiArea = ({ request }) => handleAccountSecurity(request, limit);
 
+/** Bound of each step of the readiness probe: connecting, and each statement. A probe answers within about twice this. */
+export const readinessStepMs = 2000;
+/**
+ * Readiness on its own connection (not the request pool): connected, migrated and served by the application role. Any
+ * failure to reach or use the database (refused, reset, timed out, shutting down or starting up, too many connections, the
+ * role refused) answers false, never an error, within the bound above.
+ */
+async function databaseReady(): Promise<boolean> {
+  const probe = new pg.Pool({ connectionString: getConfig().databaseUrl, max: 1, connectionTimeoutMillis: readinessStepMs, statement_timeout: readinessStepMs, query_timeout: readinessStepMs });
+  probe.on('error', () => undefined);
+  try {
+    const client = await probe.connect();
+    try {
+      await migrationLedger.assertCurrent(client);
+      await assertDatabaseRoles(client);
+      return true;
+    } finally { client.release(); }
+  } catch { return false; } finally { await probe.end().catch(() => undefined); }
+}
+
 // The route table: public areas first, then areas that require a signed-in user. Each area answers only its own paths.
 const publicAreas: readonly ApiArea[] = [accountApi, sessionApi];
 const signedInAreas: readonly SignedInArea[] = [teamApi, companiesApi, settingsApi, mastersApi, vouchersApi, reportsApi, billsApi, voucherEntryApi, costCentresApi, stockMastersApi, currenciesApi];
@@ -37,10 +58,10 @@ export async function handleApi(request: Request): Promise<Response> {
     // The health probes are public: a wrong method answers 405 with the one it accepts, before any other check.
     if ((path === '/api/health/live' || path === '/api/health/ready') && request.method !== 'GET') return json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
     if (path === '/api/health/live') return json({ status: 'alive' });
+    if (path === '/api/health/ready') return await databaseReady() ? json({ status: 'ready' }) : json({ error: 'The installation is not ready. Check configuration and database migrations.' }, 503);
     await assertSchema();
     // D-03: never serve as a role that would make row-level security inert.
     await assertRoles();
-    if (path === '/api/health/ready') return json({ status: 'ready' });
     // Discover's central request-forgery gate: every state-changing request must come from the application's own origin
     // (a missing Origin is refused too). Discover applies it to POST; here it covers every non-reading method, which
     // includes PUT /api/account/keymap.

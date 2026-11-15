@@ -206,7 +206,7 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       if (captured.message) {
         const message = captured.message, link = new URL(`/#password-reset=${message.token}`, getConfig().appUrl).href;
         // No PoolClient/auth instance survives into delivery, and no automatic retry is scheduled.
-        setImmediate(() => { void sendTransactionalEmail({ to: message.to, subject: 'Reset your Books password', text: `A password reset was requested for your Books account.\n\nOpen this link within one hour:\n${link}\n\nThe link works once. Your existing two-factor settings and recovery codes stay unchanged. If you did not request this, ignore this email.` }).catch(() => undefined); });
+        setImmediate(() => { void sendTransactionalEmail({ to: message.to, subject: 'Reset your Books password', text: `A password reset was requested for your Books account.\n\nOpen this link within one hour:\n${link}\n\nThe link works once. Your existing two-factor settings and recovery codes stay unchanged. If you did not request this, ignore this email.` }).catch(() => console.warn('Password recovery email not sent: failed.')); });
       }
       return json({ ok: true });
     }

@@ -25,7 +25,7 @@ export function inviteRoleOptions(actor: unknown) {
   });
 }
 
-export type InviteResult = { kind: 'create' | 'resend' | 'new-link'; delivery: 'accepted' | 'failed' | 'disabled'; email: string };
+export type InviteResult = { kind: 'create' | 'resend' | 'new-link'; delivery: 'accepted' | 'limited' | 'failed' | 'disabled'; email: string };
 
 /** Delivery-state copy for a just-issued link: accepted is provider acceptance, never confirmed delivery. */
 export function inviteResultText({ kind, delivery, email }: InviteResult): string {
@@ -36,6 +36,7 @@ export function inviteResultText({ kind, delivery, email }: InviteResult): strin
       : `The invitation email to ${email} could not be sent. The previous link no longer works. Copy the new link and share it yourself.`;
   }
   if (delivery === 'accepted') return `Invitation emailed to ${email}. The email provider accepted the message; delivery is not confirmed. You can also copy the link.`;
+  if (delivery === 'limited') return `Too many invitation emails were sent recently, so none was sent to ${email} now. Share this link yourself, or send it again later.`;
   if (delivery === 'failed') return `The invitation email to ${email} could not be sent, so share this link yourself.`;
   return 'Email isn’t set up, so share this link yourself.';
 }

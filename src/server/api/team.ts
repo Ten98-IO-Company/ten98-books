@@ -24,6 +24,17 @@ function sendInvitationEmail(to: string, role: string, inviteUrl: string) {
   return sendTransactionalEmail({ to, subject: 'Your Books company invitation', text: `You were invited to join a company's books on the Books installation at ${getConfig().appUrl} with the ${role} role.\n\nOpen this link within 7 days to accept:\n${inviteUrl}\n\nOnly the newest invitation link sent to this address for a company works. If you did not expect this invitation, ignore this email.` });
 }
 
+/**
+ * Sends an invitation email after its send limits (`admit`, when the send is not yet admitted): `accepted` when the
+ * provider took it, `limited` when a send limit refused it, `failed` otherwise. A limited or failed send writes one log
+ * line with the reason and the invitation id, never the address, the link, the token or the message.
+ */
+async function deliverInvitation(invitationId: string, send: () => Promise<unknown>, admit?: () => Promise<unknown>): Promise<'accepted' | 'limited' | 'failed'> {
+  const notSent = (reason: 'limited' | 'failed') => { console.warn(`Invitation email not sent: ${reason} (invitation ${invitationId}).`); return reason; };
+  try { await admit?.(); } catch (error) { return notSent(error instanceof FoundationError && error.status === 429 ? 'limited' : 'failed'); }
+  try { await send(); return 'accepted'; } catch { return notSent('failed'); }
+}
+
 /** The signed-in account, its workspaces (each one company, D-03), members, roles and invitations. */
 export const teamApi: SignedInArea = async ({ request, path, user }) => {
   const config = getConfig();
@@ -52,10 +63,8 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
         const result = await inviteMember(match[1], user.id, await readJson(request));
         const { email: to, role } = result.invitation, inviteUrl = `${config.appUrl}/#invite=${result.token}`;
         // Committed above; no PoolClient is held, one attempt only, and no failure undoes the invitation.
-        const email = !getEmailStatus().configured ? 'disabled' : await limit(emailLimitKey('invitation-email', to), 3)
-          .then(() => limit('invitation-email:global', 20))
-          .then(() => sendInvitationEmail(to, role, inviteUrl))
-          .then(() => 'accepted' as const, () => 'failed' as const);
+        const email = !getEmailStatus().configured ? 'disabled' : await deliverInvitation(result.invitation.id, () => sendInvitationEmail(to, role, inviteUrl),
+          () => limit(emailLimitKey('invitation-email', to), 3).then(() => limit('invitation-email:global', 20)));
         return json({ invitation: result.invitation, inviteUrl, email }, 201);
       }
     }
@@ -84,7 +93,7 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
       const result = await rotateInvitation(match[1], user.id, match[3], admit);
       const inviteUrl = `${config.appUrl}/#invite=${result.token}`;
       if (match[4] === 'new-link') return json({ invitation: result.invitation, inviteUrl });
-      const email = await sendInvitationEmail(result.invitation.email, result.invitation.role, inviteUrl).then(() => 'accepted' as const, () => 'failed' as const);
+      const email = await deliverInvitation(result.invitation.id, () => sendInvitationEmail(result.invitation.email, result.invitation.role, inviteUrl));
       return json({ invitation: result.invitation, inviteUrl, email });
     }
   }
