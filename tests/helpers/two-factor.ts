@@ -65,10 +65,13 @@ export async function duplicateRefusal(name: string, value: string) {
 type StoredCookie = { name: string; value: string; domain: string; hostOnly: boolean; path: string; secure: boolean };
 
 /**
- * A browser's cookie store (RFC 6265, the parts a challenge cookie meets), over handleApi: a cookie is identified by name,
- * domain and path, so two of one name live side by side when their path or domain differs; a Set-Cookie that expires one
- * removes only the cookie with its name, domain and path; requests carry the cookies whose domain and path match, longer
- * paths first; a `__Secure-` name is stored only with `Secure`, and a `Secure` cookie goes over https only.
+ * A browser's cookie store, as strict as Chrome and Firefox where a challenge cookie meets it, over handleApi:
+ * - a cookie is identified by name, domain, host-only or not, and path: a host-only cookie and one set with
+ *   Domain=<its host> live side by side (the browsers store "host" and ".host"), and an expiry reaches only its own;
+ * - a cookie is deleted only by Max-Age at zero or below or by an Expires in the past; an empty value is a value;
+ * - a Set-Cookie whose Domain the host does not match is refused;
+ * - a `__Secure-` name is stored only with `Secure`, and a `Secure` cookie is set and sent over https only;
+ * - requests carry the cookies whose domain and path match, longer paths first.
  */
 export class CookieJar {
   readonly stored: StoredCookie[] = [];
@@ -88,12 +91,31 @@ export class CookieJar {
     if (cookies.length) headers.set('cookie', cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '));
     if (body !== undefined) headers.set('content-type', 'application/json');
     const response = await handleApi(new Request(target, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
-    for (const line of response.headers.getSetCookie()) this.receive(line, target);
+    for (const line of response.headers.getSetCookie()) this.receive(line, target.pathname);
     const text = await response.text();
     return { status: response.status, body: text ? JSON.parse(text) : null };
   }
 
   names(): string[] { return this.stored.map(cookie => `${cookie.name} ${cookie.hostOnly ? '' : '.'}${cookie.domain}${cookie.path}`); }
+
+  /** Stores, replaces or deletes as a browser does for a Set-Cookie line received in answer to `requestPath`. */
+  receive(line: string, requestPath: string): void {
+    const target = new URL(requestPath, this.url);
+    const [pair, ...parts] = line.split(';').map(part => part.trim());
+    const attributes = new Map(parts.map(part => { const [key, ...value] = part.split('='); return [key.toLowerCase(), value.join('=')] as const; }));
+    const name = pair.slice(0, pair.indexOf('=')), value = pair.slice(pair.indexOf('=') + 1);
+    const secure = attributes.has('secure');
+    if ((name.startsWith('__Secure-') || secure) && (!secure || target.protocol !== 'https:')) return;
+    const domainAttribute = attributes.get('domain')?.replace(/^\./, '').toLowerCase();
+    if (domainAttribute !== undefined && target.hostname !== domainAttribute && !target.hostname.endsWith(`.${domainAttribute}`)) return;
+    const hostOnly = domainAttribute === undefined, domain = domainAttribute ?? target.hostname;
+    const path = attributes.get('path')?.startsWith('/') ? attributes.get('path')! : (target.pathname.slice(0, target.pathname.lastIndexOf('/')) || '/');
+    const maxAge = attributes.get('max-age'), expires = attributes.get('expires');
+    const expired = maxAge !== undefined ? Number(maxAge) <= 0 : expires !== undefined && Date.parse(expires) <= Date.now();
+    const index = this.stored.findIndex(cookie => cookie.name === name && cookie.domain === domain && cookie.hostOnly === hostOnly && cookie.path === path);
+    if (index >= 0) this.stored.splice(index, 1);
+    if (!expired) this.stored.push({ name, value, domain, hostOnly, path, secure });
+  }
 
   private matching(target: URL): StoredCookie[] {
     const host = target.hostname;
@@ -103,22 +125,17 @@ export class CookieJar {
         && (!cookie.secure || target.protocol === 'https:'))
       .sort((a, b) => b.path.length - a.path.length);
   }
-
-  private receive(line: string, target: URL): void {
-    const [pair, ...parts] = line.split(';').map(part => part.trim());
-    const attributes = new Map(parts.map(part => { const [key, ...value] = part.split('='); return [key.toLowerCase(), value.join('=')] as const; }));
-    const name = pair.slice(0, pair.indexOf('=')), value = pair.slice(pair.indexOf('=') + 1);
-    const secure = attributes.has('secure');
-    if ((name.startsWith('__Secure-') || secure) && (!secure || target.protocol !== 'https:')) return;
-    const domainAttribute = attributes.get('domain')?.replace(/^\./, '').toLowerCase();
-    const domain = domainAttribute ?? target.hostname;
-    const path = attributes.get('path')?.startsWith('/') ? attributes.get('path')! : (target.pathname.slice(0, target.pathname.lastIndexOf('/')) || '/');
-    const index = this.stored.findIndex(cookie => cookie.name === name && cookie.domain === domain && cookie.path === path);
-    if (index >= 0) this.stored.splice(index, 1);
-    if (attributes.get('max-age') === '0' || value === '') return;
-    this.stored.push({ name, value, domain, hostOnly: domainAttribute === undefined, path, secure });
-  }
 }
+
+/**
+ * The copies of the challenge cookie this host can plant that a verify request carries beside the real one: host-only on
+ * every path the verify route matches except the real cookie's own (`/`), and with Domain=<host> on the root and on the
+ * route's directory.
+ */
+export const plantings = (host: string) => [
+  ...['/api', '/api/', '/api/auth', '/api/auth/', '/api/auth/two-factor', '/api/auth/two-factor/', '/api/auth/two-factor/verify-totp'].map(path => ({ domain: host, hostOnly: true, path })),
+  ...['/', '/api/auth/two-factor'].map(path => ({ domain: host, hostOnly: false, path })),
+];
 
 /**
  * Plants a second challenge cookie of the name the server reads (as `plant` places it), signs `member` in, and verifies

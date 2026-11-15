@@ -159,14 +159,27 @@ const proofRefused = 'The password or the code was not accepted.';
 
 async function requireFactorProof(client: PoolClient, request: Request, userId: string, details: { code?: string; backupCode?: string }) {
   if ((!details.code && !details.backupCode) || (details.code && details.backupCode)) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
-  if (details.code && await isRepeatedCode(client, userId, details.code)) throw new FoundationError(409, 'Wait for the next authenticator code, then try again.');
   const response = await invoke(getAuth(client), request, details.code ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', { code: details.code ?? details.backupCode });
   if (!response.ok) throw new FoundationError(400, proofRefused);
   if (details.code) await rememberCode(client, userId, details.code);
 }
 
-/** The paths a duplicate challenge cookie is expired on: the library's own (`/`) and each one above the challenge route. */
-const challengeCookiePaths = ['/', '/api', '/api/auth', '/api/auth/two-factor'];
+/**
+ * Every path a cookie can carry and still be sent with a request to `pathname`: the root, then each prefix of the path
+ * with and without a trailing slash (the whole path with one only when the request had it). Eight for a verify route,
+ * nine when it is requested with a trailing slash.
+ */
+function cookiePathsOf(pathname: string): string[] {
+  const segments = pathname.split('/').filter(Boolean);
+  const paths = ['/'];
+  let prefix = '';
+  segments.forEach((segment, index) => {
+    prefix += `/${segment}`;
+    paths.push(prefix);
+    if (index < segments.length - 1 || pathname.endsWith('/')) paths.push(`${prefix}/`);
+  });
+  return paths;
+}
 
 export async function handleAccountSecurity(request: Request, limit: Limit): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname.replace(/\/$/, '');
@@ -266,14 +279,17 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // ambiguous is refused before the library runs, in the same words, so nothing tells whether a challenge existed.
     const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
     const cookie = challengeCookie(request);
-    // The exact name twice: refused, and the name expired with the library's attributes on each path from the root to the
-    // challenge route. A browser keeps two cookies of one name only when their path or domain differs, so this removes the
-    // real one and a copy set on one of those paths of this host; signing in again then recovers. A copy set with a parent
-    // Domain cannot be expired from here (only a host-only cookie name would close that), and the sign-in stays refused.
+    // The exact name twice: refused, and the name expired with the library's attributes on every path that is sent with
+    // this request, host-only and once more with Domain=<this host>. A browser keeps two cookies of one name apart by
+    // path, by domain and by host-only or not, so this removes the real one and any copy this host can reach; signing in
+    // again then recovers. A copy set with a parent Domain is not cleared, because the server cannot know which parent
+    // was used; closing that needs a `__Host-` name, which is the shared preset's decision.
     if (cookie === 'duplicate') {
       const response = refused();
-      for (const path of challengeCookiePaths) {
-        response.headers.append('set-cookie', `${challengeCookieName()}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`);
+      const expired = `${challengeCookieName()}=; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`;
+      const host = new URL(getConfig().appUrl).hostname;
+      for (const domain of ['', `; Domain=${host}`]) {
+        for (const cookiePath of cookiePathsOf(url.pathname)) response.headers.append('set-cookie', `${expired}; Path=${cookiePath}${domain}`);
       }
       return response;
     }
@@ -363,15 +379,16 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // recovery codes would otherwise satisfy the factor proof that turning it off asks for. The password is checked first,
     // so a refused password never consumes a recovery code or an authenticator window.
     const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
-    // With two-factor on, a request without a code, or with both kinds, is refused first, the same way whatever the
-    // password, so the answer never tells whether the password was right. Then the password (a wrong one never spends a
-    // code), then the code.
+    // With two-factor on, a request without a code, with both kinds, or with an authenticator code accepted in the last
+    // 90 seconds is refused first, the same way whatever the password and before any password hash runs, so the answer
+    // never tells whether the password was right. Then the password (a wrong one never spends a code), then the code.
     if (current.user.twoFactorEnabled && !details.code && !details.backupCode) {
       throw path === '/api/account/two-factor/recovery-codes'
         ? new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required')
         : new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
     }
     if (current.user.twoFactorEnabled && details.code && details.backupCode) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
+    if (current.user.twoFactorEnabled && details.code && await isRepeatedCode(client, userId, details.code)) throw new FoundationError(409, 'Wait for the next authenticator code, then try again.');
     const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
     if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, proofRefused);
     if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);

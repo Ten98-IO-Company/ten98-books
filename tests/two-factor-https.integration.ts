@@ -13,7 +13,7 @@ const { freshDatabase } = await import('./helpers/database.ts');
 const { asAdmin, setupOwner } = await import('./helpers/ledger.ts');
 const { handleApi } = await import('../src/server/api.ts');
 const { getConfig } = await import('../src/server/config.ts');
-const { challenged, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, plantedThenSignIn, step, totp, verifyWith } = await import('./helpers/two-factor.ts');
+const { challenged, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, plantedThenSignIn, plantings, step, totp, verifyWith } = await import('./helpers/two-factor.ts');
 
 let database: Awaited<ReturnType<typeof freshDatabase>>;
 let owner: Awaited<ReturnType<typeof setupOwner>>;
@@ -46,27 +46,32 @@ test('on https the duplicate case clears the __Secure- challenge cookie with the
 
 test('on https a copy planted on a path of this host is cleared and the next sign-in completes; one planted with a parent Domain is not', async () => {
   const fresh = () => asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
-  for (const path of ['/api', '/api/auth', '/api/auth/two-factor']) {
+  for (const planting of plantings('app.books.test')) {
     await fresh();
-    const result = await plantedThenSignIn(database.adminUrl, owner, totp(secret, step()), secureName(), { domain: 'app.books.test', hostOnly: true, path });
-    assert.deepEqual([result.first, result.second, result.signedIn], [401, 200, true], `planted at ${path}; between: ${result.between.join(', ')}`);
+    const result = await plantedThenSignIn(database.adminUrl, owner, totp(secret, step()), secureName(), planting);
+    assert.deepEqual([result.first, result.second, result.signedIn], [401, 200, true], `planted ${JSON.stringify(planting)}; between: ${result.between.join(', ')}`);
   }
-  // Known limit: a copy set with Domain=books.test (from a sibling host) is a different cookie from the host's own, and no
-  // Set-Cookie from this host without that Domain can expire it; only a host-only cookie name (`__Host-`) would keep it out.
-  // The sign-in stays refused while the copy lives.
+  // Known limit: a copy set with Domain=books.test (a parent) is not cleared, because the server cannot know which parent
+  // was used; a `__Host-` cookie name would keep it out (the shared preset's decision). The sign-in stays refused.
   await fresh();
   const parent = await plantedThenSignIn(database.adminUrl, owner, totp(secret, step()), secureName(), { domain: 'books.test', hostOnly: false, path: '/' });
   assert.deepEqual([parent.first, parent.second, parent.signedIn], [401, 401, false], `parent Domain; between: ${parent.between.join(', ')}`);
 });
 
-test('on https every clearing cookie is the __Secure- name, Secure and HttpOnly, one per path', async () => {
+test('on https the clearing cookies: the __Secure- name, Secure and HttpOnly, on each path the request carries, host-only and with Domain: 16 headers, 18 with a trailing slash', async () => {
   await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
   const { value } = await challengeSetCookie(database.adminUrl, owner, secureName());
-  const response = await handleApi(new Request(new URL('/api/auth/two-factor/verify-totp', getConfig().appUrl), { method: 'POST',
-    headers: { cookie: `${secureName()}=planted.x; ${secureName()}=${value}`, origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code: '000000' }) }));
-  const lines = response.headers.getSetCookie();
-  assert.deepEqual(lines.map(line => cookieScope(line)).map(scope => [scope.name, scope.path, scope.domain, scope.httpOnly, scope.sameSite, scope.secure]),
-    ['/', '/api', '/api/auth', '/api/auth/two-factor'].map(path => [secureName(), path, undefined, true, 'lax', true]), lines.join(' | '));
+  const eight = ['/', '/api', '/api/', '/api/auth', '/api/auth/', '/api/auth/two-factor', '/api/auth/two-factor/', '/api/auth/two-factor/verify-totp'];
+  for (const [route, paths] of [['/api/auth/two-factor/verify-totp', eight], ['/api/auth/two-factor/verify-totp/', [...eight, '/api/auth/two-factor/verify-totp/']]] as const) {
+    const response = await handleApi(new Request(new URL(route, getConfig().appUrl), { method: 'POST',
+      headers: { cookie: `${secureName()}=planted.x; ${secureName()}=${value}`, origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code: '000000' }) }));
+    assert.equal(response.status, 401, route);
+    const lines = response.headers.getSetCookie();
+    assert.ok(lines.every(line => /;\s*Max-Age=0(;|$)/i.test(line)), lines.join(' | '));
+    assert.deepEqual(lines.map(line => cookieScope(line)).map(scope => [scope.name, scope.path, scope.domain, scope.httpOnly, scope.sameSite, scope.secure]),
+      [undefined, 'app.books.test'].flatMap(domain => paths.map(path => [secureName(), path, domain, true, 'lax', true])), `${route}: ${lines.join(' | ')}`);
+    assert.equal(lines.length, route.endsWith('/') ? 18 : 16);
+  }
 });
 
 test('on https a planted plain-named variant beside the __Secure- challenge is ignored in either order', async () => {

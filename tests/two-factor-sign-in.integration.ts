@@ -6,7 +6,7 @@ import { authCookiePrefix } from '../src/server/auth.ts';
 import { getConfig } from '../src/server/config.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, browser, invite, password, setupOwner, type Member } from './helpers/ledger.ts';
-import { challenged as challengedIn, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, plantedThenSignIn, step, totp, verifyWith } from './helpers/two-factor.ts';
+import { challenged as challengedIn, challengeSetCookie, cookieScope, CookieJar, duplicateRefusal, enableFactor, plantedThenSignIn, plantings, step, totp, verifyWith } from './helpers/two-factor.ts';
 
 /**
  * The second step of sign-in, through the real handler and the real auth preset (its own cookie prefix, as in
@@ -286,6 +286,8 @@ test('without a code, or with both kinds, the answer does not depend on the pass
     ['/api/account/two-factor/recovery-codes', { error: 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', code: 'second_factor_required' }],
     ['/api/account/two-factor/disable', { error: 'Enter an authenticator code or a recovery code to verify this action.' }],
   ] as const) {
+    // The code accepted on the previous path would now be refused as repeated, before the password: forget it.
+    await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
     const right = await second.browser.call(path, { password }), bad = await second.browser.call(path, { password: wrong });
     assert.deepEqual([right.status, right.body], [400, noCode], `${path}: no code, right password`);
     assert.deepEqual([bad.status, bad.body], [right.status, right.body], `${path}: no code, wrong password answers the same`);
@@ -413,13 +415,58 @@ test('an expired challenge is refused before the library, byte for byte as no ch
   assert.deepEqual(expired, await raw(), 'the same answer as without a challenge');
 });
 
-test('a copy of the challenge cookie planted on a path of this host is cleared, and the next sign-in completes', async () => {
-  const host = new URL(getConfig().appUrl).hostname;
-  for (const path of ['/api', '/api/auth', '/api/auth/two-factor']) {
+test('a copy of the challenge cookie this host can plant, on any path the verify route carries or with Domain=<host>, is cleared, and the next sign-in completes', async () => {
+  for (const planting of plantings(new URL(getConfig().appUrl).hostname)) {
     await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
-    const result = await plantedThenSignIn(database.adminUrl, owner, totp(secrets.get(owner.userId)!, step()), challengeName(), { domain: host, hostOnly: true, path });
-    assert.deepEqual([result.first, result.second, result.signedIn], [401, 200, true], `planted at ${path}; between: ${result.between.join(', ')}`);
+    const result = await plantedThenSignIn(database.adminUrl, owner, totp(secrets.get(owner.userId)!, step()), challengeName(), planting);
+    assert.deepEqual([result.first, result.second, result.signedIn], [401, 200, true], `planted ${JSON.stringify(planting)}; between: ${result.between.join(', ')}`);
   }
+});
+
+test('the test cookie store is as strict as a browser: host-only and Domain copies apart, deletion by Max-Age or Expires only, a foreign Domain refused', () => {
+  const jar = new CookieJar(), host = new URL(getConfig().appUrl).hostname;
+  jar.receive('n=a; Path=/', '/api/x');
+  jar.receive(`n=b; Path=/; Domain=${host}`, '/api/x');
+  jar.receive('n=; Path=/; Max-Age=0', '/api/x');
+  assert.deepEqual(jar.stored.map(cookie => [cookie.value, cookie.hostOnly]), [['b', false]], 'a host-only expiry leaves the Domain copy');
+  jar.receive('n=; Path=/', '/api/x');
+  assert.deepEqual(jar.stored.map(cookie => [cookie.value, cookie.hostOnly]), [['b', false], ['', true]], 'an empty value is a value, not a deletion');
+  jar.receive(`n=; Path=/; Domain=${host}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`, '/api/x');
+  assert.deepEqual(jar.stored.map(cookie => cookie.hostOnly), [true], 'a past Expires deletes the Domain copy');
+  jar.receive('m=x; Path=/; Domain=elsewhere.test', '/api/x');
+  assert.equal(jar.stored.some(cookie => cookie.name === 'm'), false, 'a Domain the host does not match is refused');
+});
+
+test('a recently used authenticator code gets one answer on the account actions, whatever the password', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const code = totp(secrets.get(second.userId)!, step());
+  const used = await second.browser.call('/api/account/two-factor/recovery-codes', { password, code });
+  assert.equal(used.status, 200, JSON.stringify(used.body));
+  backupCodes.set(second.userId, used.body.backupCodes);
+  for (const path of ['/api/account/two-factor/disable', '/api/account/two-factor/recovery-codes']) {
+    const right = await second.browser.call(path, { password, code }), wrong = await second.browser.call(path, { password: 'wrong horse battery staple', code });
+    assert.deepEqual([right.status, right.body], [409, { error: 'Wait for the next authenticator code, then try again.' }], `${path}: the right password`);
+    assert.deepEqual([wrong.status, wrong.body], [right.status, right.body], `${path}: a wrong password answers the same`);
+  }
+});
+
+test('the challenge lookup reads the newest row of its identifier, as the library does', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const challenge = challengeOf(await challenged(owner));
+  const identifier = identifierOf(challenge);
+  // An older row naming the second user is put before the real one, so a lookup without its order reads it first.
+  await asAdmin(database.adminUrl, async admin => {
+    await admin.query('BEGIN');
+    const real = (await admin.query('SELECT id, value, "expiresAt", "createdAt", "updatedAt" FROM verification WHERE identifier = $1', [identifier])).rows[0];
+    await admin.query('DELETE FROM verification WHERE identifier = $1', [identifier]);
+    await admin.query(`INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5::timestamptz - interval '1 minute', $5)`,
+      [randomUUID(), identifier, second.userId, real.expiresAt, real.createdAt]);
+    await admin.query('INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [real.id, identifier, real.value, real.expiresAt, real.createdAt, real.updatedAt]);
+    await admin.query('COMMIT');
+  });
+  const answer = await verifyWith(`${challengeName()}=${challenge}`, totp(secrets.get(owner.userId)!, step()));
+  assert.deepEqual([answer.status, answer.signedIn], [200, true], JSON.stringify(answer.body));
 });
 
 test('the duplicate case clears the challenge cookie with the scope the library set it with', async () => {
