@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import pg, { type PoolClient } from 'pg';
 import { getDatabase, migrationFiles } from '../src/server/db.ts';
+import type { LedgerContext } from '../src/server/ledger/context.ts';
+import { alterUnit, deleteItem, deleteTree, deleteUnit } from '../src/server/ledger/stock-masters.ts';
+import { createVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { accountingTables, assertDatabaseRoles, setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { asAdmin } from './helpers/ledger.ts';
+import { asAdmin, inCompany } from './helpers/ledger.ts';
 import { earlierCompany, inEarlierCompany } from './helpers/master-names-migration.ts';
 
 /**
@@ -360,4 +363,64 @@ test('the guards seek item rows by item and the per-line check by its line: besi
       assert.ok(checks.idx_tup_fetch <= 4 * 4 + 3 * 4 + 4, `${tables}, checks fetch only this voucher's rows: ${JSON.stringify(checks)}`);
     });
   }
+});
+
+const write = <T>(run: (context: LedgerContext) => Promise<T>) => inCompany(user, companyId, run, 'write');
+/** Runs `first` in a write transaction held open until `second` has been started and seen waiting (or not); returns both. */
+async function race<A, B>(first: (context: LedgerContext) => Promise<A>, second: (context: LedgerContext) => Promise<B>): Promise<{ waited: unknown; second: Promise<B> }> {
+  let release!: () => void, done!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { done = resolve; });
+  const firstWrite = write(async context => { const result = await first(context); done(); await held; return result; });
+  await started;
+  const secondWrite = write(second);
+  const waited = await state(secondWrite);
+  release();
+  await firstWrite;
+  await secondWrite.catch(() => undefined);
+  return { waited, second: secondWrite };
+}
+const masters = async (tag: string, decimals = 2) => {
+  let unit = '', item = '', location = '';
+  await asApp(async client => {
+    unit = (await client.query('INSERT INTO stock_unit (company_id, symbol, decimals) VALUES ($1, $2, $3) RETURNING id', [companyId, `Unit ${tag}`, decimals])).rows[0].id;
+    item = (await client.query('INSERT INTO stock_item (company_id, name, unit_id) VALUES ($1, $2, $3) RETURNING id', [companyId, `Item ${tag}`, unit])).rows[0].id;
+    location = (await client.query('INSERT INTO stock_location (company_id, name) VALUES ($1, $2) RETURNING id', [companyId, `Store ${tag}`])).rows[0].id;
+  });
+  return { unit, item, location };
+};
+const posting = (item: string, location: string, quantity = '1.5') => (context: LedgerContext) => createVoucher(context, {
+  idempotencyKey: `race-${randomUUID()}`, voucherTypeId: types.sales.id, date: '2026-02-10',
+  lines: [{ ledgerId: ids.customer, side: 'Dr', amount: '7.50' }], itemLedgerId: ids.sales,
+  inventory: [{ itemId: item, locationId: location, quantity, amount: '7.50' }],
+});
+const refusedWith = (expected: string) => (error: { code?: string }) => error.code === expected;
+
+test('through the API: lowering the decimals of a unit while a posting on it is in flight waits, then is refused', async () => {
+  const { unit, item, location } = await masters('decimals');
+  const { waited, second } = await race(posting(item, location), context => alterUnit(context, unit, { symbol: 'Unit decimals', decimals: 0, revision: 1 }));
+  assert.equal(waited, 'waiting');
+  await assert.rejects(second, refusedWith('in_use'));
+});
+
+test('through the API: a unit delete while a posting holds one of its items answers in_use at once', async () => {
+  const { unit, item, location } = await masters('delete unit');
+  const { waited, second } = await race(posting(item, location), context => deleteUnit(context, unit, { revision: 1 }));
+  assert.equal(waited, 'settled', 'no wait, so no deadlock');
+  await assert.rejects(second, refusedWith('in_use'));
+});
+
+test('through the API: an item or location deleted while a posting waits on it answers not_found; deleted after it, in_use', async () => {
+  const gone = await masters('gone item');
+  const { waited: itemWaited, second: onItem } = await race(context => deleteItem(context, gone.item, { revision: 1 }), posting(gone.item, gone.location));
+  assert.equal(itemWaited, 'waiting');
+  await assert.rejects(onItem, (error: { code?: string; message?: string }) => error.code === 'not_found' && /^The item on item line 1 was not found/.test(error.message ?? ''));
+  const store = await masters('gone store');
+  const { waited: storeWaited, second: onStore } = await race(context => deleteTree(context, 'stock-locations', store.location, { revision: 1 }), posting(store.item, store.location));
+  assert.equal(storeWaited, 'waiting');
+  await assert.rejects(onStore, (error: { code?: string; message?: string }) => error.code === 'not_found' && /^The location of item line 1 was not found/.test(error.message ?? ''));
+  const kept = await masters('kept item');
+  const { second: late } = await race(posting(kept.item, kept.location), context => deleteItem(context, kept.item, { revision: 1 }));
+  await assert.rejects(late, refusedWith('in_use'));
+  const { second: lateStore } = await race(posting(kept.item, kept.location, '2'), context => deleteTree(context, 'stock-locations', kept.location, { revision: 1 }));
+  await assert.rejects(lateStore, refusedWith('in_use'));
 });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isCalendarDate } from './company.ts';
 import { moneyText } from './money.ts';
+import { quantityText, rateText } from './stock.ts';
 
 /**
  * The ledger's shared vocabulary: wire schemas (zod at the API boundary) and the shapes the server returns. Amounts are
@@ -10,7 +11,7 @@ export const natures = ['asset', 'liability', 'income', 'expense'] as const;
 export type Nature = (typeof natures)[number];
 export const sides = ['Dr', 'Cr'] as const;
 export type Side = (typeof sides)[number];
-export const voucherKinds = ['contra', 'payment', 'receipt', 'journal', 'sales', 'purchase', 'credit_note', 'debit_note'] as const;
+export const voucherKinds = ['contra', 'payment', 'receipt', 'journal', 'sales', 'purchase', 'credit_note', 'debit_note', 'stock_journal'] as const;
 export type VoucherKind = (typeof voucherKinds)[number];
 export type VoucherStatus = 'regular' | 'cancelled' | 'optional';
 
@@ -24,7 +25,7 @@ export const ledgerErrorCodes = [
   'stale_revision', // someone changed the row since the client read it
   'retry', // a deadlock or serialization failure; nothing was saved
   'duplicate_name', // another master of the same kind has the name under the name match key (0010): group, ledger, voucher type, cost category, cost centre (across categories), unit symbol, stock group, stock category, location or stock item (0011); a currency code or symbol equals another currency's code or symbol under the key (0012)
-  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference); a stock master holds sub-masters or items or opening stock, a used unit's decimals would drop, an item with stock would change unit, or inventory would be switched off with items; a currency is named by a ledger, or a ledger's currency is fixed by its postings, opening, bill rows or cost rows
+  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference); a stock master holds sub-masters or items or opening stock or item lines, a used unit's decimals would drop, an item with stock would change unit, or inventory would be switched off with items; a currency is named by a ledger, or a ledger's currency is fixed by its postings, opening, bill rows or cost rows
   'seeded_row', // a built-in row (also the seeded cost category and the main location) cannot be deleted; the base currency keeps its code and decimals
   'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
   'family_rule', // a built-in ledger would leave its behaviour family
@@ -38,7 +39,7 @@ export const ledgerErrorCodes = [
   'not_set_up', // the company has no books settings yet; members get this, non-members get not_found
   'allocation_total', // a line's (or an opening balance's) bill rows net to more than it, or to its other side; or a line's cost rows of one category do not add up to it
   'bill_inactive', // a settlement names a bill whose vouchers were all deleted or cancelled
-  'feature_off', // the company feature this needs is switched off (a stock item while inventory is off)
+  'feature_off', // the company feature this needs is switched off (a stock item, an item line or a stock journal while inventory is off)
 ] as const;
 export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
 
@@ -132,7 +133,21 @@ export type CostAllocationInput = z.output<typeof costAllocationInput>;
 const voucherLine = z.object({
   ledgerId: id, side: z.enum(sides), amount: moneyText, bills: z.array(billRowInput).max(100).optional(),
   costAllocations: z.array(costAllocationInput).max(200).optional(),
+  /** A line the server derived from item lines, as the read marks it: ignored when sent back, and derived again. */
+  derived: z.boolean().optional(),
 }).strict();
+/** A discount on an item line, in percent: at least 0 and below 100, at most four places. */
+const discountText = z.string().max(10).regex(/^\d{1,2}(\.\d{1,4})?$/, 'Enter a discount below 100 percent, such as 12.5.');
+/**
+ * An item line (M2b slice b1): an item at a location with a quantity, and a rate or an amount (both: the amount wins
+ * unless it is the rate's own amount). On an invoice kind the line posts to the sales or purchase ledger `ledgerId`
+ * (default: the voucher's `itemLedgerId`) and its direction is the kind's; a stock journal's line states its direction.
+ */
+export const itemLineInput = z.object({
+  itemId: id, locationId: id.optional(), quantity: quantityText, rate: rateText.optional(), discountPercent: discountText.optional(),
+  amount: moneyText.optional(), ledgerId: id.optional(), direction: z.enum(['in', 'out']).optional(),
+}).strict();
+export type ItemLineInput = z.output<typeof itemLineInput>;
 const reference = z.string().trim().max(100).refine(clean);
 const narration = z.string().max(2000);
 const voucherStatus = z.enum(['regular', 'optional']);
@@ -150,6 +165,8 @@ export const voucherCreateInput = z.object({
   reference: reference.nullish().transform(value => value || null),
   referenceDate: calendarDate.nullish().transform(value => value ?? null),
   lines,
+  inventory: z.array(itemLineInput).max(500).optional(),
+  itemLedgerId: id.nullish().transform(value => value ?? null),
 }).strict();
 /**
  * Altering replaces the whole voucher body except its number (and its type, unless `voucherTypeId` names another), so every field is stated: an omitted status or
@@ -166,6 +183,9 @@ export const voucherAlterInput = z.object({
   reference: reference.nullable().transform(value => value || null),
   referenceDate: calendarDate.nullable(),
   lines,
+  /** The voucher's item lines, whole; required when it has any (an empty list removes them). */
+  inventory: z.array(itemLineInput).max(500).optional(),
+  itemLedgerId: id.nullish().transform(value => value ?? null),
   revision,
 }).strict();
 /** A page of the voucher list: keyset cursor from the previous page's `next`. */
@@ -223,11 +243,21 @@ export type CostAllocationRow = {
 export type VoucherLine = {
   lineNo: number; ledgerId: string; ledgerName: string; side: Side; amount: bigint;
   currency: string; currencyAmount: bigint; fxRate: string; bills: BillRow[]; costAllocations: CostAllocationRow[];
+  /** Derived by the server from the item lines posting to it (M2b slice b1). */
+  derived: boolean;
+};
+/**
+ * A stored item line: its quantity in the unit's places, its rate as stored (at least the currency's places), and on an
+ * invoice the derived line it posts to (`lineNo`) and that line's ledger; both are null on a stock journal.
+ */
+export type InventoryLine = {
+  entryNo: number; itemId: string; itemName: string; locationId: string; locationName: string; direction: 'in' | 'out';
+  quantity: string; rate: string; discountPercent: string | null; amount: bigint; ledgerId: string | null; lineNo: number | null;
 };
 export type Voucher = {
   id: string; voucherTypeId: string; voucherTypeName: string; kind: VoucherKind; series: string; number: number | null;
   date: string; narration: string | null; status: VoucherStatus; postDated: boolean; deleted: boolean; revision: number;
-  reference: string | null; referenceDate: string | null; total: bigint; lines: VoucherLine[];
+  reference: string | null; referenceDate: string | null; total: bigint; lines: VoucherLine[]; inventory: InventoryLine[];
 };
 /**
  * What a posting did with bill rows that the caller may not expect, reproduced from the reference behaviour rather than
@@ -242,7 +272,7 @@ export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached',
   'cost_ignored', 'cost_kept', 'cost_rebalanced', 'cost_dropped'] as const;
 export type BillWarningCode = (typeof billWarningCodes)[number];
 export type BillWarning = { code: BillWarningCode; line: number | null; billId: string | null; billName: string | null; amount: bigint | null };
-export type VoucherSummary = Omit<Voucher, 'lines'>;
+export type VoucherSummary = Omit<Voucher, 'lines' | 'inventory'>;
 export type VoucherPage = { vouchers: VoucherSummary[]; next: string | null };
 
 /** One ledger in a trial balance for a period. Amounts are non-negative; each pair has at most one non-zero side. */

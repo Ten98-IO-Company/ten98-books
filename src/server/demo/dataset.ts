@@ -35,7 +35,8 @@ export const seededGroupKeys = [
   'duties_taxes', 'provisions', 'payables', 'bank_overdraft', 'secured_loans', 'unsecured_loans',
 ] as const;
 /** The voucher types every company is seeded with: their system keys are the voucher kinds. */
-export const seededVoucherTypeKeys: readonly string[] = voucherKinds;
+// Stock journals are seeded from the datasets in M2b slice b2; until then they are left out like an unknown type.
+export const seededVoucherTypeKeys: readonly string[] = voucherKinds.filter(kind => kind !== 'stock_journal');
 export const standardLedgers = ['cash', 'profit_and_loss'] as const;
 
 const knownFiles = ['company', 'groups', 'ledgers', 'vouchers', 'expected'] as const;

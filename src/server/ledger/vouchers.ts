@@ -3,11 +3,12 @@ import { addMoney, assertMoneyInRange, compareMoney, formatMoney } from '@ten98/
 import { isCalendarDate } from '../../lib/company.ts';
 import {
   revisionInput, voucherAlterInput, voucherCreateInput, voucherListQuery,
-  type BillRow, type BillRowInput, type BillWarning, type CostAllocationInput, type CreditPeriod, type CreditUnit, type Side, type Voucher, type VoucherKind,
+  type BillRow, type BillRowInput, type BillWarning, type CostAllocationInput, type CreditPeriod, type CreditUnit, type ItemLineInput, type Side, type Voucher, type VoucherKind,
   type VoucherLine, type VoucherPage, type VoucherSummary, type VoucherType,
 } from '../../lib/ledger.ts';
 import { billsCreatedBy, billWarnings, planBills, storedBillRows, writeBills, type BillLine, type BillPlan } from './bills.ts';
-import { costRowsByLine, planCost, storedCostRows, writeCost, type CostLine } from './cost-centres.ts';
+import { costRowsByLine, planCost, storedCostRows, writeCost, type CostLine, type CostPlan, type StoredCostRow } from './cost-centres.ts';
+import { insertItemLines, lockItemLines, planItemLines, readItemLines, type PlannedItemLine } from './item-lines.ts';
 import { conflict, ledgerError, parseAmount, parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql, missingAs, readVoucherType } from './masters.ts';
 import { logRevision } from './revisions.ts';
@@ -23,6 +24,10 @@ const voucherNotFound = ledgerError(404, 'Voucher not found.', 'not_found');
 
 const voucherFields = (path: readonly PropertyKey[]): string => {
   const [first, index, inner] = path;
+  if (first === 'inventory' && typeof index === 'number') {
+    const field = ({ itemId: 'item', locationId: 'location', discountPercent: 'discount', ledgerId: 'ledger' } as Record<string, string>)[String(inner)] ?? String(inner ?? 'details');
+    return `the ${field} of item line ${index + 1}`;
+  }
   if (first === 'lines' && typeof index === 'number') {
     if (inner === 'bills') return `the bill rows on line ${index + 1}`;
     if (inner === 'costAllocations') return `the cost rows on line ${index + 1}`;
@@ -30,7 +35,7 @@ const voucherFields = (path: readonly PropertyKey[]): string => {
   }
   return ({ idempotencyKey: 'the idempotency key', voucherTypeId: 'the voucher type', date: 'the date', narration: 'the narration',
     status: 'the status', postDated: 'the post-dated setting', reference: 'the reference', referenceDate: 'the reference date',
-    lines: 'the lines', revision: 'the revision' } as Record<string, string>)[String(first)] ?? 'the voucher details';
+    lines: 'the lines', inventory: 'the item lines', itemLedgerId: 'the item ledger', revision: 'the revision' } as Record<string, string>)[String(first)] ?? 'the voucher details';
 };
 
 const headerSelect = `SELECT v.id, v.voucher_type_id AS "voucherTypeId", t.name AS "voucherTypeName", t.kind, v.series, v.number, v.date,
@@ -40,13 +45,16 @@ const headerSelect = `SELECT v.id, v.voucher_type_id AS "voucherTypeId", t.name 
   FROM voucher v JOIN voucher_type t ON t.company_id = v.company_id AND t.id = v.voucher_type_id
   WHERE v.company_id = $1`;
 
-/** One voucher with its lines, including cancelled and soft-deleted ones (their history stays readable). */
+/**
+ * One voucher with its lines, including cancelled and soft-deleted ones (their history stays readable), and its item
+ * lines; a line derived from item lines is marked `derived`.
+ */
 export async function readVoucher(context: LedgerContext, voucherId: string, lock = false): Promise<Voucher> {
   const { client, company } = context;
   if (lock) await client.query('SELECT 1 FROM voucher WHERE company_id = $1 AND id = $2 FOR UPDATE', [company.companyId, voucherId]);
   const { rows } = await client.query<VoucherSummary>(`${headerSelect} AND v.id = $2`, [company.companyId, voucherId]);
   if (!rows[0]) throw voucherNotFound;
-  const lines = await client.query<Omit<VoucherLine, 'bills' | 'costAllocations'>>(
+  const lines = await client.query<Omit<VoucherLine, 'bills' | 'costAllocations' | 'derived'>>(
     `SELECT l.line_no AS "lineNo", l.ledger_id AS "ledgerId", led.name AS "ledgerName", l.side, l.amount, l.currency,
        l.currency_amount AS "currencyAmount", l.fx_rate::text AS "fxRate"
      FROM voucher_line l JOIN ledger led ON led.company_id = l.company_id AND led.id = l.ledger_id
@@ -63,7 +71,12 @@ export async function readVoucher(context: LedgerContext, voucherId: string, loc
     byLine.set(lineNo, list);
   }
   const costs = await costRowsByLine(context, voucherId);
-  return { ...rows[0], lines: lines.rows.map(line => ({ ...line, bills: byLine.get(line.lineNo) ?? [], costAllocations: costs.get(line.lineNo) ?? [] })) };
+  const inventory = await readItemLines(context, voucherId);
+  const derived = new Set(inventory.flatMap(row => row.lineNo === null ? [] : [row.lineNo]));
+  return {
+    ...rows[0], inventory,
+    lines: lines.rows.map(line => ({ ...line, bills: byLine.get(line.lineNo) ?? [], costAllocations: costs.get(line.lineNo) ?? [], derived: derived.has(line.lineNo) })),
+  };
 }
 
 const cursorShape = /^(\d{4}-\d{2}-\d{2})~([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
@@ -97,7 +110,43 @@ function assertDateOpen(context: LedgerContext, date: string): void {
 }
 
 type PreparedLine = BillLine & CostLine;
-type LineInput = { ledgerId: string; side: Side; amount: string; bills?: BillRowInput[]; costAllocations?: CostAllocationInput[] };
+type LineInput = { ledgerId: string; side: Side; amount: string; bills?: BillRowInput[]; costAllocations?: CostAllocationInput[]; derived?: boolean };
+type PreparedVoucher = { lines: PreparedLine[]; items: PlannedItemLine[]; derived: Set<number> };
+
+/**
+ * A voucher body's lines and item lines, checked and locked in the posting order. Lines marked derived (as a read
+ * returns them) are dropped and derived again from the item lines, after the client's lines. A stock journal has item
+ * lines only; every other kind goes through the posting rules (`prepareLines`) with its derived lines.
+ */
+async function prepareVoucher(context: LedgerContext, kind: VoucherKind, body: { date: string; lines: LineInput[]; inventory?: ItemLineInput[]; itemLedgerId: string | null }): Promise<PreparedVoucher> {
+  const entered = body.lines.filter(line => line.derived !== true);
+  const plan = planItemLines(context, kind, body.inventory ?? [], body.itemLedgerId, entered.length);
+  let lines: PreparedLine[] = [];
+  if (kind === 'stock_journal') {
+    assertDateOpen(context, body.date);
+    if (entered.length) throw ledgerError(400, 'A stock journal has no ledger lines: enter its item lines only.', 'validation');
+  } else {
+    const derivedLines = plan.derived.map(line => ({ ledgerId: line.ledgerId, side: line.side, amount: formatMoney(line.amount, context.company.exponent) }));
+    lines = await prepareLines(context, kind, { date: body.date, lines: [...entered, ...derivedLines] });
+  }
+  await lockItemLines(context, plan.rows);
+  return { lines, items: plan.rows, derived: new Set(plan.derived.map(line => line.lineNo)) };
+}
+
+/**
+ * Derived lines take no cost rows in this slice (a declared difference). An alter in which a stored line's cost rows
+ * would move onto a derived line, or be dropped because their ledger's line is now derived (no client line of that
+ * ledger keeps its number), is refused rather than stripped.
+ */
+function assertNoCostOnDerived(before: Voucher, prepared: PreparedVoucher, cost: CostPlan, stored: StoredCostRow[]): void {
+  const derivedLedgers = new Set(prepared.lines.filter(line => prepared.derived.has(line.lineNo)).map(line => line.ledgerId));
+  const kept = new Set(prepared.lines.filter(line => !prepared.derived.has(line.lineNo)).map(line => `${line.lineNo}:${line.ledgerId}`));
+  const carried = cost.rows.find(row => prepared.derived.has(row.lineNo))
+    ?? stored.find(row => derivedLedgers.has(row.ledgerId) && !kept.has(`${row.lineNo}:${row.ledgerId}`));
+  if (!carried) return;
+  const name = before.lines.find(line => line.ledgerId === carried.ledgerId)?.ledgerName ?? 'its ledger';
+  throw ledgerError(400, `The line on ${name} carries cost allocations, and a ledger line derived from item lines takes none yet. Remove its allocations first.`, 'validation');
+}
 
 /**
  * Applies the posting rules to a voucher body and returns its lines in minor units. Contra moves money between cash and
@@ -237,7 +286,8 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   }
   const type: VoucherType = await readVoucherType(context, body.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found')));
   if (body.status === 'cancelled') return createVoid(context, type, idempotencyKey, hash, body);
-  const lines = await prepareLines(context, type.kind, body);
+  const prepared = await prepareVoucher(context, type.kind, body);
+  const lines = prepared.lines;
   const cost = await planCost(context, lines);
   const plan = await planBills(context, { kind: type.kind, reference: body.reference, optional: body.status === 'optional' }, lines);
   const { rows } = await client.query<{ id: string }>(
@@ -246,6 +296,7 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
     [company.companyId, type.id, type.numberingSeries, body.date, body.narration, body.status, body.postDated, body.reference, body.referenceDate, idempotencyKey, hash, userId]);
   const voucherId = rows[0].id;
   await insertLines(context, voucherId, lines);
+  await insertItemLines(context, voucherId, prepared.items);
   await writeCost(context, voucherId, cost.rows);
   // An optional voucher takes no number until it is made regular.
   await writeVoucherBills(context, { id: voucherId, date: body.date, typeId: type.id, series: type.numberingSeries }, plan, body.status === 'regular', null);
@@ -260,9 +311,9 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
  * it may be deleted. The database exempts it, and only it, from the two-balanced-lines check (`created_cancelled`).
  */
 async function createVoid(context: LedgerContext, type: VoucherType, idempotencyKey: string, hash: string,
-  body: { date: string; narration: string | null; postDated: boolean; reference: string | null; referenceDate: string | null; lines: unknown[] }): Promise<VoucherResult & { replayed: boolean }> {
+  body: { date: string; narration: string | null; postDated: boolean; reference: string | null; referenceDate: string | null; lines: unknown[]; inventory?: unknown[] }): Promise<VoucherResult & { replayed: boolean }> {
   const { client, company, userId } = context;
-  if (body.lines.length) throw ledgerError(400, 'A voucher entered as cancelled has no lines.', 'validation');
+  if (body.lines.length || body.inventory?.length) throw ledgerError(400, 'A voucher entered as cancelled has no lines.', 'validation');
   assertDateOpen(context, body.date);
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO voucher (company_id, voucher_type_id, series, date, narration, status, post_dated, reference, reference_date, idempotency_key, request_hash, created_by)
@@ -306,9 +357,16 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   const type = input.voucherTypeId && input.voucherTypeId !== before.voucherTypeId
     ? await readVoucherType(context, input.voucherTypeId).catch(missingAs(ledgerError(400, 'The voucher type was not found.', 'not_found'))) : null;
   const kind = type?.kind ?? before.kind, typeId = type?.id ?? before.voucherTypeId, series = type?.numberingSeries ?? before.series;
+  // Item lines are stated whole: a body without them, for a voucher that has some, is neither "remove" nor "keep".
+  if (input.inventory === undefined && before.inventory.length) {
+    throw ledgerError(400, 'This voucher has item lines. Send them as inventory, or send an empty inventory to remove them.', 'validation');
+  }
   const crossing = await movesPeriod(context, before, input.date);
-  const lines = await prepareLines(context, kind, input);
-  const cost = await planCost(context, lines, await storedCostRows(context, voucherId));
+  const prepared = await prepareVoucher(context, kind, input);
+  const lines = prepared.lines;
+  const storedCost = await storedCostRows(context, voucherId);
+  const cost = await planCost(context, lines, storedCost);
+  assertNoCostOnDerived(before, prepared, cost, storedCost);
   const stored = await storedBillRows(context, voucherId);
   const plan = await planBills(context, { kind, reference: input.reference, optional: input.status === 'optional' }, lines, stored);
   const created = await billsCreatedBy(context, voucherId);
@@ -318,8 +376,10 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
        voucher_type_id = CASE WHEN number IS NULL THEN $9 ELSE voucher_type_id END, series = CASE WHEN number IS NULL THEN $10 ELSE series END
      WHERE company_id = $1 AND id = $2`,
     [company.companyId, voucherId, input.date, input.narration, input.status, input.postDated, input.reference, input.referenceDate, typeId, series]);
+  await client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
   await client.query('DELETE FROM voucher_line WHERE company_id = $1 AND voucher_id = $2', [company.companyId, voucherId]);
   await insertLines(context, voucherId, lines);
+  await insertItemLines(context, voucherId, prepared.items);
   await writeCost(context, voucherId, cost.rows);
   const numbering = (before.status === 'optional' && input.status === 'regular') || crossing || (type !== null && before.number !== null);
   await writeVoucherBills(context, { id: voucherId, date: input.date, typeId, series, moved: type !== null && before.number !== null }, plan, numbering, before.number);
