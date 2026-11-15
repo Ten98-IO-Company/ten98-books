@@ -6,6 +6,7 @@ import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
 import { ReservedKeys, useAppCommand } from '../KeyboardShell'
+import { acceptPress } from './accept-press'
 import { createLeaveGuard } from './leave-guard'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
@@ -154,13 +155,16 @@ export function FailureAlert({ failure, onReload }: { failure: Failure | null; o
 /**
  * "Save this?" after Enter on the last field: an inline panel whose Save button takes focus, so Enter accepts and
  * Escape (the form's cancel command) keeps editing. Inline rather than a stock confirmation, so Y and N answer it.
+ * Only a fresh key press answers it (acceptPress): the Enter that opened it, held down, repeats onto the Save button.
  */
 export function SaveConfirm({ title, description, onConfirm, onCancel }: { title: string; description: string; onConfirm: () => void; onCancel: () => void }) {
-  // Y answers yes and N returns to editing, as the accept question of desktop accounting software does.
+  // Y answers yes and N returns to editing, as the accept question of desktop accounting software does. Only a fresh press
+  // answers: a repeating Enter, Y or N does nothing, so a key held down through the last field cannot save (./accept-press.ts).
   const answer = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.ctrlKey || event.altKey || event.metaKey) return
-    const key = event.key.toLowerCase()
-    if (key === 'y') { event.preventDefault(); onConfirm() } else if (key === 'n') { event.preventDefault(); onCancel() }
+    const press = acceptPress(event)
+    if (press === 'native') return
+    event.preventDefault()
+    if (press === 'accept') onConfirm(); else if (press === 'keep-editing') onCancel()
   }
   return <Alert tone='info' title={title} onKeyDown={answer} actions={<>
     <Button autoFocus onClick={onConfirm}>Save</Button>

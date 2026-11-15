@@ -9,6 +9,7 @@ import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
+import { acceptPress } from '../src/components/masters/accept-press.ts';
 import { createLeaveGuard } from '../src/components/masters/leave-guard.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
@@ -778,4 +779,29 @@ test('docs/KEYBOARD.md states the parity counts the code has', () => {
   const doc = readFileSync(new URL('../docs/KEYBOARD.md', import.meta.url), 'utf8');
   const count = (status: string) => Object.values(classicParity).filter(entry => entry.status === status).length;
   assert.ok(doc.includes(`Counts: ${count('same')} same, ${count('alternate')} alternate, ${count('ours')} ours, over ${commandIds.length} commands.`), 'the counts line matches classicParity');
+});
+
+test('only a fresh press answers the Save panel: a held Enter, Y or N does nothing, and the panel keeps every other key and chord as before', () => {
+  const press = (key: string, extra: { repeat?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } = {}) =>
+    acceptPress({ key, repeat: false, ctrlKey: false, altKey: false, metaKey: false, ...extra });
+  // Fresh: Y accepts, N keeps editing (either case), Enter is left to the focused button (Save saves, Keep editing keeps editing).
+  assert.equal(press('y'), 'accept');
+  assert.equal(press('Y'), 'accept');
+  assert.equal(press('n'), 'keep-editing');
+  assert.equal(press('N'), 'keep-editing');
+  assert.equal(press('Enter'), 'native');
+  // Held down (auto-repeat): swallowed, so the panel's Save button is not activated and nothing is saved or dismissed.
+  for (const key of ['Enter', 'y', 'Y', 'n', 'N']) assert.equal(press(key, { repeat: true }), 'swallow', `a repeating ${key}`);
+  // Everything else is the browser's or the form's own: Escape (the cancel command), other letters, modified chords.
+  for (const key of ['Escape', 'Tab', 'a', ' ']) assert.equal(press(key), 'native', key);
+  for (const key of ['Escape', 'a']) assert.equal(press(key, { repeat: true }), 'native', `a repeating ${key}`);
+  for (const modifier of ['ctrlKey', 'altKey', 'metaKey'] as const) {
+    assert.equal(press('y', { [modifier]: true }), 'native', modifier);
+    assert.equal(press('Enter', { [modifier]: true, repeat: true }), 'native', `${modifier} with a repeat`);
+  }
+  // The panel acts on the decision: it swallows with preventDefault and calls the answers only for a fresh Y or N.
+  const entry = readFileSync(new URL('../src/components/masters/entry.tsx', import.meta.url), 'utf8');
+  const panel = entry.slice(entry.indexOf('export function SaveConfirm'));
+  assert.match(panel, /const press = acceptPress\(event\)\n\s+if \(press === 'native'\) return\n\s+event\.preventDefault\(\)\n\s+if \(press === 'accept'\) onConfirm\(\); else if \(press === 'keep-editing'\) onCancel\(\)/);
+  assert.match(panel, /<Alert [^>]*onKeyDown=\{answer\}/);
 });
