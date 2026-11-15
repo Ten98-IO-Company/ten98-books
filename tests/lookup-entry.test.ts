@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { filterChoices, resolveTyped, typedOutcome, typedOutcomeMoves, yesNo } from '../src/lib/lookup-entry.ts';
-import { isChoice, primaryChoice, type Choice } from '../src/lib/masters.ts';
+import { parentChoices, topLevelChoice, type CostCentreRow } from '../src/lib/cost-centre-forms.ts';
+import { groupChoices, isChoice, primaryChoice, type Choice, type GroupRow } from '../src/lib/masters.ts';
 
 const blank = 'Choose one.';
 const sides: Choice[] = [{ value: 'Dr', label: 'Dr · Debit' }, { value: 'Cr', label: 'Cr · Credit' }];
@@ -110,4 +111,29 @@ test('text of only a non-breaking space gives a message without an empty quotati
   assert.ok('error' in result);
   assert.doesNotMatch(result.error, /“”/);
   assert.match(result.error, /not one of the choices/);
+});
+
+test('an exact name that exists only as disabled options is never passed over: the first reason, or "not one of the choices" without one', () => {
+  const withReason: Choice[] = [{ value: 'a', label: 'Cash', disabled: true, disabledReason: 'First reason.' }, { value: 'b', label: 'Cash', disabled: true, disabledReason: 'Second reason.' }, { value: 'c', label: 'Cash at Bank' }];
+  assert.deepEqual(resolveTyped(withReason, 'cash', ''), { error: 'First reason.' }, 'two disabled exact names');
+  const noReason: Choice[] = [{ value: 'a', label: 'Cash', disabled: true }, { value: 'c', label: 'Cash at Bank' }];
+  assert.deepEqual(resolveTyped(noReason, 'cash', ''), { error: '“cash” is not one of the choices. Pick one from the list.' }, 'no reason to give');
+  assert.deepEqual(resolveTyped(noReason, 'cash at', ''), { value: 'c' });
+});
+
+test('words split at the ignored characters on their own: "income" names Misc.Income, not the other name that merely holds it', () => {
+  const list: Choice[] = [{ value: 'a', label: 'Misc.Income' }, { value: 'b', label: 'Reincome' }];
+  assert.deepEqual(filterChoices(list, 'income').map(option => option.value), ['a', 'b'], 'the list shows both');
+  assert.deepEqual(resolveTyped(list, 'income', ''), { value: 'a' }, 'the start of a word picks before "holds it anywhere" is tried');
+});
+
+test('the production choice builders mark Primary and Top level as built in, and a typed name equal to one resolves to it over the name of a user', () => {
+  const group = (id: string, name: string): GroupRow => ({ id, name, parentId: null, nature: 'asset', grossProfit: false, systemKey: null, secondLanguageName: null, revision: 1 });
+  const groups = groupChoices([group('g1', 'Primary'), group('g2', 'Stock')], { primary: true });
+  assert.equal(groups.find(choice => choice.value === primaryChoice)?.builtIn, true);
+  assert.deepEqual(resolveTyped(groups, 'primary', ''), { value: primaryChoice });
+  const centre: CostCentreRow = { id: 'c1', categoryId: 'k1', categoryName: 'Projects', parentId: null, name: 'Top level', secondLanguageName: null, revision: 1, inUse: false };
+  const parents = parentChoices([centre], 'k1');
+  assert.equal(parents.find(choice => choice.value === topLevelChoice)?.builtIn, true);
+  assert.deepEqual(resolveTyped(parents, 'top-level', ''), { value: topLevelChoice });
 });

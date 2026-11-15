@@ -56,7 +56,7 @@ export function resolveTyped(options: readonly Choice[], text: string, current: 
     enabled.filter(option => labelKey(option).includes(key)),
   ];
   const disabledExact = options.filter(option => option.disabled && labelKey(option) === key);
-  if (!exact.length && disabledExact.length === 1 && disabledExact[0].disabledReason) return { error: disabledExact[0].disabledReason };
+  if (!exact.length && disabledExact.length) return { error: disabledExact[0].disabledReason ?? `${quoted} is not one of the choices. Pick one from the list.` };
   for (const found of steps) {
     if (found.length === 1) return { value: found[0].value };
     if (found.length > 1) return { error: `${quoted} could mean more than one choice. Type more of the name, or pick from the list.` };
