@@ -59,7 +59,7 @@ function CostCentreFormBody({ categories, centres, existing, initialCategoryId, 
   const parentIds = useMemo(() => new Set(parentOptions.map(choice => choice.value)), [parentOptions])
   // A new entry is dirty once something is typed (the kept category and parent after a save are not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, confirm)
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const category = categories.find(item => item.id === values.categoryId)
   const parent = centres.find(centre => centre.id === values.parentId)
