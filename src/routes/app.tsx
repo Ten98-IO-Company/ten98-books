@@ -1,4 +1,4 @@
-import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, Stack, WorkspaceProjectSwitcher } from '@ten98/ui'
+import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, WorkspaceProjectSwitcher } from '@ten98/ui'
 import type { NavLinkComponent, SidebarNavGroup } from '@ten98/ui'
 import { AppBrand } from '@ten98/ui/app'
 import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState, type ErrorComponentProps } from '@tanstack/react-router'
@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { version } from '../../package.json'
 import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
-import { KeyboardShell, useBackOverride } from '../components/KeyboardShell'
+import { KeyboardShell, ShellStateScreen } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
@@ -14,6 +14,7 @@ import { sectionPath, workspaceOptions } from '../lib/company'
 import { shellBackTarget } from '../lib/commands'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
+/** An address under /app that no route matches, and a page that fails, show a state screen inside the shell (ShellStateScreen). */
 export const Route = createFileRoute('/app')({ component: AppLayout, notFoundComponent: RouteNotFound, errorComponent: RouteError })
 
 const ShellLink: NavLinkComponent = ({ href, ...props }) => <Link to={href} {...props} />
@@ -149,25 +150,10 @@ function PresentationProvider({ userId, onUnauthorized, children }: { userId: st
   return <AccountPresentationContext value={useAccountPresentationState(userId, onUnauthorized)}>{children}</AccountPresentationContext>
 }
 
-/**
- * A route state inside the shell (an address no route matches, or a page that failed): the shared state screen in a
- * region that takes focus when it appears, so focus is on a named element and not the page body, and Escape goes to the
- * start page (/app), which opens the last company used.
- */
-function RouteState({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
-  const navigate = useNavigate()
-  const region = useRef<HTMLElement>(null)
-  useEffect(() => { region.current?.focus() }, [])
-  useBackOverride(() => void navigate({ to: '/app' }))
-  return <Stack ref={region} tabIndex={-1} role='region' aria-label={title}>
-    <AppStateScreen state={state} surface='plain' brand={false} aside={null} title={title} message={message} onRetry={onRetry} homeHref={state === 'not-found' ? '/app' : undefined} retryLabel={state === 'not-found' ? 'Go to the start page' : undefined} />
-  </Stack>
-}
-
 function RouteNotFound() {
-  return <RouteState state='not-found' title='Page not found' message='This address does not open a page of the application.' />
+  return <ShellStateScreen state='not-found' title='Page not found' message='This address does not open a page of the application.' />
 }
 
 function RouteError({ reset }: ErrorComponentProps) {
-  return <RouteState state='error' title='This page could not be shown' message='Something went wrong while showing this page.' onRetry={reset} />
+  return <ShellStateScreen state='error' title='This page could not be shown' message='Something went wrong while showing this page.' onRetry={reset} />
 }

@@ -1,4 +1,4 @@
-import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } from '@ten98/ui'
+import { AppStateScreen, Dialog, ShortcutProvider, ShortcutScope, Stack, useCommand, useCommandKeys } from '@ten98/ui'
 import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
@@ -302,4 +302,25 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
       {open && <KeyboardMenu label={text.title} groups={groups} active={active} onActiveChange={setActive} menuRef={menu} />}
     </Dialog>
   </DialogKeys>
+}
+
+/**
+ * A state screen inside the signed-in shell: an address no route matches, a company that cannot be opened, a page that
+ * failed. The shared AppStateScreen, whose heading takes focus when it appears so that focus is never left on the page
+ * body, and Escape (and Ctrl+Q in classic) goes to the start page (/app), which opens the last company used. What it
+ * shows depends only on its props: the company layout gives "Company not found" with the server's one message for a
+ * company the person is not a member of and for an id that does not exist, so the two pages cannot be told apart.
+ */
+export function ShellStateScreen({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
+  const navigate = useNavigate()
+  const region = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const heading = region.current?.querySelector<HTMLElement>('h1, h2')
+    if (heading) { heading.tabIndex = -1; heading.focus() } else region.current?.focus()
+  }, [])
+  useBackOverride(() => void navigate({ to: '/app' }))
+  return <Stack ref={region} tabIndex={-1} role='region' aria-label={title}>
+    <AppStateScreen state={state} surface='plain' brand={false} aside={null} title={title} message={message} onRetry={onRetry}
+      homeHref={state === 'not-found' ? '/app' : undefined} retryLabel={state === 'not-found' ? 'Go to the start page' : undefined} />
+  </Stack>
 }

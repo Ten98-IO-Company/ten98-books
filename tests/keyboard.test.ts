@@ -888,11 +888,13 @@ test('KEY-066: the action bar shows only what can run, and a command without a k
   assert.match(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'), /companyOpen=\{ready\}/)
 })
 
-test('router not-found and error states inside the shell: the shared state screen in a focused region, Escape to the start page', () => {
+test('router not-found and error states inside the shell: the shared state screen with a focused heading, Escape to the start page', () => {
   const app = readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8')
+  const shell = readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8')
   assert.match(app, /createFileRoute\('\/app'\)\(\{ component: AppLayout, notFoundComponent: RouteNotFound, errorComponent: RouteError \}\)/)
-  assert.match(app, /useEffect\(\(\) => \{ region\.current\?\.focus\(\) \}, \[\]\)/)
-  assert.match(app, /useBackOverride\(\(\) => void navigate\(\{ to: '\/app' \}\)\)/)
-  assert.match(app, /tabIndex=\{-1\} role='region' aria-label=\{title\}/)
+  assert.match(shell, /if \(heading\) \{ heading\.tabIndex = -1; heading\.focus\(\) \} else region\.current\?\.focus\(\)/)
+  assert.match(shell, /useBackOverride\(\(\) => void navigate\(\{ to: '\/app' \}\)\)/)
+  // The company layout's not-found and failed loads use the same screen.
+  assert.match(readFileSync(new URL('../src/routes/app/c.$companyId.tsx', import.meta.url), 'utf8'), /<ShellStateScreen state='not-found' title='Company not found'/)
   assert.doesNotMatch(app, /Development preview/, 'the badge is gone (owner decision)')
 })

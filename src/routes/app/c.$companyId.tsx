@@ -2,6 +2,7 @@ import { Button, EmptyState, StatusLine } from '@ten98/ui'
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { CompanySetupForm } from '../../components/CompanySetupForm'
+import { ShellStateScreen } from '../../components/KeyboardShell'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { CompanyContext, useApp } from '../../lib/app-context'
 import type { Company } from '../../lib/company'
@@ -52,8 +53,10 @@ function CompanyLayout() {
         setError(null); setCompany(result.company)
       }} />
   }
-  if (error) return <EmptyState icon='building' title={error.kind === 'missing' ? 'Company not found' : 'The company could not be loaded'} description={error.message}
-    action={error.kind === 'missing' ? undefined : <Button variant='secondary' onClick={() => setAttempt(value => value + 1)}>Try again</Button>} />
+  // Not found and failed loads use the shell's state screen. Its text is the title and the server's message only: the
+  // server answers one identical 404 for a company the person is not a member of and for an id that does not exist.
+  if (error) return error.kind === 'missing' ? <ShellStateScreen state='not-found' title='Company not found' message={error.message} />
+    : <ShellStateScreen state='error' title='The company could not be loaded' message={error.message} onRetry={() => setAttempt(value => value + 1)} />
   if (!company || company.id !== companyId) return <StatusLine busy>Loading the company…</StatusLine>
   return <CompanyContext value={company}><Outlet /></CompanyContext>
 }
