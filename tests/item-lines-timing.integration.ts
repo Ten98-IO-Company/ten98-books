@@ -21,6 +21,8 @@ const items = 500;
 
 before(async () => {
   database = await freshDatabase('item_timing');
+  // Statistics come only from the ANALYZE of the tests below, never from autovacuum, so no plan flips with timing.
+  await asAdmin(database.adminUrl, admin => admin.query('ALTER TABLE inventory_line SET (autovacuum_enabled = false); ALTER TABLE voucher SET (autovacuum_enabled = false)'));
   owner = await setupOwner();
   companyId = await createCompany(owner.browser, { name: 'Item Timing' });
   books = await chart(owner.browser, companyId);
@@ -85,12 +87,10 @@ const counters = async (client: PoolClient): Promise<Counters> => {
 };
 
 test('the rows the checks fetch for 500 items on one line, beside 5,000 vouchers with 20,000 item rows, with no statistics and then analysed: about n x n item rows, a few voucher rows a row, never a sequential read', async t => {
-  // Statistics come only from the ANALYZE below: autovacuum is off for the two tables, so the plans cannot flip
-  // mid-test. The tables are large enough that an index must win: on a one-page voucher table the planner may take any
-  // index led by company_id and read the whole page for each lookup.
+  // Statistics come only from the ANALYZE below (autovacuum is off for the two tables). The tables are large enough
+  // that an index must win: on a one-page voucher table the planner may take any index led by company_id and read the
+  // whole page for each lookup.
   await asAdmin(database.adminUrl, async admin => {
-    await admin.query('ALTER TABLE inventory_line SET (autovacuum_enabled = false)');
-    await admin.query('ALTER TABLE voucher SET (autovacuum_enabled = false)');
     await admin.query('BEGIN');
     await admin.query("SELECT set_config('app.company_ids', $1, true)", [companyId]);
     const journal = books.type('stock_journal');
@@ -137,6 +137,7 @@ test('the rows the checks fetch for 500 items on one line, beside 5,000 vouchers
 });
 
 test('an alter that replaces a stock journal of 500 rows: the delete check locks the voucher row, one primary-key fetch a row', async t => {
+  await asAdmin(database.adminUrl, admin => admin.query('ANALYZE inventory_line; ANALYZE voucher'));
   const rows = (rate: number) => Array.from({ length: items }, (_, index) => ({ itemId: ids.item, locationId: ids.main, quantity: '1', rate: rate.toFixed(2), direction: index % 2 ? 'in' : 'out' }));
   await inCompany(owner.userId, companyId, async context => {
     const created = await createVoucher(context, { idempotencyKey: `journal-${randomUUID()}`, voucherTypeId: books.type('stock_journal'), date: '2026-02-10', lines: [], inventory: rows(1) });
