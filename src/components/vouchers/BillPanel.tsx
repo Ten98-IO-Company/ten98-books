@@ -82,7 +82,8 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
     { id: 'side', label: 'Dr or Cr', type: 'side', sides, required: true },
   ], [billOptions, date, exponent])
 
-  function change(next: BillDraft[]) { latest.current = next; setDrafts(next) }
+  // A shown refusal follows the rows: it goes once they no longer add up to more than the line.
+  function change(next: BillDraft[]) { latest.current = next; setDrafts(next); setOver(previous => previous && overProblem(next)) }
 
   const [over, setOver] = useState('')
   /** Rows above the line's amount (or netting to its other side) are refused here, before the server would. */
@@ -136,8 +137,10 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
             onEnd={context => {
               // Enter on a row's last cell: the panel closes once the rows cover the line (observed), else a row follows for the rest.
               const rows = fromRows(context.rows)
+              // Shown at once; the cursor still walks the row, and the row's last cell holds it there.
               const problem = overProblem(rows)
-              if (problem) { setOver(problem); return problem }
+              setOver(problem)
+              if (problem) return context.column === 'side' ? problem : undefined
               if (context.column !== 'side' || !billsCover(rows, line.side, line.amount, exponent)) return
               return accept(rows) || undefined
             }} />

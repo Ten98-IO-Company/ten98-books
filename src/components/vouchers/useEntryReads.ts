@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { parseMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime/browser'
+import { parseMoney, type MoneyExponent } from '@ten98/runtime/browser'
 import { api, ApiError } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
 import type { BillPickerRow } from '../../lib/bills'
-import { financialYearOf } from '../../lib/company'
-import type { CounterLedger, NextNumber, Side, TrialBalanceRow } from '../../lib/ledger'
+import type { CounterLedger, NextNumber, Side } from '../../lib/ledger'
 import type { Wire } from '../../lib/money'
 import type { PendingChoice } from '../../lib/voucher-entry'
 
@@ -33,25 +32,20 @@ export function useNextNumber(companyId: string, voucherTypeId: string | null, d
 export type PreviewLine = { ledgerId: string; side: Side; amount: string }
 
 /**
- * Each named ledger's balance at the date with the draft applied (signed minor units, positive on the debit side): the
- * preview read for the draft's complete lines, and the plain balance for a ledger chosen without an amount yet (the
- * single-entry Account before its first line). The screen computes no balance itself.
+ * Each named ledger's balance at the date with the draft applied (signed minor units, positive on the debit side), from
+ * the one preview read: the draft's complete lines, and `others` (the single-entry Account before its first line, a
+ * ledger chosen without an amount yet) named in its `ledgers`. The screen computes no balance itself.
  */
-export function useResultingBalances(companyId: string, date: string, lines: readonly PreviewLine[], others: readonly string[], financialYearStart: { month: number; day: number }, exponent: MoneyExponent): ReadonlyMap<string, bigint> {
+export function useResultingBalances(companyId: string, date: string, lines: readonly PreviewLine[], others: readonly string[], exponent: MoneyExponent): ReadonlyMap<string, bigint> {
   const { unauthorized } = useApp()
   const [balances, setBalances] = useState<ReadonlyMap<string, bigint>>(new Map())
   const key = JSON.stringify([date, lines, others])
   useEffect(() => {
     const controller = new AbortController()
-    const from = financialYearOf(financialYearStart, date).from
-    const named = new Set(lines.map(line => line.ledgerId))
-    const plain = [...new Set(others)].filter(ledgerId => !named.has(ledgerId))
-    Promise.all([
-      lines.length ? api<{ balances: { ledgerId: string; balance: string }[] }>(`/api/companies/${companyId}/vouchers/balance-preview`, { method: 'POST', body: { date, lines }, signal: controller.signal })
-        .then(found => found.balances.map(entry => [entry.ledgerId, parseMoney(entry.balance, exponent)] as const)) : Promise.resolve([]),
-      ...plain.map(ledgerId => api<{ balance: Wire<TrialBalanceRow> }>(`/api/companies/${companyId}/ledgers/${ledgerId}/balance?from=${from}&to=${date}`, { signal: controller.signal })
-        .then(found => [ledgerId, subtractMoney(parseMoney(found.balance.closingDebit, exponent), parseMoney(found.balance.closingCredit, exponent))] as const)),
-    ]).then(([preview, ...rest]) => { if (!controller.signal.aborted) setBalances(new Map([...preview, ...rest])) })
+    const ledgers = [...new Set(others)]
+    if (!lines.length && !ledgers.length) { setBalances(new Map()); return }
+    api<{ balances: { ledgerId: string; balance: string }[] }>(`/api/companies/${companyId}/vouchers/balance-preview`, { method: 'POST', body: { date, lines, ledgers }, signal: controller.signal })
+      .then(found => { if (!controller.signal.aborted) setBalances(new Map(found.balances.map(entry => [entry.ledgerId, parseMoney(entry.balance, exponent)]))) })
       .catch(cause => { if (!controller.signal.aborted && cause instanceof ApiError && cause.status === 401) unauthorized() })
     return () => controller.abort()
   }, [companyId, key])

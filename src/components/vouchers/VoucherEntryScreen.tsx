@@ -76,7 +76,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const number = useNextNumber(company.id, voucherType?.id ?? null, state.date, refresh)
   const preview = useMemo(() => bodyLines(state, exponent).map(line => ({ ledgerId: line.ledger, side: line.side, amount: line.amount })), [state, exponent])
   const others = useMemo(() => [state.account, ...state.lines.map(line => line.ledger)].filter(Boolean), [state.account, state.lines])
-  const balances = useResultingBalances(company.id, state.date, preview, others, company.financialYearStart, exponent)
+  const balances = useResultingBalances(company.id, state.date, preview, others, exponent)
 
   const [dateText, setDateTextState] = useState<string | null>(null)
   // Commands read the date text from here: keys pressed faster than React renders still see the latest text.
@@ -90,7 +90,9 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   // The screen's own notices (a refused switch) live apart from the grid's announcements, so a commit does not overwrite them.
   const [notice, setNotice] = useState('')
   // Text typed in a line cell and not committed yet counts as entered (the leave guard asks).
-  const [typing, setTyping] = useState(false)
+  const [typing, setTypingState] = useState(false)
+  const typingRef = useRef(false)
+  const setTyping = (value: boolean) => { typingRef.current = value; setTypingState(value) }
   const [failure, setFailure] = useState<{ message: string; unknown?: boolean } | null>(null)
   const [saved, setSaved] = useState('')
   const [typeList, setTypeList] = useState(false)
@@ -101,7 +103,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const askToLeave = useCallback(async () => {
     // Text still in a cell's editor is committed first, then what was entered decides (a guard call with nothing entered passes).
     grid.current?.commit()
-    if (!draftDirty(latest.current)) return true
+    // Text the grid dropped as focus left the cell (it named no ledger) counts too: it was typed (the guard asks).
+    if (!draftDirty(latest.current) && !typingRef.current) return true
     const yes = await confirm({ title: `Leave this ${kindTitles[latest.current.kind].toLowerCase()} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' })
     // Kept: back to where the cursor was, also when the question came from a link or a key outside the voucher.
     if (!yes) window.setTimeout(() => focus(afterDate(lastOrigin.current)), 0)
@@ -189,17 +192,14 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     else if (index >= 0) focus({ cell: { row: lines[index + 1].key, column: layout === 'double' ? 'side' : 'ledger' } })
   }
 
-  const panelShown = useRef<string | null>(null)
   function onEnd(context: EntryEndContext): boolean | void {
     const lines = fromGridRows(context.rows)
     const line = lines.find(entry => entry.key === context.row)
     // A bill-wise line opens its bills first, also on Enter over an unchanged amount (observed).
-    if (context.column === 'amount' && needsBills(line) && panelShown.current !== context.row) {
-      panelShown.current = context.row
+    if (context.column === 'amount' && needsBills(line) && continuing.current !== context.row) {
       grid.current?.openPanel(context.row)
       return true
     }
-    panelShown.current = null
     const end = listEnd({ layout: latest.current.layout, lines, row: context.row, column: context.column, accountIsCash: cashInHand.has(latest.current.account), exponent })
     if (!end) return
     focus(end)
@@ -220,7 +220,6 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     }
     // Lines before the last open their bills here; the last line does it through onEnd.
     if (event.column === 'amount' && event.changed && index < lines.length - 1 && needsBills(line)) {
-      panelShown.current = line.key
       grid.current?.openPanel(line.key)
     }
   }
@@ -294,6 +293,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   function switchTo(kind: EntryKind, layout: EntryLayout): boolean {
     grid.current?.commit()
     setTypeList(false); setModeList(false); setPrompt(false); setFailure(null)
+    if (dateRef.current !== null) { setDateText(null); setDateError(undefined) }
     const relaid = relayLines(latest.current, { kind, layout }, exponent, nextKey, ledgerId => ledgerById.get(ledgerId)?.cashOrBank === true)
     if ('refused' in relaid) { setNotice(relaid.refused); return false }
     setNotice('')
@@ -301,7 +301,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     dispatch({ type: 'relaid', relaid })
     writeStored(sessionStore, lastTypeKey(userId, company.id), kind)
     // The cursor goes to line 1's ledger with its list open (observed); single entry starts on the Account.
-    window.setTimeout(() => focus(firstField()), 0)
+    // After the grid has re-rendered and settled its own focus, so the first field keeps it.
+    window.setTimeout(() => window.requestAnimationFrame(() => focus(firstField())), 0)
     return true
   }
   const switchType = (kind: EntryKind) => switchTo(kind, readLayout(kind, sessionStore, userId, company.id))
@@ -334,7 +335,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   }
 
   async function save() {
-    if (!voucherType || locked) return
+    // Locked by an unknown outcome, the only save is "Check and retry" (the same voucher, the same key); never two at once.
+    if (!voucherType || draft.busy) return
     if (grid.current?.commit() === false) return
     setPrompt(false)
     const problem = problemBeforeSave()
@@ -455,7 +457,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       }
     }
     grid.current?.commit()
-    if (escapeStep('', draftDirty(latest.current)) === 'leave') { guard.pass(leave); return }
+    if (escapeStep('', draftDirty(latest.current) || typingRef.current) === 'leave') { guard.pass(leave); return }
     if (await askToLeave()) guard.pass(leave)
   }
 
@@ -479,7 +481,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     </Alert>}
     {saved && <StatusLine tone='success' live='polite'>{saved}</StatusLine>}
     {failure && <Alert tone='danger' title={failure.unknown ? 'Not known whether it was saved' : 'Not saved'}
-      actions={failure.unknown ? <Inline gap={2}><Button size='sm' onClick={() => void save()}>Check and retry</Button><Button size='sm' variant='secondary' onClick={() => void cancel()}>Leave</Button></Inline> : undefined}>
+      actions={failure.unknown ? <Inline gap={2}><Button size='sm' autoFocus onClick={() => void save()}>Check and retry</Button><Button size='sm' variant='secondary' onClick={() => void cancel()}>Leave</Button></Inline> : undefined}>
       {failure.message}
     </Alert>}
     {warnings.map(warning => <Alert key={warning} tone='warning'>{warning}</Alert>)}
