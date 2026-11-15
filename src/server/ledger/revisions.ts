@@ -23,3 +23,15 @@ export async function listRevisions(context: LedgerContext, entity: Revision['en
     [context.company.companyId, entity, entityId]);
   return rows;
 }
+
+/**
+ * The history route of a master: 404 when the company has neither a revision nor a row for that id (it never existed in
+ * this company, or belongs to another), as the read routes answer. A deleted master keeps its revisions, so its history
+ * stays readable; a seeded master nobody has changed has a row and no revision, so its history is an empty list.
+ * `read` is the module's own read of one row, which refuses a missing one with 404.
+ */
+export async function masterHistory(context: LedgerContext, entity: Revision['entity'], entityId: string, read: (context: LedgerContext, id: string) => Promise<unknown>): Promise<Revision[]> {
+  const revisions = await listRevisions(context, entity, entityId);
+  if (!revisions.length) await read(context, entityId);
+  return revisions;
+}

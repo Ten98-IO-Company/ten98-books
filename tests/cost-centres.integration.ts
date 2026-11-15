@@ -413,7 +413,6 @@ test('every cost centre route answers not found for a company the user cannot re
   }
   // Their ids inside my company: not found as well, and nothing of theirs changes.
   for (const path of reads.filter(item => item.includes(category) || item.includes(centre) || item.includes(ledger))) {
-    if (path.includes('/revisions')) continue; // a history read by id returns an empty list for an id of no row here
     const answer = await mine.call(path);
     assert.deepEqual([answer.status, answer.body.code], [404, 'not_found'], `wrong company ${path}`);
   }
@@ -431,7 +430,6 @@ test('every cost centre route answers not found for a company the user cannot re
       lines: [line(myParty, 'Dr', '10'), line(mySales, 'Cr', '10', cost)] });
     assert.deepEqual([answer.status, answer.body.code], [status, code], JSON.stringify(cost));
   }
-  assert.deepEqual((await mine.call(`/cost-centres/${centre}/revisions`)).body.revisions, []);
   assert.equal((await theirs.ok(`/cost-centres/${centre}`)).costCentre.name, 'Their Centre');
 });
 

@@ -7,7 +7,7 @@ import { assignableRoles, inviteResultText, inviteRoleOptions, type InviteResult
 type Member = { userId: string; name: string; email: string; role: WorkspaceRole }
 type Invitation = { id: string; email: string; role: WorkspaceRole; expiresAt: string }
 type Team = { workspace: { id: string; name: string; twoFactorRequired: boolean }; role: 'owner' | 'admin'; members: Member[]; invitations: Invitation[]; emailConfigured: boolean }
-type Issued = { invitation: Invitation; inviteUrl: string; email?: 'accepted' | 'failed' | 'disabled' }
+type Issued = { invitation: Invitation; inviteUrl: string; email?: 'accepted' | 'limited' | 'failed' | 'disabled' }
 
 /** Request adapter around the shared TeamFlow over the workspace-team controller routes (owners and admins). */
 export function TeamPanel({ workspaceId, userId, onChanged, onUnauthorized }: { workspaceId: string; userId: string; onChanged: () => void; onUnauthorized: () => void }) {

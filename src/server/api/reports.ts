@@ -5,11 +5,10 @@ import { balanceSheetCsv, csvDocument, dayBookCsv, groupSummaryCsv, ledgerMonthl
 import { dayBookReport, reportDefaults } from '../reports/day-book.ts';
 import { ledgerMonthlyReport, ledgerVouchersReport } from '../reports/ledger.ts';
 import { balanceSheetReport, groupSummaryReport, profitAndLossReport, trialBalanceReport } from '../reports/statements.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, limit, methodNotAllowed, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const route = new RegExp(`^/api/companies/(${uuid})/reports/(defaults|${reportNames.join('|')})(?:/(${uuid}))?(/export)?$`, 'i');
-const notAllowed = () => json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
 /** Exports per user per minute. An export reads a whole period (up to 100,000 lines) on the 30-second budget. */
 export const exportsPerMinute = 20;
 
@@ -64,7 +63,7 @@ export const reportsApi: SignedInArea = async ({ request, url, path, user }) => 
   const [, companyId, rawName, rawSubject, exported] = match as unknown as [string, string, string, string | undefined, string | undefined];
   const name = rawName.toLowerCase() as ReportName | 'defaults';
   const subject = rawSubject?.toLowerCase() ?? null;
-  if (request.method !== 'GET') return notAllowed();
+  if (request.method !== 'GET') return methodNotAllowed('GET');
 
   if (name === 'defaults') {
     if (subject || exported) return null;

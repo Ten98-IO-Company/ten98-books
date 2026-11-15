@@ -1,16 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { getSessionCookie, parseCookies } from 'better-auth/cookies';
+import { appOrigin } from '@ten98/runtime';
+import { parseCookies } from 'better-auth/cookies';
 import { verifyPassword } from 'better-auth/crypto';
 import { ten98AuthPolicy } from '@ten98/runtime/auth';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
-import { FoundationError, getAuth } from './auth.ts';
+import { authCookiePrefix, FoundationError, getAuth } from './auth.ts';
 import { getConfig } from './config.ts';
 import { clientRateKey, clientRateLimit, emailLimitKey } from './client-rate-limit.ts';
 import { getDatabase } from './db.ts';
 import { getEmailStatus, sendTransactionalEmail } from './email.ts';
 import { readJson } from './validation.ts';
-import { toJson } from './api/http.ts';
+import { methodNotAllowed, toJson } from './api/http.ts';
 import { accountPreferencesDefaults, accountPreferencesDtoSchema, accountPreferencesInputSchema, accountPreferencesMaxRevision, type AccountPreferencesDto } from '../lib/account-preferences.ts';
 
 // Per-minute counts shared with the other Ten98 apps; `limit` counts in one-minute windows (windowSeconds).
@@ -33,7 +34,7 @@ const accountInputs = {
   '/api/account/two-factor/enable': passwordInput,
   '/api/account/two-factor/verify': codeInput,
   '/api/account/two-factor/disable': disableInput,
-  '/api/account/two-factor/recovery-codes': passwordInput,
+  '/api/account/two-factor/recovery-codes': disableInput,
 } as const;
 
 function parsed<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
@@ -111,6 +112,34 @@ async function keepResponseSession(client: PoolClient, auth: Auth, request: Requ
   await revokeOtherSessions(client, userId, current.session.id);
 }
 
+/** The one name the library reads the challenge under: the auth prefix, with `__Secure-` when the app URL is https. */
+function challengeCookieName(): string {
+  return `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${authCookiePrefix()}.two_factor`;
+}
+
+/**
+ * The sign-in challenge cookie exactly as the library verifies it, from the raw Cookie header (not either library parser:
+ * they disagree on duplicate names). Only pairs with the one exact name count; every other name is ignored, our own
+ * variants included, since the library never reads them (refusing on them would let a planted cookie deny a second step).
+ * The exact name twice is `duplicate` (the library would read the first); otherwise the value must have an identifier of
+ * the library's shape (`2fa-` and 20 random characters) before its last `.`. Anything else answers null.
+ */
+function challengeCookie(request: Request): { identifier: string } | 'duplicate' | null {
+  const name = challengeCookieName();
+  const pairs = (request.headers.get('cookie') ?? '').split(';').map(pair => pair.trim()).filter(Boolean)
+    .map(pair => { const at = pair.indexOf('='); return at < 0 ? [pair, ''] : [pair.slice(0, at).trim(), pair.slice(at + 1).trim()]; })
+    .filter(([pairName]) => pairName === name);
+  if (pairs.length > 1) return 'duplicate';
+  if (pairs.length !== 1 || !pairs[0][1]) return null;
+  let decoded: string;
+  try { decoded = decodeURIComponent(pairs[0][1]); } catch { return null; }
+  const at = decoded.lastIndexOf('.');
+  if (at < 1) return null;
+  const identifier = decoded.slice(0, at);
+  return /^2fa-[A-Za-z0-9_-]{20}$/.test(identifier) ? { identifier } : null;
+}
+
+// Single use of an authenticator code, interim: removed when the shared preset's own single-use guard is adopted.
 async function isRepeatedCode(client: PoolClient, userId: string, code: string): Promise<boolean> {
   const key = `totp-used:${userId}:${createHash('sha256').update(code).digest('hex')}`;
   const found = await client.query('SELECT 1 FROM verification WHERE identifier=$1 AND "expiresAt">clock_timestamp()', [key]);
@@ -125,12 +154,31 @@ async function rememberCode(client: PoolClient, userId: string, code: string) {
     [randomUUID(), `totp-used:${userId}:${createHash('sha256').update(code).digest('hex')}`]);
 }
 
+/** One refusal for a wrong password and a wrong code, on the actions that take both: it does not tell which was wrong. */
+const proofRefused = 'The password or the code was not accepted.';
+
 async function requireFactorProof(client: PoolClient, request: Request, userId: string, details: { code?: string; backupCode?: string }) {
   if ((!details.code && !details.backupCode) || (details.code && details.backupCode)) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
-  if (details.code && await isRepeatedCode(client, userId, details.code)) throw new FoundationError(409, 'Wait for the next authenticator code, then try again.');
   const response = await invoke(getAuth(client), request, details.code ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', { code: details.code ?? details.backupCode });
-  if (!response.ok) throw new FoundationError(400, 'The verification code was not accepted.');
+  if (!response.ok) throw new FoundationError(400, proofRefused);
   if (details.code) await rememberCode(client, userId, details.code);
+}
+
+/**
+ * Every path a cookie can carry and still be sent with a request to `pathname`: the root, then each prefix of the path
+ * with and without a trailing slash (the whole path with one only when the request had it). Eight for a verify route,
+ * nine when it is requested with a trailing slash.
+ */
+function cookiePathsOf(pathname: string): string[] {
+  const segments = pathname.split('/').filter(Boolean);
+  const paths = ['/'];
+  let prefix = '';
+  segments.forEach((segment, index) => {
+    prefix += `/${segment}`;
+    paths.push(prefix);
+    if (index < segments.length - 1 || pathname.endsWith('/')) paths.push(`${prefix}/`);
+  });
+  return paths;
 }
 
 export async function handleAccountSecurity(request: Request, limit: Limit): Promise<Response | null> {
@@ -138,7 +186,7 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   // Exact public routes only; the upstream callback/token and proof APIs stay private.
   if (['/api/auth/password-reset-status', '/api/auth/request-password-reset', '/api/auth/reset-password'].includes(url.pathname)) {
     const status = url.pathname === '/api/auth/password-reset-status', asking = url.pathname === '/api/auth/request-password-reset';
-    if (request.method !== (status ? 'GET' : 'POST')) return json({ error: 'Method not allowed.' }, 405);
+    if (request.method !== (status ? 'GET' : 'POST')) return methodNotAllowed(status ? 'GET' : 'POST');
     if (url.search || url.hash) throw new FoundationError(400, 'Password recovery does not accept URL parameters.');
     if (status) {
       if (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0') throw new FoundationError(400, 'Read recovery availability without a request body.');
@@ -171,7 +219,7 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       if (captured.message) {
         const message = captured.message, link = new URL(`/#password-reset=${message.token}`, getConfig().appUrl).href;
         // No PoolClient/auth instance survives into delivery, and no automatic retry is scheduled.
-        setImmediate(() => { void sendTransactionalEmail({ to: message.to, subject: 'Reset your Books password', text: `A password reset was requested for your Books account.\n\nOpen this link within one hour:\n${link}\n\nThe link works once. Your existing two-factor settings and recovery codes stay unchanged. If you did not request this, ignore this email.` }).catch(() => undefined); });
+        setImmediate(() => { void sendTransactionalEmail({ to: message.to, subject: 'Reset your Books password', text: `A password reset was requested for your Books account.\n\nOpen this link within one hour:\n${link}\n\nThe link works once. Your existing two-factor settings and recovery codes stay unchanged. If you did not request this, ignore this email.` }).catch(() => console.warn('Password recovery email not sent: failed.')); });
       }
       return json({ ok: true });
     }
@@ -202,7 +250,10 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   const status = path === '/api/account/security';
   const mutation = Object.hasOwn(accountInputs, path);
   if (!signIn && !challenge && !status && !mutation) return null;
-  if (request.method !== (status ? 'GET' : 'POST')) return json({ error: 'Method not allowed.' }, 405);
+  // Account status and changes check the session before the method, the body or anything else, as every signed-in route
+  // does: signed out, each answers 401. Sign-in and the challenge routes are for callers without a session.
+  const identity = signIn || challenge ? null : await sessionOrRefuse(request);
+  if (request.method !== (status ? 'GET' : 'POST')) return methodNotAllowed(status ? 'GET' : 'POST');
   const input = status ? undefined : await readJson(request);
 
   if (signIn) {
@@ -224,28 +275,54 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     const details = parsed(totp ? codeInput : backupInput, input);
     const perClient = clientRateLimit(request, 'two-factor');
     await limit(perClient.key, perClient.maximum);
-    const cookie = getSessionCookie(request, { cookieName: 'two_factor' }) ?? '';
-    await limit(`two-factor:${createHash('sha256').update(cookie).digest('hex')}`, limits.twoFactorPerChallenge);
+    // The handler keys, locks and checks exactly the cookie the library verifies (challengeCookie): anything missing or
+    // ambiguous is refused before the library runs, in the same words, so nothing tells whether a challenge existed.
+    const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
+    const cookie = challengeCookie(request);
+    // The exact name twice: refused, and the name expired with the library's attributes on every path that is sent with
+    // this request, host-only and once more with Domain=<this host>. A browser keeps two cookies of one name apart by
+    // path, by domain and by host-only or not, so this removes the real one and any copy this host can reach; signing in
+    // again then recovers. A copy set with a parent Domain is not cleared, because the server cannot know which parent
+    // was used; closing that needs a `__Host-` name, which is the shared preset's decision.
+    if (cookie === 'duplicate') {
+      const response = refused();
+      const expired = `${challengeCookieName()}=; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`;
+      const host = new URL(getConfig().appUrl).hostname;
+      for (const domain of ['', `; Domain=${host}`]) {
+        for (const cookiePath of cookiePathsOf(url.pathname)) response.headers.append('set-cookie', `${expired}; Path=${cookiePath}${domain}`);
+      }
+      return response;
+    }
+    if (!cookie) return refused();
+    await limit(`two-factor:${createHash('sha256').update(cookie.identifier).digest('hex')}`, limits.twoFactorPerChallenge);
     return transaction(async (client, auth) => {
       if (await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } })) {
         return json({ error: 'This sign-in is already complete.' }, 409);
       }
-      // An untrusted cookie prefix is only a lock hint, never authentication.
-      // Better Auth validates the signed cookie and consumes the challenge below.
-      const identifier = cookie.split('.')[0];
-      const pending = await client.query<{ value: string }>('SELECT value FROM verification WHERE identifier=$1 AND "expiresAt">clock_timestamp()', [identifier]);
-      const userId = pending.rows[0]?.value;
-      if (userId) await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
-      if (totp && userId && await isRepeatedCode(client, userId, details.code)) return json({ error: 'Wait for the next authenticator code, then try again.' }, 409);
+      // The identifier is only a lock and lookup hint, never authentication: Better Auth validates the signed cookie and
+      // consumes the challenge below. The row read is the identifier's newest, as the library reads it; an expired one is
+      // refused here, so the library never answers it (its answer would clear the cookie). The join keeps the row to the
+      // challenge itself (its value an existing user), never its attempts counter or another verification row; no test pins
+      // it, since no reachable row under a challenge identifier names anything but a user.
+      const pending = await client.query<{ id: string }>(
+        'SELECT u.id FROM verification v JOIN "user" u ON u.id=v.value WHERE v.identifier=$1 AND v."expiresAt">clock_timestamp() ORDER BY v."createdAt" DESC LIMIT 1', [cookie.identifier]);
+      const userId = pending.rows[0]?.id;
+      if (!userId) return refused();
+      await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
+      if (totp && await isRepeatedCode(client, userId, details.code)) return json({ error: 'Wait for the next authenticator code, then try again.' }, 409);
       const response = await invoke(auth, request, totp ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', details);
       if (!response.ok) return rejected(response, 'The code was not accepted. Try another code or sign in again.');
-      if (totp && userId) await rememberCode(client, userId, details.code);
+      // The session the library created must be that user's; otherwise the transaction rolls back and nothing is signed in.
+      // Both read the identifier's newest row, so they differ only if a newer row is committed between the lookup and the
+      // library's read (the test does so while the user lock above waits): defence in depth.
+      const verified = await response.clone().json().catch(() => null) as { user?: { id?: unknown } } | null;
+      if (verified?.user?.id !== userId) throw new FoundationError(401, 'The code was not accepted. Try another code or sign in again.');
+      if (totp) await rememberCode(client, userId, details.code);
       return json({ ok: true }, 200, response);
     });
   }
 
   if (mutation) parsed(accountInputs[path as keyof typeof accountInputs], input);
-  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!identity) throw new FoundationError(401, 'Sign in to continue.');
   await limit(`account-security:${status ? 'read' : 'write'}:${identity.user.id}`, status ? limits.accountSecurityReadsPerUser : limits.accountSecurityWritesPerUser);
   return transaction(async (client, auth) => {
@@ -298,19 +375,30 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       await keepResponseSession(client, auth, request, response, userId);
       return json({ ok: true, twoFactorEnabled: true }, 200, response);
     }
+    // Turning two-factor off and replacing the recovery codes each need the second factor as well as the password: new
+    // recovery codes would otherwise satisfy the factor proof that turning it off asks for. The password is checked first,
+    // so a refused password never consumes a recovery code or an authenticator window.
+    const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
+    // With two-factor on, a request without a code, with both kinds, or with an authenticator code accepted in the last
+    // 90 seconds is refused first, the same way whatever the password and before any password hash runs, so the answer
+    // never tells whether the password was right. Then the password (a wrong one never spends a code), then the code.
+    if (current.user.twoFactorEnabled && !details.code && !details.backupCode) {
+      throw path === '/api/account/two-factor/recovery-codes'
+        ? new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required')
+        : new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
+    }
+    if (current.user.twoFactorEnabled && details.code && details.backupCode) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
+    if (current.user.twoFactorEnabled && details.code && await isRepeatedCode(client, userId, details.code)) throw new FoundationError(409, 'Wait for the next authenticator code, then try again.');
+    const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
+    if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, proofRefused);
+    if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
     if (path === '/api/account/two-factor/disable') {
-      const details = parsed(accountInputs[path], input);
-      const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
-      // The password is checked before the factor so a refused password never consumes a recovery code or authenticator window.
-      if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, 'The current password was not accepted.');
-      // Turning off two-factor needs the second factor as well as the password.
-      if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
       const response = await invoke(auth, request, '/two-factor/disable', { password: details.password });
       if (!response.ok) return rejected(response, 'The current password was not accepted.');
       await keepResponseSession(client, auth, request, response, userId);
       return json({ ok: true, twoFactorEnabled: false }, 200, response);
     }
-    const response = await invoke(auth, request, '/two-factor/generate-backup-codes', parsed(passwordInput, input));
+    const response = await invoke(auth, request, '/two-factor/generate-backup-codes', { password: details.password });
     if (!response.ok) return rejected(response, 'Check your password and enable two-factor authentication before replacing recovery codes.');
     const data = await response.json();
     await revokeOtherSessions(client, userId, current.session.id);
@@ -329,14 +417,20 @@ async function preferencesDto(client: PoolClient, userId: string): Promise<Accou
   return result.data;
 }
 
+/** The caller's session; without one, 401 before any other check. */
+async function sessionOrRefuse(request: Request) {
+  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
+  if (!identity) throw new FoundationError(401, 'Sign in to continue.');
+  return identity;
+}
+
 async function handleAccountPreferences(request: Request, limit: Limit): Promise<Response> {
-  if (!['GET', 'POST'].includes(request.method)) { const response = json({ error: 'Method not allowed.' }, 405); response.headers.set('allow', 'GET, POST'); return response; }
+  const identity = await sessionOrRefuse(request);
+  if (!['GET', 'POST'].includes(request.method)) return methodNotAllowed('GET, POST');
   if (new URL(request.url).search) throw new FoundationError(400, 'Account preferences do not accept query parameters.');
   const writing = request.method === 'POST';
   if (!writing && (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0')) throw new FoundationError(400, 'Read account preferences without a request body.');
   const input = writing ? parsed(accountPreferencesInputSchema, await readJson(request)) : null;
-  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
-  if (!identity) throw new FoundationError(401, 'Sign in to continue.');
   await limit(`account-preferences:${writing ? 'write' : 'read'}:${identity.user.id}`, writing ? 30 : 120);
   return transaction(async (client, auth) => {
     await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [identity.user.id]);

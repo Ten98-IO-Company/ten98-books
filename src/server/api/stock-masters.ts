@@ -1,17 +1,21 @@
 import type { Revision } from '../../lib/ledger.ts';
 import { readLedgerBody, runLedger, type LedgerContext } from '../ledger/context.ts';
-import { listRevisions } from '../ledger/revisions.ts';
+import { masterHistory } from '../ledger/revisions.ts';
 import {
   alterItem, alterTree, alterUnit, createItem, createTree, createUnit, deleteItem, deleteTree, deleteUnit, getTree, getUnit,
   listItems, listTree, listUnits, readInventorySetting, readItem, saveInventorySetting, treeKinds, type TreeKindName,
 } from '../ledger/stock-masters.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
+/**
+ * Stock master bodies: an item carries at most 500 opening rows (`openings`, src/lib/stock.ts). A row at its bounds is under
+ * 256 bytes (a location id and three 40-character numbers), plus 4 KiB for the item's own fields.
+ */
+export const stockBodyBytes = 500 * 256 + 4096;
 const mastersRoute = new RegExp(`${company}/(stock-units|stock-groups|stock-categories|stock-locations|stock-items)(?:/(${uuid})(?:/(delete|revisions))?)?$`, 'i');
 const settingRoute = new RegExp(`${company}/inventory-setting$`, 'i');
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
 type Handler = {
   list: (context: LedgerContext) => Promise<unknown>;
@@ -42,7 +46,7 @@ if (treeKinds.some(kind => !handlers[kind])) throw new Error('Every stock master
 export const stockMastersApi: SignedInArea = async ({ request, path, user }) => {
   const write = async (companyId: string, run: (context: LedgerContext, body: unknown) => Promise<unknown>) => {
     await limit(`masters:${user.id}`, 120);
-    const body = await readLedgerBody(request);
+    const body = await readLedgerBody(request, stockBodyBytes);
     return runLedger(user.id, companyId, 'write', context => run(context, body));
   };
 
@@ -54,24 +58,24 @@ export const stockMastersApi: SignedInArea = async ({ request, path, user }) => 
     if (!itemId) {
       if (request.method === 'GET') return json({ [handler.plural]: await runLedger(user.id, companyId, 'read', handler.list) });
       if (request.method === 'POST') return json({ [handler.key]: await write(companyId, handler.create) }, 201);
-      return notAllowed('GET, POST');
+      return methodNotAllowed('GET, POST');
     }
     if (action === 'revisions') {
-      if (request.method !== 'GET') return notAllowed('GET');
-      return json({ revisions: await runLedger(user.id, companyId, 'read', context => listRevisions(context, handler.entity, itemId)) });
+      if (request.method !== 'GET') return methodNotAllowed('GET');
+      return json({ revisions: await runLedger(user.id, companyId, 'read', context => masterHistory(context, handler.entity, itemId, handler.read)) });
     }
     if (action === 'delete') {
-      if (request.method !== 'POST') return notAllowed('POST');
+      if (request.method !== 'POST') return methodNotAllowed('POST');
       await write(companyId, (context, body) => handler.remove(context, itemId, body));
       return json({ deleted: true });
     }
     if (request.method === 'GET') return json({ [handler.key]: await runLedger(user.id, companyId, 'read', context => handler.read(context, itemId)) });
     if (request.method === 'POST') return json({ [handler.key]: await write(companyId, (context, body) => handler.alter(context, itemId, body)) });
-    return notAllowed('GET, POST');
+    return methodNotAllowed('GET, POST');
   }
   const setting = path.match(settingRoute);
   if (!setting) return null;
   if (request.method === 'GET') return json({ inventory: await runLedger(user.id, setting[1], 'read', readInventorySetting) });
   if (request.method === 'POST') return json({ inventory: await write(setting[1], saveInventorySetting) });
-  return notAllowed('GET, POST');
+  return methodNotAllowed('GET, POST');
 };

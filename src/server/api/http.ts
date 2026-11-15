@@ -15,6 +15,11 @@ export function json(body: unknown, status = 200, additional?: HeadersInit): Res
   return new Response(toJson(body), { status, headers });
 }
 
+/** 405 with the methods the path accepts in `Allow`; the one answer every route gives a method it does not take. */
+export function methodNotAllowed(allow: string): Response {
+  return json({ error: 'Method not allowed.' }, 405, { allow });
+}
+
 /** Counts one request against `key` in the current minute and refuses past `maximum`. */
 export async function limit(key: string, maximum: number, client?: PoolClient): Promise<void> {
   const { rows } = await (client ?? getDatabase().pool).query<{ count: number }>(

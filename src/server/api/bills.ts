@@ -4,16 +4,17 @@ import {
   ageingReport, billDetailReport, billPicker, billsOutstandingReport, creditCheck, partyBillsReport, readAgeingBuckets, saveAgeingBuckets,
 } from '../reports/bills.ts';
 import { ageingCsv, billDetailCsv, billsOutstandingCsv, csvDocument, partyBillsCsv } from '../reports/csv.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, type SignedInArea } from './http.ts';
 import { csvResponse, exportsPerMinute, queryOf } from './reports.ts';
 
+/** Ageing columns: at most 20 (`buckets`, src/lib/bills.ts), each under 64 bytes, plus 1 KiB for the envelope. */
+export const bucketsBodyBytes = 20 * 64 + 1024;
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
 const listRoute = new RegExp(`${company}/reports/(bills-outstanding|ageing)(/export)?$`, 'i');
 const subjectRoute = new RegExp(`${company}/reports/(party-bills|bill)/(${uuid})(/export)?$`, 'i');
 const ledgerRoute = new RegExp(`${company}/ledgers/(${uuid})/(bills|credit-check)$`, 'i');
 const bucketsRoute = new RegExp(`${company}/ageing-buckets$`, 'i');
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
 type Report = {
   keys: readonly string[];
@@ -36,7 +37,7 @@ const reports: Record<string, Report> = {
 export const billsApi: SignedInArea = async ({ request, url, path, user }) => {
   let match = path.match(listRoute) ?? path.match(subjectRoute);
   if (match) {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     const subjectless = path.match(listRoute) !== null;
     const name = match[2].toLowerCase(), subject = subjectless ? null : match[3].toLowerCase(), exported = subjectless ? match[3] : match[4];
     const report = reports[name];
@@ -49,7 +50,7 @@ export const billsApi: SignedInArea = async ({ request, url, path, user }) => {
   }
   match = path.match(ledgerRoute);
   if (match) {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     const ledgerId = match[2].toLowerCase();
     if (match[3].toLowerCase() === 'bills') {
       const query = queryOf(url, ['asOf', 'scope', 'sort', 'direction']);
@@ -61,8 +62,8 @@ export const billsApi: SignedInArea = async ({ request, url, path, user }) => {
   match = path.match(bucketsRoute);
   if (!match) return null;
   if (request.method === 'GET') return json({ buckets: await runLedger(user.id, match[1], 'read', readAgeingBuckets) });
-  if (request.method !== 'POST') return notAllowed('GET, POST');
+  if (request.method !== 'POST') return methodNotAllowed('GET, POST');
   await limit(`masters:${user.id}`, 120);
-  const body = await readLedgerBody(request);
+  const body = await readLedgerBody(request, bucketsBodyBytes);
   return json({ buckets: await runLedger(user.id, match[1], 'write', context => saveAgeingBuckets(context, body)) });
 };

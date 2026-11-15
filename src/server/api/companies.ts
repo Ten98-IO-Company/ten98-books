@@ -1,6 +1,6 @@
 import { createCompany, getCompany, listCompanies, setUpCompany } from '../companies.ts';
 import { readJson } from '../validation.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, limit, methodNotAllowed, type SignedInArea } from './http.ts';
 
 const id = '[0-9a-f-]{36}';
 
@@ -17,16 +17,16 @@ export const companiesApi: SignedInArea = async ({ request, path, user }) => {
       const { company, replayed } = await createCompany(user.id, await readJson(request));
       return json({ company, replayed }, replayed ? 200 : 201);
     }
-    return json({ error: 'Method not allowed.' }, 405, { allow: 'GET, POST' });
+    return methodNotAllowed('GET, POST');
   }
   let match = path.match(new RegExp(`^/api/companies/(${id})$`, 'i'));
   if (match) {
-    if (request.method !== 'GET') return json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     return json({ company: await getCompany(user.id, match[1]) });
   }
   match = path.match(new RegExp(`^/api/companies/(${id})/setup$`, 'i'));
   if (match) {
-    if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405, { allow: 'POST' });
+    if (request.method !== 'POST') return methodNotAllowed('POST');
     await limit(`companies:${user.id}`, 20);
     return json({ company: await setUpCompany(user.id, match[1], await readJson(request)) });
   }

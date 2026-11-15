@@ -117,12 +117,13 @@ export function createCompany(userId: string, value: unknown): Promise<{ company
  * becomes the company (workspace) name. Settings that exist already are not replaced (409).
  */
 export function setUpCompany(userId: string, companyId: string, value: unknown): Promise<Company> {
-  const input = parseCompany(value);
   return transaction(async client => {
     // Membership first, without a lock, so a non-member never takes a lock on someone else's workspace. Then the team
     // controller's lock order: the workspace row, then memberships (withCompany share-locks the caller's and checks again).
     const id = /^[0-9a-f-]{36}$/i.test(companyId) ? companyId.toLowerCase() : '';
     if (!(await client.query('SELECT 1 FROM membership WHERE workspace_id = $1 AND user_id = $2', [id, userId])).rowCount) throw new FoundationError(404, companyNotFound);
+    // Checked only for a member, so a body the route refuses tells an outsider nothing a missing company would not.
+    const input = parseCompany(value);
     await client.query('SELECT 1 FROM workspace WHERE id = $1 FOR UPDATE', [id]);
     return withCompany(userId, id, 'write', async (scoped, access) => {
       if (access.role !== 'owner' && access.role !== 'admin') throw new FoundationError(403, 'Only an owner or admin can set up the company.');
