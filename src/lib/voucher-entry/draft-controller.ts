@@ -8,10 +8,11 @@ import type { DraftAction, DraftState } from './enter-path.ts';
  *
  * The tab's kept list holds the on-screen draft whenever its state is `sending`, `unknown` or `conflict`, written the
  * moment it enters that state; it is taken out on a save, on a discard, when the draft is refused or editable again, and
- * when it is restored as editable. A lost session keeps an `editing` draft too. Leaving, reloading or closing the tab
- * therefore never forgets a voucher that may be in the books. Writes are by key against what the store holds now, and a
- * screen no longer shown (`onScreen(false)`) only adds or updates its draft, never takes one out: a newer screen in the
- * same tab may have restored that draft, and its user was told it is kept (a late "saved" then shows as a replay).
+ * when it is restored as editable. A lost session keeps an `editing` draft too. Leaving or reloading the tab therefore
+ * never forgets a voucher that may be in the books. Writes are by key against what the store holds now. A screen no
+ * longer shown (`onScreen(false)`) never takes an entry out (a newer screen in the same tab may have restored it, and
+ * its user was told it is kept): it rewrites its own entry with what it learned instead, a `saved` notice ("saved as
+ * No. N", only dismissed) or, refused, the editable draft with the refusal.
  */
 
 export type SendFailure = { status: number | undefined; code: string | undefined; message: string; json: boolean };
@@ -35,6 +36,8 @@ export function createDraftController<T>(options: {
   onChange?: (machine: DraftMachine) => void;
   /** The session is gone: the draft is kept in the store by now. */
   onSignedOut?: () => void;
+  /** What a saved voucher is called in a notice a screen no longer shown leaves in the tab ("Saved as No. 12 ..."). */
+  savedAs?: (answer: T) => string;
   now?: () => string;
 }) {
   let machine = startMachine(options.makeKey(), options.start, storedDraftsOf(options.store.read()));
@@ -45,8 +48,10 @@ export function createDraftController<T>(options: {
   let shown = true;
   /** Puts `kept` in the store in place of any draft under its key (or only removes that key). */
   function keep(key: string, kept: StoredDraft | null) {
-    if (!kept && !shown) return;
-    const others = storedDraftsOf(options.store.read()).filter(entry => entry.key !== key);
+    const now = storedDraftsOf(options.store.read());
+    // A notice that the voucher was saved is never turned back into "may be saved" by another screen's stale state.
+    if (kept && kept.phase !== 'saved' && now.some(entry => entry.key === key && entry.phase === 'saved')) return;
+    const others = now.filter(entry => entry.key !== key);
     const next = kept ? [...others, kept] : others;
     options.store.write(next.length ? JSON.stringify(next) : '');
   }
@@ -63,10 +68,20 @@ export function createDraftController<T>(options: {
       if (taken && !(event.type === 'restore' && locked(next))) keep(taken.key, null);
     }
     if (locked(next)) keep(next.key, storedOf(next, lockedSince));
-    // Out of a locked state: saved (a new draft and key), discarded, refused, or editable again.
-    else if (locked(before)) keep(before.key, null);
+    // Out of a locked state: saved (a new draft and key), discarded, refused, or editable again. A screen no longer shown
+    // takes nothing out: refused or editable again, it keeps the draft with the answer (a save writes its notice in run).
+    else if (locked(before)) {
+      if (shown) keep(before.key, null);
+      else if (event.type !== 'saved') keep(before.key, { ...storedOf(next, now()), message: next.message });
+    }
     options.onChange?.(next);
     return true;
+  }
+
+  /** Takes the kept drafts as the tab holds them now: a screen no longer shown may have rewritten one with its answer. */
+  function refreshOffered() {
+    const fresh = storedDraftsOf(options.store.read()).filter(entry => entry.key !== machine.key);
+    if (JSON.stringify(fresh) !== JSON.stringify(machine.offered)) apply({ type: 'offer', offered: fresh });
   }
 
   let inFlight: Promise<SaveResult<T>> | null = null;
@@ -78,9 +93,12 @@ export function createDraftController<T>(options: {
 
   async function run(body: string): Promise<SaveResult<T>> {
     const key = machine.key;
+    const draft = machine.draft;
     try {
       const answer = await options.send(body);
       apply({ type: 'saved', nextKey: options.makeKey() });
+      // Its own entry, rewritten by a screen no longer shown: the voucher is saved, so nothing is to be retried.
+      if (!shown) keep(key, { phase: 'saved', key, draft, sent: null, message: options.savedAs?.(answer) ?? 'Saved.', savedAt: now() });
       return { kind: 'saved', answer, key };
     } catch (error) {
       const failure = options.failureOf(error);
@@ -110,8 +128,8 @@ export function createDraftController<T>(options: {
     /** Resolves once the request in flight, if any, has its answer (a question asked meanwhile then sees the outcome). */
     settled: async (): Promise<void> => { await inFlight; },
     discard: (draft: DraftState): boolean => apply({ type: 'discard', nextKey: options.makeKey(), draft }),
-    restore: (): boolean => apply({ type: 'restore' }),
-    drop: (): boolean => apply({ type: 'drop' }),
+    restore: (): boolean => { refreshOffered(); return apply({ type: 'restore' }); },
+    drop: (): boolean => { refreshOffered(); return apply({ type: 'drop' }); },
     /** Whether the screen is shown: one that is not (left, unmounted) still keeps its draft but takes none out. */
     onScreen: (value: boolean): void => { shown = value; },
   };

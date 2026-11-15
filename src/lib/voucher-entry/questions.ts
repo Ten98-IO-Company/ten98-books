@@ -37,17 +37,21 @@ export function leaveQuestion(machine: DraftMachine, typing: boolean, verb: 'Lea
 export function dropQuestion(kept: StoredDraft): Question | null {
   const kind = kindTitles[kept.draft.kind].toLowerCase();
   const labels = { confirmLabel: 'Discard', cancelLabel: 'Keep it' };
+  // A notice that its voucher was saved: dismissing it loses nothing.
+  if (kept.phase === 'saved') return null;
   if (kept.phase === 'unknown') return { title: `Discard the kept ${kind}? It may already be saved`, description: 'Its save got no definite answer, so it may be in the books. Discarding it forgets its key: entering it again could save it twice. Restore it and check and retry instead, or look in the day book.', ...labels };
   if (kept.phase === 'conflict') return { title: `Discard the kept ${kind}?`, description: 'It was not saved: its key is already used by a voucher in the books with other content. What was entered in it is lost.', ...labels };
   return draftDirty(kept.draft) ? { title: `Discard the kept ${kind}?`, description: 'It was not saved, and what was entered in it is lost.', ...labels } : null;
 }
 
 /**
- * Asks before leaving, by the state the draft is in. While its request is in flight the question stays open only until
- * the answer arrives: then it is asked again for the new state (a newer question replaces the open one), or not at all
- * when nothing is left to lose (a saved voucher). It never asks about a state that is about to change.
+ * Asks before leaving, by the state the draft is in, and never leaves without the user's answer. While a save is on its
+ * way the question waits for the user; if the save's answer arrives first: a saved voucher, or one refused or editable
+ * again, closes the question (`close`) and the screen stays to show what happened (no leave: the user leaves with the
+ * next press, and nothing is unsaved then); an answer that leaves the voucher unknown or in conflict replaces the
+ * question with the one for that state, which again waits for the user.
  */
-export async function askBeforeLeaving(current: () => DraftMachine, settled: () => Promise<void>, typing: () => boolean, ask: Ask): Promise<boolean> {
+export async function askBeforeLeaving(current: () => DraftMachine, settled: () => Promise<void>, typing: () => boolean, ask: Ask, close: () => void): Promise<boolean> {
   for (;;) {
     const machine = current();
     const question = leaveQuestion(machine, typing(), 'Leave');
@@ -55,8 +59,11 @@ export async function askBeforeLeaving(current: () => DraftMachine, settled: () 
     if (machine.phase !== 'sending') return ask(question);
     const answered = await Promise.race([ask(question).then(yes => ({ yes })), settled().then(() => null)]);
     if (answered) return answered.yes;
-    // Settled without a new state (it cannot, the answer moves it): ask once more and take that answer.
-    if (current() === machine) return ask(question);
+    const phase = current().phase;
+    // Unknown or in conflict: asked again for that state (the newer question replaces the open one).
+    if (phase === 'unknown' || phase === 'conflict' || phase === 'sending') continue;
+    close();
+    return false;
   }
 }
 

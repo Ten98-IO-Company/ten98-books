@@ -437,7 +437,7 @@ test('only the app confirmation hook imports the package confirmation pieces, so
   // asked in src/lib/voucher-entry/questions.ts through the screen's own `confirm`, tested in tests/voucher-draft.test.ts.
   assert.equal(questions, 8, 'every question is asked through useConfirm');
   const entry = readFileSync(new URL('../src/components/vouchers/VoucherEntryScreen.tsx', import.meta.url), 'utf8');
-  assert.match(entry, /const \[confirm, dialog\] = useConfirm\(\)/);
+  assert.match(entry, /const \[confirm, dialog, closeQuestion\] = useConfirm\(\)/);
   for (const ask of ['askBeforeLeaving', 'startNewVoucher', 'dropKeptDraft']) assert.match(entry, new RegExp(String.raw`${ask}\([^\n]*\bconfirm\b`), `${ask} asks through useConfirm`);
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');

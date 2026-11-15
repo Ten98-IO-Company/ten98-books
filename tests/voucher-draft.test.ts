@@ -117,12 +117,12 @@ test('a kept draft comes back exactly as it was, and only into an empty editing 
 });
 
 test('kept drafts are read back only when every field checks; an unsettled one keeps its body', () => {
-  const entries = [kept('editing'), kept('unknown', 'key-u'), kept('conflict', 'key-c')];
+  const entries = [kept('editing'), kept('unknown', 'key-u'), kept('conflict', 'key-c'), { ...kept('editing', 'key-s'), phase: 'saved' as const, message: 'saved as No. 3' }];
   assert.deepEqual(storedDraftsOf(JSON.stringify(entries)), entries);
   const withBills = { ...kept('editing'), draft: { ...filled(), bills: { 'line-1': [{ key: 'b1', method: 'new_ref', bill: '', name: 'A1', credit: '30', amount: '5.00', side: 'Dr' }] } } };
   assert.deepEqual(storedDraftsOf(JSON.stringify([withBills])), [withBills]);
   const broken: unknown[] = [
-    { ...kept('unknown'), sent: null }, { ...kept('editing'), phase: 'sending' }, { ...kept('editing'), key: '' }, { ...kept('editing'), savedAt: 5 },
+    { ...kept('unknown'), sent: null }, { ...kept('editing'), phase: 'sending' }, { ...kept('editing'), phase: 'saved', message: null }, { ...kept('editing'), key: '' }, { ...kept('editing'), savedAt: 5 },
     { ...kept('editing'), draft: { ...filled(), kind: 'sales' } }, { ...kept('editing'), draft: { ...filled(), layout: 'triple' } },
     { ...kept('editing'), draft: { ...filled(), kind: 'journal', layout: 'single' } }, { ...kept('editing'), draft: { ...filled(), serial: 1.5 } },
     { ...kept('editing'), draft: { ...filled(), lines: [{ key: 'l', side: 'Debit', ledger: '', amount: '' }] } },
@@ -195,12 +195,23 @@ test('the controller: one request at a time, a 401 keeps the whole state, restor
   assert.deepEqual(keptIn(store), []);
 });
 
+test('M-B: a 4xx that is not the application\'s own error (a proxy\'s JSON) is no answer: the voucher stays unknown and kept', async () => {
+  const store = memoryStore();
+  for (const status of [403, 404, 409, 400]) {
+    const controller = createDraftController<string>({ start: blank(), makeKey: () => `key-${status}`, store, failureOf, now: () => 'at', send: async () => { throw failure(status, undefined, false); } });
+    controller.edit({ type: 'narration', text: String(status) });
+    assert.equal((await controller.save('body'))?.kind, 'none', String(status));
+    assert.equal(controller.machine().phase, 'unknown');
+  }
+  assert.deepEqual(keptIn(store).map(([phase]) => phase), ['unknown', 'unknown', 'unknown', 'unknown'], 'all kept');
+});
+
 test('M1: a voucher sending, unknown or in conflict is in the tab from the moment it gets there, and leaving, reloading or a late answer never forgets it', async () => {
   const store = memoryStore();
   let keys = 0;
   const releases: ((outcome: Error | string) => void)[] = [];
   const make = () => createDraftController<string>({
-    start: blank(), makeKey: () => `key-${++keys}`, store, failureOf, now: () => 'at',
+    start: blank(), makeKey: () => `key-${++keys}`, store, failureOf, now: () => 'at', savedAs: answer => `saved as ${answer}`,
     send: () => new Promise((resolve, reject) => { releases.push(outcome => outcome instanceof Error ? reject(outcome) : resolve(outcome)); }),
   });
   // Unknown, then a new screen on the same store (a reload): offered as unknown.
@@ -229,8 +240,17 @@ test('M1: a voucher sending, unknown or in conflict is in the tab from the momen
   const newer = after.save('body-c');
   releases.shift()?.('saved behind the user');
   await inFlight;
-  assert.deepEqual(keptIn(store), [['unknown', leftKey], ['unknown', after.machine().key]], 'a late answer to a left screen takes nothing out');
-  store.write(JSON.stringify(storedDraftsOf(store.read()).filter(entry => entry.key !== leftKey)));
+  assert.deepEqual(keptIn(store), [['unknown', after.machine().key], ['saved', leftKey]], 'a late answer to a left screen takes nothing out: it rewrites its own entry as saved (LOW 1)');
+  assert.equal(storedDraftsOf(store.read()).find(entry => entry.key === leftKey)?.message, 'saved as saved behind the user');
+  // The notice is dismissed, never restored.
+  const notice = make();
+  store.write(JSON.stringify(storedDraftsOf(store.read()).filter(entry => entry.key === leftKey)));
+  const withNotice = createDraftController<string>({ start: blank(), makeKey: () => 'n', store, failureOf, send: async () => 'x' });
+  assert.equal(withNotice.restore(), false, 'a saved notice is not restored');
+  assert.equal(withNotice.drop(), true, 'it is dismissed');
+  assert.deepEqual(keptIn(store), []);
+  void notice;
+  store.write(JSON.stringify([{ ...storedOf(after.machine(), 'at') }]));
   releases.shift()?.(failure(409, 'idempotency_mismatch'));
   await newer;
   assert.deepEqual(keptIn(store), [['conflict', after.machine().key]], 'a conflict is kept too');
@@ -283,31 +303,46 @@ test('the questions: by the state, never about a Check and retry that is not the
   assert.deepEqual([asked.length, dropped], [4, 0], 'nor a kept editing draft with typed work');
 });
 
-test('the leave question waits for an answer on its way: asked again for the new state, or not at all after a save (LOW 1)', async () => {
-  let machine = sending();
-  let answerArrives = () => {};
-  const settled = () => new Promise<void>(resolve => { answerArrives = resolve; });
+/** Fails instead of hanging when a promise does not settle in time (a question that never comes back). */
+const within = <T,>(promise: Promise<T>, ms = 500): Promise<T> => Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms))]);
+
+test('M-A: the leave question never leaves without the user: a save answered meanwhile closes it and the screen stays, an unknown or conflict asks again', async () => {
+  const outcomes: [string, (machine: DraftMachine) => DraftMachine, 'closed' | 'asked again'][] = [
+    ['saved', machine => step(machine, { type: 'saved', nextKey: 'key-2' }), 'closed'],
+    ['refused', machine => answered(machine, 'refused'), 'closed'],
+    ['denied from editing', machine => answered(machine, 'denied'), 'closed'],
+    ['unknown', machine => answered(machine, 'none'), 'asked again'],
+    ['conflict', machine => answered(machine, 'conflict'), 'asked again'],
+  ];
+  for (const [name, answer, expected] of outcomes) {
+    let machine = sending();
+    let answerArrives = () => {};
+    const settled = () => new Promise<void>(resolve => { answerArrives = resolve; });
+    const asked: string[] = [];
+    const answers: ((yes: boolean) => void)[] = [];
+    let closed = 0;
+    const ask = async (question: Question) => { asked.push(question.title); return new Promise<boolean>(resolve => { answers.push(resolve); }); };
+    const leaving = askBeforeLeaving(() => machine, settled, () => false, ask, () => { closed++; });
+    await Promise.resolve();
+    assert.deepEqual(asked, ['Leave this payment while it is being saved?'], name);
+    machine = answer(machine);
+    answerArrives();
+    if (expected === 'closed') {
+      assert.equal(await within(leaving), false, `${name}: the screen stays`);
+      assert.deepEqual([closed, asked.length], [1, 1], `${name}: the question closed, nothing asked again`);
+    } else {
+      await within(new Promise(resolve => setImmediate(resolve)));
+      assert.deepEqual([closed, asked.length], [0, 2], `${name}: asked again for the new state`);
+      assert.match(asked[1], name === 'unknown' ? /may already be saved/ : /was not saved/);
+      answers[1](true);
+      assert.equal(await within(leaving), true, `${name}: and the user's answer counts`);
+    }
+  }
+  // With nothing in flight the question is asked once and its answer is the leave.
   const asked: string[] = [];
-  const neverAnswered = async (question: Question) => { asked.push(question.title); return new Promise<boolean>(() => {}); };
-  // The save succeeds behind the open question: nothing is left to ask, and the leave goes on.
-  const leaving = askBeforeLeaving(() => machine, settled, () => false, neverAnswered);
-  await Promise.resolve();
-  machine = step(machine, { type: 'saved', nextKey: 'key-2' });
-  answerArrives();
-  assert.equal(await leaving, true);
-  assert.deepEqual(asked, ['Leave this payment while it is being saved?']);
-  // The answer is lost behind the open question: asked again, now as unknown, and that answer counts.
-  machine = sending();
-  const answers: ((yes: boolean) => void)[] = [];
-  const ask = async (question: Question) => { asked.push(question.title); return new Promise<boolean>(resolve => { answers.push(resolve); }); };
-  const again = askBeforeLeaving(() => machine, settled, () => false, ask);
-  await Promise.resolve();
-  machine = answered(machine, 'none');
-  answerArrives();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(asked.at(-1), 'Leave this payment? It may already be saved');
-  answers.at(-1)?.(false);
-  assert.equal(await again, false);
+  assert.equal(await within(askBeforeLeaving(() => answered(sending(), 'none'), async () => {}, () => false, async question => { asked.push(question.title); return false; }, () => {})), false);
+  assert.equal(asked.length, 1);
+  assert.equal(await within(askBeforeLeaving(() => startMachine('k', blank()), async () => {}, () => false, async () => { throw new Error('asked'); }, () => {})), true, 'nothing entered: leaves without asking');
 });
 
 // ---- The model test: random sequences against a fake server with exactly the server's three facts ----
@@ -332,6 +367,8 @@ type Request = {
   owner: Tab | null;
   /** The page that sent it is gone (reload, closed tab): its answer never arrives anywhere. */
   orphan: boolean;
+  /** The tab's store the sending screen writes to. */
+  store: Tab['store'];
   settle: (outcome: Error | 'ok') => void;
   pending: Promise<unknown> | null;
 };
@@ -402,6 +439,9 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
     const requests: Request[] = [];
     // The intention each key was first sent under, so a restored draft is the same intention again.
     const keyIntention = new Map<string, number>();
+    // Keys whose latest request's answer reached a screen of the tab (I7).
+    const answered = new Map<Tab['store'], Set<string>>();
+    const answeredIn = (store: Tab['store']) => { const found = answered.get(store) ?? new Set<string>(); answered.set(store, found); return found; };
     const mount = (store: Tab['store']): Tab => {
       const user: Omit<Tab, 'controller'> = { store, intention: ++intentions, outcome: null, request: null, mustSignIn: false };
       const tab: Tab = Object.assign(user, {
@@ -415,8 +455,10 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
             if (!keyIntention.has(key)) keyIntention.set(key, user.intention);
             const request: Request = {
               key, content, intention: user.intention, mode: 'commit', fromUnknown: false, arrived: false, delivered: false, served: null, result: null,
-              owner: tab, orphan: false, pending: null, settle: outcome => outcome === 'ok' ? resolve('ok') : reject(outcome),
+              owner: tab, orphan: false, pending: null, store, settle: outcome => outcome === 'ok' ? resolve('ok') : reject(outcome),
             };
+            // A new request for the key: its answer is on the way again.
+            answeredIn(store).delete(key);
             requests.push(request);
             tab.request = request;
           }),
@@ -434,6 +476,9 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
       if (request.orphan || request.result === null) return null;
       request.settle(request.result);
       await request.pending;
+      // An answer that settles the save (saved, refused, conflict); no answer, a 401, 429 or denial says no more than
+      // "never reached this tab".
+      if (request.served === 'saved' || request.served === 'refused' || request.served === 'conflict') answeredIn(request.store).add(request.key);
       return request.served;
     };
     const remount = (tab: Tab, how: 'leave' | 'reload' | 'sign-in') => {
@@ -508,10 +553,11 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
         case 'sign-out': server.sessionAlive = false; label = tabs.some(each => each.request && !each.request.delivered) ? 'sign-out while sending' : 'sign-out'; break;
         case 'leave-cancel': break;
         case 'restore': {
-          const offered = tab.controller.machine().offered[0];
+          // What the tab holds now (the controller rereads it before a restore: another screen may have rewritten it).
+          const offered = storedDraftsOf(tab.store.read()).filter(entry => entry.key !== tab.controller.machine().key)[0];
           if (offered && tab.controller.restore()) {
             tab.intention = keyIntention.get(offered.key) ?? ++intentions;
-            tab.outcome = offered.phase === 'editing' ? null : offered.phase;
+            tab.outcome = offered.phase === 'editing' || offered.phase === 'saved' ? null : offered.phase;
             keyMayChange.add(tab);
             assert.equal(tab.controller.machine().key, offered.key, where('I3: a restore brings the kept draft\'s own key'));
             label = `restored ${offered.phase}`;
@@ -524,9 +570,16 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
           if (tab.controller.discard(blank())) { tab.intention = ++intentions; tab.outcome = null; keyMayChange.add(tab); label = `${phase} start-new`; }
           break;
         }
-        case 'duplicate-tab': if (tabs.length < 2) tabs.push(mount(memoryStore(tab.store.read()))); break;
+        case 'duplicate-tab': if (tabs.length < 2) { const copy = memoryStore(tab.store.read()); answered.set(copy, new Set(answeredIn(tab.store))); tabs.push(mount(copy)); } break;
       }
       reached.add(label);
+      // I7: a kept entry never says its answer never reached the tab once an answer settling that save reached a screen of it.
+      for (const each of new Set(tabs.map(one => one.store))) {
+        for (const entry of storedDraftsOf(each.read())) {
+          if (entry.message === answerNeverArrived) assert.ok(!answeredIn(each).has(entry.key), where(`I7: ${entry.key} still says its answer never arrived (${label})`));
+          if (entry.phase === 'saved') reached.add('a left screen wrote its saved notice');
+        }
+      }
       // I1: one intention, at most one voucher.
       const perIntention = new Map<number, number>();
       for (const commit of server.commits) perIntention.set(commit.intention, (perIntention.get(commit.intention) ?? 0) + 1);
@@ -554,19 +607,23 @@ async function runModel(seed: number, sequences: number, maxLength: number): Pro
 const seeds = process.env.MODEL_SEEDS?.split(',').map(Number) ?? [20261115, 1, 424242];
 const sequences = Number(process.env.MODEL_SEQUENCES ?? 5000);
 
-test(`the model: ${sequences} random sequences of up to 40 steps per seed (${seeds.join(', ')}), requests in flight across steps, keep I1 to I6`, async () => {
-  const union = new Set<string>();
+// The reach is asserted for each seed on its own, not over their union.
+test(`the model: ${sequences} random sequences of up to 40 steps per seed (${seeds.join(', ')}), requests in flight across steps, keep I1 to I7`, async () => {
   for (const seed of seeds) {
     const started = performance.now();
     const { steps, reached } = await runModel(seed, sequences, 40);
-    for (const entry of reached) union.add(entry);
     console.log(`model: seed ${seed}, ${sequences} sequences, ${steps} steps, ${Math.round(performance.now() - started)} ms`);
+    assertReach(seed, reached);
   }
+});
+
+function assertReach(seed: number, union: Set<string>) {
   for (const wanted of [
     'restored unknown', 'restored editing', 'restored conflict', 'leave while sending', 'reload while sending', 'leave from sending offered back', 'reload from sending offered back',
     'leave from unknown offered back', 'leave from conflict offered back', 'sign-in from editing offered back', 'sign-out while sending',
     'deliver-any saved to a left screen', 'deliver-any none to a left screen', 'deliver-any lost to a gone page',
     'unknown retry signed-out unknown', 'unknown retry limited unknown', 'unknown retry denied unknown', 'unknown retry saved editing', 'unknown retry refused editing',
     'unknown retry none unknown', 'accept conflict conflict', 'accept denied editing', 'accept none unknown', 'conflict start-new', 'unknown start-new',
-  ]) assert.ok(union.has(wanted), `the sequences reach: ${wanted}`);
-});
+    'a left screen wrote its saved notice',
+  ]) assert.ok(union.has(wanted), `seed ${seed} reaches: ${wanted}`);
+}

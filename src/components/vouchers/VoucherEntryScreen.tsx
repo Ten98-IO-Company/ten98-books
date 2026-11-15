@@ -11,7 +11,7 @@ import { resolveTyped } from '../../lib/lookup-entry'
 import { longDate } from '../../lib/reports'
 import { useApp } from '../../lib/app-context'
 import {
-  afterDate, afterDeclinedAccept, amountText, appendedLine, askBeforeLeaving, balanceText, blankDraft, bodyLines, dropKeptDraft, startNewVoucher, bodyProblems, canTakeStored, cashInHandIds, cashRuleProblem, creditPeriodText,
+  afterDate, afterDeclinedAccept, amountText, appendedLine, askBeforeLeaving, balanceText, blankDraft, bodyLines, dropKeptDraft, offersSaved, startNewVoucher, bodyProblems, canTakeStored, cashInHandIds, cashRuleProblem, creditPeriodText,
   detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, escapeStep, isBlankLine, isCompleteLine, kindTitles, layoutTitles, layoutsOf, ledgerOptions,
   lineKey, listEnd, minorOf, negativeCashWarning, parseEntryDate, particularsSide, particularsTotal, proposedAmount, readLayout, refusalPlace,
   isLocked, lockAlert, refusal, relayLines, savedNotes, writeLayout, type DraftState, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
@@ -103,7 +103,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const [saved, setSaved] = useState('')
   const [typeList, setTypeList] = useState(false)
   const [modeList, setModeList] = useState(false)
-  const [confirm, dialog] = useConfirm()
+  const [confirm, dialog, closeQuestion] = useConfirm()
   const navigate = useNavigate()
   const dirty = draftDirty(state) || typing || locked
   const leave = useLeave({ to: '/app/c/$companyId', params: { companyId: company.id } })
@@ -117,9 +117,16 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     // Text still in a cell's editor is committed first, then what was entered decides (a guard call with nothing entered passes).
     grid.current?.commit()
     // Text the grid dropped as focus left the cell (it named no ledger) counts too: it was typed (the guard asks).
-    const yes = await askBeforeLeaving(draft.current, draft.settled, () => typingRef.current, confirm)
+    const yes = await askBeforeLeaving(draft.current, draft.settled, () => typingRef.current, confirm, closeQuestion)
     // Kept: back to "Check and retry" when that is the way on, else where the cursor was (also after a link or a key outside the voucher).
-    if (!yes) window.setTimeout(() => { if (draft.current().phase === 'unknown') retryButton.current?.focus(); else focus(afterDate(lastOrigin.current)) }, 0)
+    // Stayed (or the save's answer closed the question): back to "Check and retry" when that is the way on, to the next
+    // voucher's first field after a save, else where the cursor was.
+    if (!yes) window.setTimeout(() => {
+      const { phase, draft: shown } = draft.current()
+      if (phase === 'unknown') retryButton.current?.focus()
+      else if (phase === 'editing' && !draftDirty(shown)) focus(firstField())
+      else if (phase === 'editing') focus(afterDate(lastOrigin.current))
+    }, 0)
     return yes
   }, [confirm])
   const guard = useLeaveGuard(dirty, askToLeave)
@@ -157,32 +164,42 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   useLayoutEffect(() => { focus(firstField()) }, [])
   // Where the cursor last was inside the voucher, for keys and bar buttons that take focus away (the date button, a question).
   const lastOrigin = useRef<FocusOrigin>({ field: 'account' })
-  // Where the cursor moved as a bill panel closed: the panel's dialog gives focus back to the amount cell one task later
-  // (its close event), and that return is undone at once, so keys typed straight after accepting stay where they went.
-  const reassert = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const holder = root.current
     if (!holder) return
     const inGrid = (node: EventTarget | null) => node instanceof Element && !!holder.querySelector('[role="grid"]')?.contains(node)
-    // The bill panel's late return of focus to a grid cell, while the cursor is held where it moved: the grid never sees
-    // it (these listeners sit below React's own), so it keeps what is being typed, and the cursor goes straight back.
+    /**
+     * The bill panel's dialog gives focus back to a grid cell from its own close event, which the browser may deliver
+     * after keys the user pressed meanwhile (Chrome serves input first). The cursor has moved on inside the accept key's
+     * handler already, so that one return is undone: when the panel's dialog closes, the element focused at that moment
+     * is kept, and the grid focus the close causes is hidden from the grid (these listeners sit below React's own, so it
+     * keeps what is being typed) and sent back there. It applies to that close event only: no timer, no rule about keys.
+     */
+    let back: HTMLElement | null = null
     let returning = false
+    const onClose = (event: Event) => {
+      const dialog = event.target
+      const active = document.activeElement
+      // The grid's panel dialog: it keeps its (empty) panel holder, `<grid id>-panel`, after the panel's content has gone.
+      const panelDialog = dialog instanceof HTMLDialogElement && holder.contains(dialog) && dialog.querySelector('[id$="-panel"]') !== null
+      back = panelDialog && active instanceof HTMLElement && active !== document.body && !dialog.contains(active) ? active : null
+      // The dialog's own close handler runs within this event; anything later is the user's again.
+      window.setTimeout(() => { back = null }, 0)
+    }
     const onBlur = (event: FocusEvent) => {
-      const held = reassert.current
-      if (returning || (held && event.target === held && inGrid(event.relatedTarget))) event.stopPropagation()
+      if (returning || (back && event.target === back && inGrid(event.relatedTarget))) event.stopPropagation()
     }
     const onFocus = (event: FocusEvent) => {
       const target = event.target
       if (!(target instanceof Element)) return
-      const held = reassert.current
-      if (held && held !== target && held.isConnected && inGrid(target)) {
-        reassert.current = null
+      const kept = back
+      if (kept && kept !== target && kept.isConnected && inGrid(target)) {
+        back = null
         event.stopPropagation()
         returning = true
-        try { held.focus() } finally { returning = false }
+        try { kept.focus() } finally { returning = false }
         return
       }
-      if (held && held !== target) reassert.current = null
       const field = fieldOf(holder, target)
       if (field && field !== 'date') { lastOrigin.current = { field }; return }
       if (!holder.querySelector('[role="grid"]')?.contains(target)) return
@@ -191,9 +208,11 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
         if (row && (column === 'side' || column === 'ledger' || column === 'amount')) lastOrigin.current = { cell: { row, column } }
       }, 0)
     }
+    // `close` does not bubble: caught on the way down.
+    document.addEventListener('close', onClose, true)
     holder.addEventListener('focusin', onFocus)
     holder.addEventListener('focusout', onBlur)
-    return () => { holder.removeEventListener('focusin', onFocus); holder.removeEventListener('focusout', onBlur) }
+    return () => { document.removeEventListener('close', onClose, true); holder.removeEventListener('focusin', onFocus); holder.removeEventListener('focusout', onBlur) }
   }, [])
 
   // ---- Lines ----
@@ -268,10 +287,6 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   function moveOnAfterBills(row: string) {
     if (lockedNow()) return
     flushSync(() => continueAfter(row))
-    const at = document.activeElement
-    if (!(at instanceof HTMLElement) || at === document.body) return
-    reassert.current = at
-    window.setTimeout(() => { if (reassert.current === at) reassert.current = null }, 1000)
   }
 
   const lineSide = (line: EntryLine) => (now().layout === 'single' ? particularsSide(now().kind) : line.side || 'Dr')
@@ -493,7 +508,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (draft.current().phase === 'editing') focusSoon(firstField())
   }
   async function dropKept() {
-    if (canTakeStored(draft.current())) await dropKeptDraft(draft.current, confirm, draft.drop)
+    if (canTakeStored(draft.current()) || offersSaved(draft.current())) await dropKeptDraft(draft.current, confirm, draft.drop)
   }
 
   function declineAccept() { setPrompt(false); focusSoon(afterDeclinedAccept(now().layout, now().lines)) }
@@ -577,13 +592,18 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const refused = refusal(draft.machine)
   const kept = draft.machine.offered[0]
   const canTake = canTakeStored(draft.machine)
+  const savedNotice = kept?.phase === 'saved'
   const keptText = !kept ? '' : `${kept.phase === 'editing' ? 'The unsaved' : 'A'} ${kindTitles[kept.draft.kind].toLowerCase()} dated ${longDate(kept.draft.date)}, kept at ${new Date(kept.savedAt).toLocaleTimeString()}${kept.phase === 'unknown' ? ', got no definite answer to its save: it may already be in the books. Restore it to check and retry under its own key.' : kept.phase === 'conflict' ? ', was not saved: its key is already used by a voucher with other content.' : ', is kept in this tab.'}`
   const summary = `${title} dated ${longDate(state.date)}${state.layout === 'single' ? `, ${amountText(total, exponent)} ${state.kind === 'payment' ? 'from' : 'into'} ${ledgerById.get(state.account)?.name ?? 'the account'}` : ''}, ${bodyLines(state, exponent).length} lines.`
 
   return <Stack gap={5} ref={root}>
     <PageHeader eyebrow={`Voucher entry · ${layoutTitles[state.layout]}`} title={title}
       description={`${number === null ? 'Number to be given on saving' : `No. ${number} (expected)`} · ${entryDateLabel(state.date)}`} />
-    {kept && <Alert tone='info' title={kept.phase === 'editing' ? 'A voucher was being entered before you signed in again' : kept.phase === 'conflict' ? 'A voucher that was not saved is kept in this tab' : 'A voucher whose save is not settled is kept in this tab'}
+    {kept && savedNotice && <Alert tone='success' title='A voucher was saved after its screen was left'
+      actions={<Button size='sm' variant='secondary' disabled={!offersSaved(draft.machine)} onClick={() => void dropKept()}>Dismiss</Button>}>
+      The {kindTitles[kept.draft.kind].toLowerCase()} dated {longDate(kept.draft.date)} was saved ({kept.message}); its answer arrived after the screen was left, so there is nothing to retry.
+    </Alert>}
+    {kept && !savedNotice && <Alert tone='info' title={kept.phase === 'editing' ? 'A voucher was being entered before you signed in again' : kept.phase === 'conflict' ? 'A voucher that was not saved is kept in this tab' : 'A voucher whose save is not settled is kept in this tab'}
       actions={<Inline gap={2}><Button size='sm' disabled={!canTake} onClick={restoreKept}>Restore it</Button><Button size='sm' variant='secondary' disabled={!canTake} onClick={() => void dropKept()}>Discard it</Button></Inline>}>
       {keptText}{canTake ? '' : ' Save or leave the voucher on screen first: a kept voucher can be restored or discarded only while the one on screen is empty.'}
     </Alert>}

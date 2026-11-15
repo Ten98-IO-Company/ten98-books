@@ -5,13 +5,14 @@ import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtim
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, password, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { accountSide, blankDraft, classifyAnswer, createDraftController, lockAlert, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
+import { accountSide, blankDraft, classifyAnswer, createDraftController, lockAlert, nextBillRow, storedDraftsOf, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
 import { join } from 'node:path';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
 import { listLedgers } from '../src/server/ledger/masters.ts';
 import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
 import { handleApi } from '../src/server/api.ts';
+import { isOwnError } from '../src/lib/api.ts';
 import { getConfig } from '../src/server/config.ts';
 
 /**
@@ -405,7 +406,7 @@ const failureOf = (error: unknown): SendFailure => ({
 /** A failed answer as the api helper throws it: whether the body was the application's JSON decides its class. */
 const failed = (answer: { status: number; body: unknown }) =>
   Object.assign(new Error(typeof answer.body === 'object' && answer.body !== null && 'error' in answer.body && typeof answer.body.error === 'string' ? answer.body.error : 'failed'),
-    { status: answer.status, code: typeof answer.body === 'object' && answer.body !== null && 'code' in answer.body && typeof answer.body.code === 'string' ? answer.body.code : undefined, json: typeof answer.body === 'object' && answer.body !== null });
+    { status: answer.status, code: typeof answer.body === 'object' && answer.body !== null && 'code' in answer.body && typeof answer.body.code === 'string' ? answer.body.code : undefined, json: isOwnError(answer.body) });
 
 /**
  * A payment screen on a company: the controller the screen runs, its body built as the hook builds it, sent by `member`
@@ -417,6 +418,8 @@ async function entryScreen(name: string) {
   const cash = c.books.ledger('Cash');
   const member = await invite(owner.browser, c.id, 'admin');
   let lose = false;
+  // A proxy's own answer after the server committed: a JSON body that is not this application's error.
+  let proxy: number | null = null;
   const mount = (store: DraftStore) => {
     const controller = createDraftController<Answer>({
       start: blankDraft('payment', 'single', '2026-01-05'), makeKey: () => `entry-${randomUUID()}`, store, failureOf,
@@ -424,6 +427,7 @@ async function entryScreen(name: string) {
         const value: unknown = JSON.parse(body);
         const answer = await member.browser.call(`${c.base}/vouchers`, value);
         if (answer.status < 300 && lose) { lose = false; throw Object.assign(new Error('Bad gateway'), { status: 502, json: false }); }
+        if (answer.status < 300 && proxy !== null) { const status = proxy; proxy = null; throw failed({ status, body: { message: 'Blocked by proxy' } }); }
         if (answer.status >= 300) throw failed(answer);
         return answer.body;
       },
@@ -441,7 +445,7 @@ async function entryScreen(name: string) {
   const endSession = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM session WHERE "userId" = $1', [member.userId]));
   const signIn = async () => assert.equal((await member.browser.call('/api/auth/sign-in/email', { email, password })).status, 200);
   const removeMember = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM membership WHERE user_id = $1 AND workspace_id = $2', [member.userId, c.id]));
-  return { mount, vouchers, endSession, signIn, removeMember, loseNext: () => { lose = true; } };
+  return { mount, vouchers, endSession, signIn, removeMember, loseNext: () => { lose = true; }, proxyNext: (status: number) => { proxy = status; } };
 }
 
 test('the key rule: refused, changed, its answer lost after the commit, then retried is ONE voucher under one key', async () => {
@@ -567,3 +571,19 @@ test('the answer classes against the real server: every row it can produce', asy
 });
 
 const listVoucherCount = async (companyId: string) => (await ok(owner.browser.call(`/api/companies/${companyId}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers.length;
+
+test('M-B: a proxy\'s JSON 403 or 404 after the commit is no answer: the voucher stays unknown and kept, and a retry replays it', async () => {
+  const screen = await entryScreen('Entry Proxy Answer');
+  for (const [status, amount] of [[403, '61.00'], [404, '62.00']] as const) {
+    const store = memoryStore();
+    const { controller, fill, save } = screen.mount(store);
+    fill(amount);
+    screen.proxyNext(status);
+    assert.equal((await save())?.kind, 'none', `${status} {"message": ...} is not this application's answer`);
+    assert.equal(controller.machine().phase, 'unknown');
+    assert.deepEqual(storedDraftsOf(store.read()).map(entry => entry.phase), ['unknown'], 'kept');
+    const retried = await controller.retry();
+    assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true, 'it was committed: the retry replays it');
+  }
+  assert.equal((await screen.vouchers()).length, 2, 'one voucher each');
+});

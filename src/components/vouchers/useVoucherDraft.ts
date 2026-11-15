@@ -6,6 +6,7 @@ import type { BillWarning, Voucher } from '../../lib/ledger'
 import type { Wire } from '../../lib/money'
 import { blankDraft, createDraftController, isLocked, toVoucherBody, type DraftState, type EntryKind, type EntryLayout, type SendFailure } from '../../lib/voucher-entry'
 import { readStored, sessionStore, writeStored } from '../../lib/working-date'
+import { longDate } from '../../lib/reports'
 
 /** `warnings` may carry codes beyond the bill warnings (a later slice's): the screen ignores the ones it does not know. */
 export type SaveAnswer = { voucher: Wire<Voucher>; warnings: readonly ({ code: string } & Partial<Wire<BillWarning>>)[]; replayed: boolean }
@@ -35,6 +36,7 @@ export function useVoucherDraft(userId: string, companyId: string, start: { kind
     failureOf,
     onChange: render,
     onSignedOut: () => signedOut.current(),
+    savedAs: answer => `No. ${answer.voucher.number ?? 'none'} dated ${longDate(answer.voucher.date)}`,
   }))
   // Development mode mounts effects twice, running the cleanup in between: shown again on every mount.
   useEffect(() => { controller.onScreen(true); return () => controller.onScreen(false) }, [controller])

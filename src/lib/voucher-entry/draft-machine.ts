@@ -22,11 +22,12 @@ const beforeTheReplay: readonly AnswerClass[] = ['signed-out', 'limited', 'denie
 
 /**
  * A draft kept in the tab: the machine's whole state, so a restore gives back exactly that state. A draft whose state
- * is `sending`, `unknown` or `conflict` is kept from the moment it enters that state; an `editing` one only on a lost
- * session.
+ * is `sending`, `unknown` or `conflict` is kept from the moment it enters that state; an `editing` one on a lost session,
+ * or when a screen no longer shown learns its save was refused. `saved` is a notice, not a draft: a screen no longer
+ * shown learned that its voucher was saved (`message` says as what); it is only dismissed.
  */
 export type StoredDraft = {
-  phase: 'editing' | 'unknown' | 'conflict';
+  phase: 'editing' | 'unknown' | 'conflict' | 'saved';
   key: string; draft: DraftState; sent: string | null; message: string | null; savedAt: string;
 };
 
@@ -58,7 +59,9 @@ export type DraftEvent =
   /** The user discards the draft ("Start a new voucher"): from `unknown` and `conflict` only after the warning question. */
   | { type: 'discard'; nextKey: string; draft: DraftState }
   | { type: 'restore' }
-  | { type: 'drop' };
+  | { type: 'drop' }
+  /** The kept drafts as the tab holds them now (another screen of the tab may have rewritten one): only while editing. */
+  | { type: 'offer'; offered: readonly StoredDraft[] };
 
 export function startMachine(key: string, draft: DraftState, offered: readonly StoredDraft[] = []): DraftMachine {
   return { phase: 'editing', key, draft, sent: null, resume: null, message: null, note: null, offered };
@@ -68,6 +71,8 @@ export function startMachine(key: string, draft: DraftState, offered: readonly S
 export const isLocked = (machine: DraftMachine): boolean => machine.phase !== 'editing';
 /** A kept draft can be restored or dropped only while the draft on screen is `editing` and empty. */
 export const canTakeStored = (machine: DraftMachine): boolean => machine.phase === 'editing' && !draftDirty(machine.draft) && machine.offered.length > 0;
+/** The first kept entry is a notice that its voucher was saved: dismissed while editing, never restored. */
+export const offersSaved = (machine: DraftMachine): boolean => machine.phase === 'editing' && machine.offered[0]?.phase === 'saved';
 /** The alert that locks the voucher, shown exactly in `unknown` and `conflict`. */
 export const lockAlert = (machine: DraftMachine): { phase: 'unknown' | 'conflict'; message: string; note: string | null } | null =>
   machine.phase === 'unknown' || machine.phase === 'conflict' ? { phase: machine.phase, message: machine.message ?? '', note: machine.note } : null;
@@ -80,11 +85,13 @@ export type FailedAnswer = { ok: false; status: number | undefined; code: string
 /**
  * The one classification of an answer to a create (the full table is in docs/VOUCHERS.md):
  * - 2xx saved; 401 signed out; 429 limited; 409 `idempotency_mismatch` conflict (a voucher exists under the key).
+ * "From the application" means its own error shape: a JSON object whose `error` is a string (`isOwnError` in
+ *   src/lib/api.ts, `json` here); a proxy's JSON (`{"message": ...}`, an array) is not, and is classed like a page.
  * - 403 and 404 from the application (origin, role, membership, a route) denied: those checks run before the replay, so
  *   they say nothing about an earlier send; from `editing` they read as a refusal, from `unknown` it stays unknown.
  * - Any other 4xx from the application, coded or not, refused: the request ran and rolled back, and for the same body
  *   under the same key it also proves no earlier send committed (the server would have replayed).
- * - A 5xx, a 4xx that is not the application's JSON (a proxy's page), an unreadable answer or none at all: none.
+ * - A 5xx, a 4xx that is not the application's own error (a proxy's page or JSON), an unreadable answer or none: none.
  */
 export function classifyAnswer(answer: { ok: true }): 'saved';
 export function classifyAnswer(answer: FailedAnswer): Exclude<AnswerClass, 'saved'>;
@@ -129,11 +136,13 @@ export function step(machine: DraftMachine, event: DraftEvent): DraftMachine {
     // While a request is in flight nothing is discarded: its answer still has to arrive.
     case 'discard': return machine.phase === 'sending' ? machine : startMachine(event.nextKey, event.draft, machine.offered);
     case 'restore': {
-      if (!canTakeStored(machine)) return machine;
+      if (!canTakeStored(machine) || offersSaved(machine)) return machine;
       const [kept, ...rest] = machine.offered;
+      if (kept.phase === 'saved') return machine;
       return { phase: kept.phase, key: kept.key, draft: kept.draft, sent: kept.sent, resume: null, message: kept.message, note: null, offered: rest };
     }
-    case 'drop': return canTakeStored(machine) ? { ...machine, offered: machine.offered.slice(1) } : machine;
+    case 'drop': return canTakeStored(machine) || offersSaved(machine) ? { ...machine, offered: machine.offered.slice(1) } : machine;
+    case 'offer': return machine.phase === 'editing' ? { ...machine, offered: event.offered } : machine;
   }
 }
 
@@ -179,10 +188,12 @@ function draftOf(value: unknown): DraftState | null {
 function storedDraftOf(value: unknown): StoredDraft | null {
   if (!isRecord(value)) return null;
   const { phase, key, sent, message, savedAt } = value;
-  if ((phase !== 'editing' && phase !== 'unknown' && phase !== 'conflict') || !isString(key) || key === '' || !isString(savedAt)) return null;
+  if ((phase !== 'editing' && phase !== 'unknown' && phase !== 'conflict' && phase !== 'saved') || !isString(key) || key === '' || !isString(savedAt)) return null;
   if (!(sent === null || isString(sent)) || !(message === null || isString(message))) return null;
   // A draft whose save got no definite answer must keep the exact body: "Check and retry" sends it again.
-  if (phase !== 'editing' && sent === null) return null;
+  if ((phase === 'unknown' || phase === 'conflict') && sent === null) return null;
+  // A saved notice says as what.
+  if (phase === 'saved' && message === null) return null;
   const draft = draftOf(value.draft);
   return draft ? { phase, key, draft, sent, message, savedAt } : null;
 }

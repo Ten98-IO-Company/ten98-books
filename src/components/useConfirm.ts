@@ -1,5 +1,5 @@
 import { useConfirmDialog, type ConfirmRequest } from '@ten98/ui'
-import { useCallback, type ReactNode } from 'react'
+import { isValidElement, useCallback, useRef, type ReactNode } from 'react'
 
 /** A confirmation as the application asks it: the package's request without its focus choice. */
 export type AppConfirmRequest = Omit<ConfirmRequest, 'initialFocus'> & {
@@ -25,8 +25,20 @@ export function confirmRequest(request: AppConfirmRequest): ConfirmRequest {
  * opens on its cancel button, so Enter never deletes, switches off or discards work. A test checks that no other file
  * imports the package's confirmation pieces.
  */
-export function useConfirm(): [(request: AppConfirmRequest) => Promise<boolean>, ReactNode] {
+export function useConfirm(): [(request: AppConfirmRequest) => Promise<boolean>, ReactNode, () => void] {
   const [confirm, dialog] = useConfirmDialog()
   const ask = useCallback((request: AppConfirmRequest) => confirm(confirmRequest(request)), [confirm])
-  return [ask, dialog]
+  const latest = useRef<ReactNode>(dialog)
+  latest.current = dialog
+  /**
+   * Closes the open question as a cancel, for a question the screen's own state has answered meanwhile (a save's
+   * answer). The package has no close of its own yet: this calls the open dialog's own `onOpenChange(false)`, the path
+   * Escape takes.
+   */
+  const close = useCallback(() => {
+    const open = latest.current
+    const props: unknown = isValidElement(open) ? open.props : null
+    if (typeof props === 'object' && props !== null && 'onOpenChange' in props && typeof props.onOpenChange === 'function') props.onOpenChange(false)
+  }, [])
+  return [ask, dialog, close]
 }
