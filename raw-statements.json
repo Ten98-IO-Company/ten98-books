@@ -1,114 +1,114 @@
 {
   "src/server/account-security.ts": {
     "count": 28,
-    "reason": "Identity controller: hand-written statements that lock the user, session, credential and verification rows in one transaction with the sign-in library call; it moves when the shared auth preset is adopted."
+    "reason": "App-owned identity controller: statements that lock the user, session, credential and verification rows (FOR UPDATE) in the same transaction as the sign-in library call, delete sessions and challenges, and record used codes. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/api/http.ts": {
     "count": 2,
-    "reason": "Rate-limit counters: one statement with a data-modifying CTE and ON CONFLICT on a specific key; kept as written until a builder form with the same emitted shape is shown."
+    "reason": "Two rate-limit statements, each a data-modifying CTE with ON CONFLICT on the key and minute. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/api/session.ts": {
     "count": 1,
-    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+    "reason": "One read of whether the installation has been claimed. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/api/settings.ts": {
     "count": 2,
-    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Reads and upserts the signed-in user's keymap choice. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/api/team.ts": {
     "count": 1,
-    "reason": "Handler-level statement beside the ledger module call; conversion to typed queries follows the cost-centres pilot."
+    "reason": "One read of the caller's workspaces with their role and two-factor state. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/auth.ts": {
     "count": 11,
-    "reason": "First-user setup: one atomic transaction under the installation row lock and the per-email advisory lock that creates the account, credential, workspace and owner membership; conversion to typed queries follows the cost-centres pilot."
+    "reason": "First-user setup in one transaction: locks the installation row, inserts the user, credential, workspace, owner membership and operator rows, and marks the installation claimed. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/cli.ts": {
     "count": 2,
-    "reason": "Operator command-line tool: role and database statements run outside the application transaction helpers."
+    "reason": "Operator health check: a connection probe and a read of the worker heartbeat. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/companies.ts": {
     "count": 10,
-    "reason": "Company creation and settings: idempotency rows and settings written in the same transaction as the shared team controller call; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Company creation and books settings: row locks, an advisory lock, the idempotency row and the settings rows, in the same transaction as the shared team controller call. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/demo/compare.ts": {
     "count": 1,
-    "reason": "Demo seeder and comparison: reads that check what the ledger module stored; conversion to typed queries follows the cost-centres pilot."
+    "reason": "One read of the seeded vouchers' numbers by idempotency key. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/demo/seed.ts": {
     "count": 5,
-    "reason": "Demo seeder and comparison: reads that check what the ledger module stored; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Demo seeder: finds the owner by email, reads the markers of an earlier seed, and takes and releases a session advisory lock. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/jobs.ts": {
     "count": 2,
-    "reason": "Worker heartbeat statements; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Worker heartbeat: one upsert and one delete. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/bills.ts": {
     "count": 10,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Bill rows of voucher lines: inserts with ON CONFLICT on the bill's name key, and reads with CTEs and bigint sums. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/context.ts": {
     "count": 1,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "One read of the company's books settings. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/cost-centres.ts": {
     "count": 22,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Cost categories and centres: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/currencies.ts": {
     "count": 18,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/masters.ts": {
     "count": 28,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Groups, ledgers and voucher types: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/reports.ts": {
     "count": 3,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "The shared ledger read: a recursive CTE over the group tree with bigint sums, one ledger lookup, and SET LOCAL statement_timeout. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/revisions.ts": {
     "count": 2,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Revision log: one insert and one read joined to the actor's name. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/seed.ts": {
     "count": 1,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "One call of the database function that seeds a company's chart. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/stock-masters.ts": {
     "count": 31,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Stock masters and opening stock: writes with RETURNING under FOR UPDATE and share row locks, and sums of opening values. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/voucher-entry.ts": {
     "count": 5,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Voucher entry reads: the next number, ledger checks, the balance preview and the counter ledger (one CTE). Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/ledger/vouchers.ts": {
     "count": 19,
-    "reason": "Ledger module: hand-written SQL with explicit row locks in a fixed order, deferred checks and plans measured under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Voucher posting, alter, cancel and delete: row locks (FOR UPDATE, key share), an advisory lock, the numbering counter with ON CONFLICT, a row-value keyset read and bigint sums. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/reports/bills.ts": {
     "count": 16,
-    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Bill reports: CTEs, a row-value keyset and bigint sums; it also writes the ageing bucket settings. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/reports/cost-centres.ts": {
     "count": 3,
-    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Cost reports: grouped bigint sums per centre and ledger, and two lookups. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/reports/day-book.ts": {
     "count": 3,
-    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Day book: a keyset page in a CTE, totals with filtered sums, and the last voucher date. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/reports/ledger.ts": {
     "count": 3,
-    "reason": "Report read model: hand-written SQL with CTEs, row-value keysets and bigint sums on measured plans under the row-level security policy; conversion to typed queries follows the cost-centres pilot."
+    "reason": "Ledger reports: a header read and a CTE with bigint sums per voucher. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/tenancy.ts": {
     "count": 6,
-    "reason": "Sets the company scope for row-level security, reads memberships under a share lock and asserts the database roles; replaced by the shared tenancy helper when it is adopted."
+    "reason": "Sets the company scope read by the row-level security policy, reads the caller's memberships under a share lock, runs BEGIN, COMMIT and ROLLBACK for company transactions, and reads the catalog to assert the database roles. Not converted to typed queries; no decision to convert has been made."
   },
   "src/server/workspace-team.ts": {
     "count": 3,
-    "reason": "Transaction control (BEGIN, COMMIT, ROLLBACK) around the shared team controller on a caller-owned connection."
+    "reason": "BEGIN, COMMIT and ROLLBACK around the shared team controller on a connection the app owns. Not converted to typed queries; no decision to convert has been made."
   }
 }

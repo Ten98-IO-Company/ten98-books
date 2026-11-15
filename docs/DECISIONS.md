@@ -108,3 +108,4 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 | O-6 | UAE e-invoicing route: which accredited service provider to contract (paid). Needed at M3 planning. |
 | O-7 | Interviews with 10–15 GCC accountants before locking the M3–M5 order. |
 | O-8 | Hosting region and Saudi data residency. Needed before any production deploy. |
+| O-17 | Typed queries: whether the hand-written SQL in `src` is converted to typed Drizzle queries, and whether the numbered SQL migrations give way to a generated schema. Until decided, `raw-statements.json` only records the current count per file (the shared runtime's architecture check requires the file from 0.27 on); nothing is converted and migrations stay hand-written and numbered. |
