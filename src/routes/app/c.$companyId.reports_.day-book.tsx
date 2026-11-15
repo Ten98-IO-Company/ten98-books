@@ -6,7 +6,9 @@ import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { registerRange, type DayBookReport, type DayBookRow } from '../../lib/reports'
+import { registerRange, type DayBookReport, type DayBookRow, type ReportPeriod } from '../../lib/reports'
+import { sessionStore, workingDateFromPeriod, writeWorkingDate } from '../../lib/working-date'
+import { useApp } from '../../lib/app-context'
 
 /**
  * The day book: the vouchers of one day (by default the last voucher date) or of a period, in entry order. The amount
@@ -32,8 +34,15 @@ function DayBookScreen() {
   const screen = useReportScreen<Wire<DayBookReport>>(search, 'day', (period, companyId) => `/api/companies/${companyId}/reports/day-book?${query({ ...period, after: pages.after })}`)
   const data = screen.report.data
   const range = data ? registerRange(pages.before, data.rows.length, data.next !== null) : null
+  const userId = useApp().me.user.id
+  // A day the user chooses here becomes the tab's working date (observed); the default day the screen opens on does not.
+  const choosePeriod = (period: ReportPeriod) => {
+    const day = workingDateFromPeriod(period)
+    if (day) writeWorkingDate(sessionStore, userId, screen.company.id, day)
+    screen.setPeriod(period)
+  }
   return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}
-    period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
+    period={{ kind: 'range', period: screen.period, onChange: choosePeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/day-book/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}
     summary={data ? `${range ? `${range} ` : ''}${data.totals.vouchers} ${data.totals.vouchers === 1 ? 'voucher counts' : 'vouchers count'} in the totals; cancelled and optional vouchers do not.` : undefined}>

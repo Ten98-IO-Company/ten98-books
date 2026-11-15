@@ -306,7 +306,9 @@ export type Revision = {
 export const nextNumberQuery = z.object({ date: calendarDate }).strict();
 export type NextNumber = { number: number; periodStart: string; periodEnd: string };
 const previewLine = z.object({ ledgerId: id, side: z.enum(sides), amount: moneyText }).strict();
-export const balancePreviewInput = z.object({ date: calendarDate, voucherId: id.optional(), lines: z.array(previewLine).max(500) }).strict();
+/** `ledgers` names more ledgers to report with the draft applied (a single-entry Account before its first line); lines and ledgers together are at most 500. */
+export const balancePreviewInput = z.object({ date: calendarDate, voucherId: id.optional(), lines: z.array(previewLine).max(500), ledgers: z.array(id).max(500).optional() }).strict()
+  .refine(input => input.lines.length + (input.ledgers?.length ?? 0) <= 500, { message: 'At most 500 lines and ledgers together.', path: ['ledgers'] });
 /** A ledger's balance at the date, signed: positive on the debit side, negative on the credit side. */
 export type BalancePreview = { balances: { ledgerId: string; balance: bigint }[] };
 export const counterLedgerQuery = z.object({ voucherTypeId: id, side: z.enum(sides) }).strict();

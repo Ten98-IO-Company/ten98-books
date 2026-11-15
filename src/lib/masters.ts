@@ -26,7 +26,8 @@ export const defaultSide = (nature: Nature | null | undefined): Side => nature =
 export const isolate = (text: string): string => `⁨${text}⁩`;
 
 const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
-const byName = <T extends { name: string; id: string }>(left: T, right: T) => collator.compare(left.name, right.name) || (left.id < right.id ? -1 : 1);
+/** Names in the order every master list uses (case and accents aside, numbers by value), ties by id. */
+export const byName = <T extends { name: string; id: string }>(left: T, right: T) => collator.compare(left.name, right.name) || (left.id < right.id ? -1 : 1);
 
 /** `1250.5` becomes `1,250.500` for a three-decimal company; display only, the wire form has no grouping. */
 export function displayAmount(amount: string, exponent: MoneyExponent): string {
@@ -111,7 +112,7 @@ export const isCursorRow = (row: ChartRow): row is Exclude<ChartRow, { kind: 'he
 export const primaryChoice = 'primary';
 
 /** Ids of the groups below `groupId`, at any depth. */
-export function descendantIds(groups: readonly GroupRow[], groupId: string): Set<string> {
+export function descendantIds(groups: readonly Pick<GroupRow, 'id' | 'parentId'>[], groupId: string): Set<string> {
   const children = new Map<string, string[]>();
   for (const group of groups) if (group.parentId) children.set(group.parentId, [...children.get(group.parentId) ?? [], group.id]);
   const found = new Set<string>();

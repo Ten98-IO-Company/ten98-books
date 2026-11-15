@@ -4,7 +4,16 @@ import { after, before, test } from 'node:test';
 import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtime';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { addLedger, asAdmin, browser, chart, createCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
+import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, password, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
+import { accountSide, blankDraft, classifyAnswer, createDraftController, lockAlert, nextBillRow, storedDraftsOf, toVoucherBody, type BillDraft, type BodyInput, type DraftStore, type EntryLine, type SendFailure } from '../src/lib/voucher-entry/index.ts';
+import { join } from 'node:path';
+import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
+import { seedDataset } from '../src/server/demo/seed.ts';
+import { listLedgers } from '../src/server/ledger/masters.ts';
+import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
+import { handleApi } from '../src/server/api.ts';
+import { isOwnError } from '../src/lib/api.ts';
+import { getConfig } from '../src/server/config.ts';
 
 /**
  * The voucher entry reads (docs/LEDGER.md, "Voucher entry reads"): the previewed next number, the balance preview and the
@@ -254,4 +263,327 @@ test('viewers read all three; another company\'s company, voucher type, ledger a
 
   const stranger = browser();
   for (const [path, body] of paths(c.base, c.books.type('payment'), rent)) assert.equal((await stranger.call(path, body)).status, 401, path);
+});
+
+// ---- What the entry screen sends (src/lib/voucher-entry.ts) and the pending list it shows ----
+
+const entry = (key: string, side: 'Dr' | 'Cr' | '', ledger: string, amount: string): EntryLine => ({ key, side, ledger, amount });
+
+test('the entry screen\'s bodies post as built and read back line for line: single entry with the Account last, the contra Account receiving, bills on their lines', async () => {
+  const c = await company('Entry Bodies');
+  const bank = await c.ledger('Harbour Bank', 'bank_accounts', { amount: '10000', side: 'Dr' });
+  const cash = c.books.ledger('Cash');
+  const rent = await c.ledger('Premises Rent', 'indirect_expenses');
+  const customer = await c.ledger('Customer North', 'receivables');
+  const send = async (input: Omit<BodyInput, 'idempotencyKey' | 'voucherTypeId'>) => {
+    const body = toVoucherBody({ ...input, idempotencyKey: `entry-${randomUUID()}`, voucherTypeId: c.books.type(input.kind) }, 2);
+    const answer = await owner.browser.call(`${c.base}/vouchers`, body);
+    assert.equal(answer.status, 201, JSON.stringify(answer.body));
+    const read = (await ok(owner.browser.call(`${c.base}/vouchers/${answer.body.voucher.id}`))).voucher;
+    return read.lines.map((line: any) => [line.ledgerId, line.side, line.amount, line.bills.map((bill: any) => [bill.kind, bill.billName, bill.amount, bill.side])]);
+  };
+  const base = { narration: '', bills: {} };
+  assert.deepEqual(await send({ ...base, kind: 'payment', layout: 'single', account: bank, date: '2026-01-01', lines: [entry('line-1', 'Dr', rent, '4000.00'), entry('line-2', 'Dr', '', '')] }),
+    [[rent, 'Dr', '4000.00', []], [bank, 'Cr', '4000.00', []]], 'particulars, then the Account for the total (the blank line is left out)');
+  assert.deepEqual(await send({ ...base, kind: 'contra', layout: 'single', account: bank, date: '2026-01-04', lines: [entry('line-1', 'Cr', cash, '500.00')] }),
+    [[cash, 'Cr', '500.00', []], [bank, 'Dr', '500.00', []]], 'the contra Account is debited, as the starter dataset');
+  const journal: BillDraft[] = [{ key: 'b1', method: 'new_ref', bill: '', name: 'INV-1', credit: '30', amount: '300.00', side: 'Dr' }];
+  assert.deepEqual(await send({ ...base, kind: 'journal', layout: 'double', account: '', date: '2026-01-07', bills: { 'line-1': journal },
+    lines: [entry('line-1', 'Dr', customer, '300.00'), entry('line-2', 'Cr', rent, '300.00'), entry('line-3', 'Dr', '', '')] }),
+    [[customer, 'Dr', '300.00', [['new_ref', 'INV-1', '300.00', 'Dr']]], [rent, 'Cr', '300.00', []]]);
+  const pending = (await ok(owner.browser.call(`${c.base}/ledgers/${customer}/bills?asOf=2026-01-12&scope=pending&sort=name`))).bills;
+  const receipt: BillDraft[] = [{ key: 'b1', method: 'against_ref', bill: pending[0].billId, name: '', credit: '', amount: '200.00', side: 'Cr' },
+    { key: 'b2', method: 'on_account', bill: '', name: '', credit: '', amount: '50.00', side: 'Cr' }];
+  assert.deepEqual(await send({ ...base, kind: 'receipt', layout: 'single', account: bank, date: '2026-01-12', bills: { 'line-1': receipt }, lines: [entry('line-1', 'Cr', customer, '250.00')] }),
+    [[customer, 'Cr', '250.00', [['against_ref', 'INV-1', '200.00', 'Cr'], ['on_account', null, '50.00', 'Cr']]], [bank, 'Dr', '250.00', []]]);
+  assert.deepEqual(await send({ ...base, kind: 'payment', layout: 'double', account: '', date: '2026-01-15', lines: [entry('line-1', 'Dr', rent, '100.00'), entry('line-2', 'Cr', cash, '100.00')] }),
+    [[rent, 'Dr', '100.00', []], [cash, 'Cr', '100.00', []]]);
+});
+
+test('the pending list for entry is in the observed name order: case and hyphens ignored, text not numbers', async () => {
+  const c = await company('Pending Order');
+  const party = await c.ledger('Order Party', 'receivables');
+  const income = await c.ledger('Order Income', 'indirect_income');
+  // Entered in another order than listed, one voucher each, as the observation's bills were.
+  const names = ['B-300', 'a2', '10', 'C-200', 'b3', 'A-100', '9', 'B1', 'A-020', 'B-050'];
+  for (const name of names) {
+    const answer = await owner.browser.call(`${c.base}/vouchers`, { idempotencyKey: `order-${randomUUID()}`, voucherTypeId: c.books.type('journal'), date: '2026-07-01',
+      lines: [{ ledgerId: party, side: 'Dr', amount: '1', bills: [{ kind: 'new_ref', name, amount: '1' }] }, { ledgerId: income, side: 'Cr', amount: '1' }] });
+    assert.equal(answer.status, 201, JSON.stringify(answer.body));
+  }
+  const listed = (await ok(owner.browser.call(`${c.base}/ledgers/${party}/bills?asOf=2026-07-01&scope=pending&sort=name`))).bills.map((bill: any) => bill.name);
+  assert.deepEqual(listed, ['10', '9', 'A-020', 'A-100', 'a2', 'B-050', 'B1', 'b3', 'B-300', 'C-200']);
+});
+
+test('round 2, item 11: the screen\'s bodies for the twelve starter vouchers store exactly what a full seed stores, row for row', async () => {
+  const starter = await loadDataset(join(demoRoot, 'starter-trading'));
+  const full = await seedDataset(owner.userId, starter);
+  const copy = await seedDataset(owner.userId, starter, true, 'Entry shape copy');
+  const ledgers = await inCompany(owner.userId, copy.companyId, listLedgers);
+  const types = (await ok(owner.browser.call(`/api/companies/${copy.companyId}/voucher-types`))).voucherTypes as { id: string; kind: string; systemKey: string | null }[];
+  const nameOf = new Map(starter.ledgers.map(ledger => [ledger.key, ledger.name]));
+  const ledgerId = (key: string) => ledgers.find(ledger => ledger.name === nameOf.get(key))!.id;
+  const cashOrBank = (id: string) => ledgers.find(ledger => ledger.id === id)?.cashOrBank === true;
+  const slice = starter.vouchers.filter(voucher => ['payment', 'receipt', 'contra', 'journal'].includes(voucher.type));
+  assert.equal(slice.length, 12);
+  for (const voucher of slice) {
+    const kind = voucher.type as 'payment' | 'receipt' | 'contra' | 'journal';
+    const lines = voucher.lines.map((line, index) => ({ key: `line-${index + 1}`, side: line.side as 'Dr' | 'Cr', ledger: ledgerId(line.ledger), amount: line.amount }));
+    // As the screen keys them (Part B): single entry with the Account on its side; a journal in double entry.
+    const account = kind === 'journal' ? undefined : lines.find(line => line.side === accountSide(kind) && cashOrBank(line.ledger));
+    const draft = account ? { kind, layout: 'single' as const, account: account.ledger, lines: lines.filter(line => line !== account) } : { kind, layout: 'double' as const, account: '', lines };
+    // Each bill-wise line gets the panel's default rows, as accepted with Enter.
+    const bills: Record<string, BillDraft[]> = {};
+    for (const line of draft.lines) {
+      if (!ledgers.find(ledger => ledger.id === line.ledger)?.billWise) continue;
+      const pending = ((await ok(owner.browser.call(`/api/companies/${copy.companyId}/ledgers/${line.ledger}/bills?asOf=${voucher.date}&scope=pending&sort=name`))).bills as any[])
+        .map(bill => ({ ...bill, pending: parseMoney(bill.pending, 2), finalPending: parseMoney(bill.finalPending, 2) }));
+      const side = draft.layout === 'single' ? (accountSide(kind) === 'Dr' ? 'Cr' : 'Dr') : line.side;
+      bills[line.key] = [nextBillRow({ kind, lineSide: side, lineAmount: parseMoney(line.amount, 2), rows: [], pending, exponent: 2, key: 'b1' })];
+    }
+    const typeId = types.find(type => type.kind === kind && type.systemKey !== null)!.id;
+    const body = toVoucherBody({ ...draft, idempotencyKey: `shape-${randomUUID()}`, voucherTypeId: typeId, date: voucher.date, narration: voucher.narration ?? '', bills }, 2);
+    const answer = await owner.browser.call(`/api/companies/${copy.companyId}/vouchers`, body);
+    assert.equal(answer.status, 201, `${voucher.key}: ${JSON.stringify(answer.body)}`);
+  }
+  const stored = async (companyId: string) => inCompany(owner.userId, companyId, async context => {
+    const page = await listVouchers(context, { from: '2026-01-01', to: '2026-12-31', limit: 500 });
+    const read = await Promise.all(page.vouchers.filter(voucher => ['payment', 'receipt', 'contra', 'journal'].includes(voucher.kind)).map(voucher => readVoucher(context, voucher.id)));
+    return read.map(voucher => ({ kind: voucher.kind, date: voucher.date, number: voucher.number, narration: voucher.narration,
+      lines: voucher.lines.map(line => ({ ledger: line.ledgerName, side: line.side, amount: line.amount, bills: line.bills.map(bill => ({ kind: bill.kind, name: bill.billName, side: bill.side, amount: bill.amount })) })) }))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+  });
+  assert.deepEqual(await stored(copy.companyId), await stored(full.companyId));
+});
+
+test('round 2, item 12: the balance preview also reports the ledgers named in `ledgers`, signed and with the draft applied, each once; a draft without lines is allowed', async () => {
+  const c = await company('Preview Named Ledgers');
+  const bank = await c.ledger('Named Bank', 'bank_accounts', { amount: '1000', side: 'Dr' });
+  const rent = await c.ledger('Named Rent', 'indirect_expenses');
+  const cash = c.books.ledger('Cash');
+  await c.post('payment', '2026-01-05', [[rent, 'Dr', '250'], [bank, 'Cr', '250']]);
+  const preview = (body: unknown, member: Member = owner) => member.browser.call(`${c.base}/vouchers/balance-preview`, body);
+  // The Account before its first line: no lines, the bank named; its balance as the ledger balance read gives it.
+  const alone = await preview({ date: '2026-01-31', lines: [], ledgers: [bank] });
+  assert.equal(alone.status, 200, JSON.stringify(alone.body));
+  assert.deepEqual(alone.body, { balances: [{ ledgerId: bank, balance: '750.00' }] });
+  const read = (await ok(owner.browser.call(`${c.base}/ledgers/${bank}/balance?from=2026-01-01&to=2026-01-31`))).balance;
+  assert.equal(formatMoney(subtractMoney(parseMoney(read.closingDebit, 2), parseMoney(read.closingCredit, 2)), 2), '750.00', 'the same figure as the balance read');
+  // With lines: each ledger once, the lines' first, then the named; the draft applied to a ledger named in both.
+  const both = await ok(preview({ date: '2026-01-31', lines: [{ ledgerId: rent, side: 'Dr', amount: '50' }, { ledgerId: bank, side: 'Cr', amount: '50' }], ledgers: [bank, cash, bank] }));
+  assert.deepEqual(both.balances, [{ ledgerId: rent, balance: '300.00' }, { ledgerId: bank, balance: '700.00' }, { ledgerId: cash, balance: '0.00' }]);
+  // A body without `ledgers` behaves as before.
+  assert.deepEqual((await ok(preview({ date: '2026-01-31', lines: [{ ledgerId: rent, side: 'Dr', amount: '50' }] }))).balances, [{ ledgerId: rent, balance: '300.00' }]);
+  assert.deepEqual((await ok(preview({ date: '2026-01-31', lines: [] }))).balances, [], 'nothing named: nothing reported');
+  // An unknown id, or another company's ledger, inside `ledgers` answers as a line's ledger does: 400 not_found.
+  const other = await company('Preview Named Elsewhere');
+  const otherRent = await other.ledger('Elsewhere Rent', 'indirect_expenses');
+  for (const ledgerId of [randomUUID(), otherRent]) {
+    const answer = await preview({ date: '2026-01-31', lines: [], ledgers: [bank, ledgerId] });
+    assert.deepEqual([answer.status, answer.body.code, answer.body.error], [400, 'not_found', 'Ledger 2 of the ledgers was not found in this company.']);
+  }
+  // Bounds: lines and ledgers together at most 500; ids validated.
+  const many = Array.from({ length: 450 }, () => ({ ledgerId: rent, side: 'Dr', amount: '1' }));
+  assert.equal((await preview({ date: '2026-01-31', lines: many, ledgers: Array.from({ length: 50 }, () => bank) })).status, 200);
+  assert.deepEqual([(await preview({ date: '2026-01-31', lines: many, ledgers: Array.from({ length: 51 }, () => bank) })).status, (await preview({ date: '2026-01-31', lines: [], ledgers: ['not-an-id'] })).body.code], [400, 'validation']);
+  // A viewer reads it; a member of another company only gets the missing company's answer.
+  const viewer = await invite(owner.browser, c.id, 'viewer');
+  assert.deepEqual((await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, viewer)).body, { balances: [{ ledgerId: bank, balance: '750.00' }] });
+  const intruder = await invite(owner.browser, other.id, 'admin');
+  assert.deepEqual(await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, intruder), { status: 404, body: { error: companyNotFound, code: 'not_found' } });
+});
+
+// ---- The draft controller (the screen's save path) against the real server (docs/VOUCHERS.md, "The draft, its key and its lock") ----
+
+type Answer = { voucher: { id: string; number: number | null }; replayed: boolean };
+const memoryStore = (text: string | null = null): DraftStore & { text: string | null } => ({ text, read() { return this.text; }, write(value: string) { this.text = value; } });
+const failureOf = (error: unknown): SendFailure => ({
+  status: error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined,
+  code: error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+  message: error instanceof Error ? error.message : 'no answer',
+  json: error instanceof Error && 'json' in error && error.json === true,
+});
+/** A failed answer as the api helper throws it: whether the body was the application's JSON decides its class. */
+const failed = (answer: { status: number; body: unknown }) =>
+  Object.assign(new Error(typeof answer.body === 'object' && answer.body !== null && 'error' in answer.body && typeof answer.body.error === 'string' ? answer.body.error : 'failed'),
+    { status: answer.status, code: typeof answer.body === 'object' && answer.body !== null && 'code' in answer.body && typeof answer.body.code === 'string' ? answer.body.code : undefined, json: isOwnError(answer.body) });
+
+/**
+ * A payment screen on a company: the controller the screen runs, its body built as the hook builds it, sent by `member`
+ * to the real server. `lose` makes the next answer a gateway error after the server has committed.
+ */
+async function entryScreen(name: string) {
+  const c = await company(name);
+  const rent = await c.ledger(`${name} Rent`, 'indirect_expenses');
+  const cash = c.books.ledger('Cash');
+  const member = await invite(owner.browser, c.id, 'admin');
+  let lose = false;
+  // A proxy's own answer after the server committed: a JSON body that is not this application's error.
+  let proxy: number | null = null;
+  const mount = (store: DraftStore) => {
+    const controller = createDraftController<Answer>({
+      start: blankDraft('payment', 'single', '2026-01-05'), makeKey: () => `entry-${randomUUID()}`, store, failureOf,
+      send: async body => {
+        const value: unknown = JSON.parse(body);
+        const answer = await member.browser.call(`${c.base}/vouchers`, value);
+        if (answer.status < 300 && lose) { lose = false; throw Object.assign(new Error('Bad gateway'), { status: 502, json: false }); }
+        if (answer.status < 300 && proxy !== null) { const status = proxy; proxy = null; throw failed({ status, body: { message: 'Blocked by proxy' } }); }
+        if (answer.status >= 300) throw failed(answer);
+        return answer.body;
+      },
+    });
+    const fill = (amount: string, date = '2026-01-05') => {
+      controller.edit({ type: 'date', date });
+      controller.edit({ type: 'account', ledger: cash });
+      controller.edit({ type: 'lines', lines: [{ key: 'line-1', side: 'Dr', ledger: rent, amount }] });
+    };
+    const save = () => { const { draft, key } = controller.machine(); return controller.save(JSON.stringify(toVoucherBody({ ...draft, idempotencyKey: key, voucherTypeId: c.books.type('payment') }, 2))); };
+    return { controller, fill, save };
+  };
+  const vouchers = async () => (await ok(owner.browser.call(`${c.base}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers as { id: string }[];
+  const email = (await asAdmin(database.adminUrl, admin => admin.query<{ email: string }>('SELECT email FROM "user" WHERE id = $1', [member.userId]))).rows[0].email;
+  const endSession = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM session WHERE "userId" = $1', [member.userId]));
+  const signIn = async () => assert.equal((await member.browser.call('/api/auth/sign-in/email', { email, password })).status, 200);
+  const removeMember = () => asAdmin(database.adminUrl, admin => admin.query('DELETE FROM membership WHERE user_id = $1 AND workspace_id = $2', [member.userId, c.id]));
+  return { mount, vouchers, endSession, signIn, removeMember, loseNext: () => { lose = true; }, proxyNext: (status: number) => { proxy = status; } };
+}
+
+test('the key rule: refused, changed, its answer lost after the commit, then retried is ONE voucher under one key', async () => {
+  const screen = await entryScreen('Entry Duplicate Guard');
+  const { controller, fill, save } = screen.mount(memoryStore());
+  const key = controller.machine().key;
+  fill('10.00', '2025-12-31');
+  assert.equal((await save())?.kind, 'refused', 'before the books begin: a definite refusal');
+  assert.equal(controller.machine().key, key, 'a refusal keeps the key');
+  controller.edit({ type: 'date', date: '2026-01-05' });
+  screen.loseNext();
+  assert.equal((await save())?.kind, 'none');
+  assert.deepEqual([controller.machine().phase, controller.machine().key], ['unknown', key]);
+  const retried = await controller.retry();
+  assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true, 'the server replays the committed voucher');
+  assert.equal((await screen.vouchers()).length, 1, 'one voucher, not two');
+});
+
+test('unknown, the session deleted, retried (401), signed in, restored and retried is ONE voucher', async () => {
+  const screen = await entryScreen('Entry Lost Session');
+  const store = memoryStore();
+  const first = screen.mount(store);
+  const key = first.controller.machine().key;
+  first.fill('999.00');
+  screen.loseNext();
+  assert.equal((await first.save())?.kind, 'none', 'committed, its answer lost');
+  await screen.endSession();
+  assert.equal((await first.controller.retry())?.kind, 'signed-out');
+  assert.equal(lockAlert(first.controller.machine())?.phase, 'unknown', 'the alert stays after the 401');
+  await screen.signIn();
+  // A new screen after signing in: offered the kept draft, which comes back locked under its own key.
+  const second = screen.mount(store);
+  assert.equal(second.controller.restore(), true);
+  assert.deepEqual([second.controller.machine().phase, second.controller.machine().key], ['unknown', key]);
+  second.fill('1.00');
+  assert.equal(second.controller.machine().draft.lines[0]?.amount, '999.00', 'nothing changes the restored draft');
+  const retried = await second.controller.retry();
+  assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true);
+  assert.equal((await screen.vouchers()).length, 1);
+});
+
+test('a kept draft saved in one tab and changed in another is a 409 conflict, frozen; the original body again is a replay', async () => {
+  const screen = await entryScreen('Entry Kept Conflict');
+  const store = memoryStore();
+  const first = screen.mount(store);
+  first.fill('4321.00');
+  await screen.endSession();
+  assert.equal((await first.save())?.kind, 'signed-out', 'nothing was sent to the handler: kept, editing');
+  await screen.signIn();
+  // The tab duplicated after signing in: both hold the same kept draft, under the same key.
+  const [tabA, tabB, tabC] = [screen.mount(store), screen.mount(memoryStore(store.text)), screen.mount(memoryStore(store.text))];
+  for (const tab of [tabA, tabB, tabC]) assert.equal(tab.controller.restore(), true);
+  const saved = await tabA.save();
+  assert.equal(saved?.kind, 'saved');
+  // Tab B changes the amount and saves: the server has that key with another body.
+  tabB.fill('4322.00');
+  assert.equal((await tabB.save())?.kind, 'conflict');
+  const conflict = tabB.controller.machine();
+  assert.deepEqual([conflict.phase, lockAlert(conflict)?.phase], ['conflict', 'conflict']);
+  tabB.fill('4321.00');
+  assert.equal(tabB.controller.machine(), conflict, 'frozen: no edit, no send');
+  assert.equal(tabB.save(), null);
+  // Tab C sends the kept body unchanged under the same key: the same voucher, replayed.
+  const replay = await tabC.save();
+  assert.ok(replay?.kind === 'saved' && saved?.kind === 'saved');
+  assert.deepEqual([replay.answer.replayed, replay.answer.voucher.id], [true, saved.answer.voucher.id]);
+  assert.equal((await screen.vouchers()).length, 1, 'one voucher across the three tabs');
+});
+
+test('LOW 5: unknown, then the member removed, then retried: the denial says nothing about the first send, so it stays unknown', async () => {
+  const screen = await entryScreen('Entry Removed Member');
+  const { controller, fill, save } = screen.mount(memoryStore());
+  fill('77.00');
+  screen.loseNext();
+  assert.equal((await save())?.kind, 'none', 'committed, its answer lost');
+  await screen.removeMember();
+  const retried = await controller.retry();
+  assert.equal(retried?.kind, 'denied', 'membership is checked before the replay');
+  const machine = controller.machine();
+  assert.deepEqual([machine.phase, lockAlert(machine)?.phase, typeof lockAlert(machine)?.note], ['unknown', 'unknown', 'string'], 'still unknown, the denial noted, not unlocked');
+  assert.equal((await screen.vouchers()).length, 1);
+});
+
+test('the answer classes against the real server: every row it can produce', async () => {
+  const c = await company('Entry Answer Classes');
+  const rent = await c.ledger('Classes Rent', 'indirect_expenses');
+  const viewer = await invite(owner.browser, c.id, 'viewer');
+  const other = await company('Entry Answer Elsewhere');
+  const intruder = await invite(owner.browser, other.id, 'admin');
+  const body = (key: string, amount = '10') => ({ idempotencyKey: key, voucherTypeId: c.books.type('payment'), date: '2026-01-05', lines: [{ ledgerId: rent, side: 'Dr', amount }, { ledgerId: c.books.ledger('Cash'), side: 'Cr', amount }] });
+  const classOf = (answer: { status: number; body: unknown }) => {
+    const error = failed(answer);
+    return classifyAnswer({ ok: false, status: error.status, code: error.code, json: error.json });
+  };
+  const raw = async (method: string, path: string, headers: Record<string, string>, text: string) => {
+    const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method, headers: { cookie: [...owner.browser.cookies].map(([name, value]) => `${name}=${value}`).join('; '), ...headers }, body: text }));
+    const answer = await response.text();
+    let parsed: unknown = answer;
+    try { parsed = JSON.parse(answer); } catch { /* not JSON */ }
+    return { status: response.status, body: parsed };
+  };
+  const key = `classes-${randomUUID()}`;
+  assert.equal((await owner.browser.call(`${c.base}/vouchers`, body(key))).status, 201);
+  const rows: [string, { status: number; body: unknown }, number, string][] = [
+    ['the same key, another body', await owner.browser.call(`${c.base}/vouchers`, body(key, '11')), 409, 'conflict'],
+    ['a validation refusal', await owner.browser.call(`${c.base}/vouchers`, { ...body(`classes-${randomUUID()}`), date: '2025-12-31' }), 400, 'refused'],
+    ['no session', await browser().call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 401, 'signed-out'],
+    ['another origin', await owner.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`), 'https://elsewhere.test'), 403, 'denied'],
+    ['a viewer (the write is refused as an unavailable company)', await viewer.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['not a member (membership)', await intruder.browser.call(`${c.base}/vouchers`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['an unknown route', await owner.browser.call(`${c.base}/voucherz`, body(`classes-${randomUUID()}`)), 404, 'denied'],
+    ['another method', await raw('PUT', `${c.base}/vouchers`, { origin: getConfig().appUrl, 'content-type': 'application/json' }, JSON.stringify(body(`classes-${randomUUID()}`))), 405, 'refused'],
+  ];
+  for (const [name, answer, status, expected] of rows) {
+    assert.equal(answer.status, status, `${name}: ${JSON.stringify(answer.body)}`);
+    assert.equal(typeof answer.body === 'object' && answer.body !== null, true, `${name}: the application's JSON`);
+    assert.equal(classOf(answer), expected, name);
+  }
+  // A body that is not JSON: the application answers 415 with its own JSON, a definite refusal.
+  const notJson = await raw('POST', `${c.base}/vouchers`, { origin: getConfig().appUrl, 'content-type': 'text/plain' }, 'not json');
+  assert.deepEqual([notJson.status, typeof notJson.body, classOf(notJson)], [415, 'object', 'refused']);
+  assert.equal((await listVoucherCount(c.id)), 1, 'none of them made a voucher');
+});
+
+const listVoucherCount = async (companyId: string) => (await ok(owner.browser.call(`/api/companies/${companyId}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers.length;
+
+test('M-B: a proxy\'s JSON 403 or 404 after the commit is no answer: the voucher stays unknown and kept, and a retry replays it', async () => {
+  const screen = await entryScreen('Entry Proxy Answer');
+  for (const [status, amount] of [[403, '61.00'], [404, '62.00']] as const) {
+    const store = memoryStore();
+    const { controller, fill, save } = screen.mount(store);
+    fill(amount);
+    screen.proxyNext(status);
+    assert.equal((await save())?.kind, 'none', `${status} {"message": ...} is not this application's answer`);
+    assert.equal(controller.machine().phase, 'unknown');
+    assert.deepEqual(storedDraftsOf(store.read()).map(entry => entry.phase), ['unknown'], 'kept');
+    const retried = await controller.retry();
+    assert.equal(retried?.kind === 'saved' && retried.answer.replayed, true, 'it was committed: the retry replays it');
+  }
+  assert.equal((await screen.vouchers()).length, 2, 'one voucher each');
 });

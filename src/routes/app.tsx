@@ -94,7 +94,9 @@ function AppLayout() {
   const base = company ? `/app/c/${company.id}` : ''
   const ready = company?.company != null
   const currentSection = company ? sections.find(section => section.path && pathname.startsWith(base + section.path)) ?? sections[0] : undefined
-  const groups: SidebarNavGroup[] = ready ? [{ id: 'company', items: sections.map(section => ({ id: section.id, label: section.label, icon: section.icon, href: base + section.path, current: currentSection?.id === section.id })) }] : []
+  // Vouchers are entered by writers only: a viewer's sidebar leaves the section out.
+  const offered = sections.filter(section => section.id !== 'vouchers' || company?.role !== 'viewer')
+  const groups: SidebarNavGroup[] = ready ? [{ id: 'company', items: offered.map(section => ({ id: section.id, label: section.label, icon: section.icon, href: base + section.path, current: currentSection?.id === section.id })) }] : []
   // The Team page and the switcher follow the company in the address, else the current one.
   const shown = company ?? (pathname.startsWith('/app/team') ? current : undefined)
   const manager = current?.role === 'owner' || current?.role === 'admin'

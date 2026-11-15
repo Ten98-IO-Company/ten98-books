@@ -34,6 +34,8 @@ export const classicOnly: readonly CommandId[] = [
   'nav.quit',
   // Ctrl+G is the browser's find-next; web-safe users open screens with go-to (Alt+G).
   'nav.switch-to',
+  // Voucher entry: no web-safe key until the reachability test of D-05 runs; web-safe reaches them on the action bar.
+  'app.working-date', 'entry.voucher.list', 'entry.voucher.mode', 'entry.voucher.date', 'entry.line.remove',
 ]
 
 /** Keys both keymaps share: movement, opening, the menu letters, Enter and Escape. */
@@ -80,6 +82,9 @@ const shared = {
   'report.last': 'End',
   'report.drill': 'Enter',
   'report.zero-lines': 'Alt+N',
+  // Voucher entry: each declines (leaves the key to the field) unless its field is empty.
+  'entry.previous-field': 'Backspace',
+  'entry.skip-account': 'ArrowDown',
 } as const
 
 export const keymaps: Record<KeymapName, AppKeymap> = {
@@ -105,6 +110,11 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'report.detail': 'Alt+F5',
     'report.export': 'Ctrl+E',
     'report.print': 'Ctrl+P',
+    'app.working-date': 'F2',
+    'entry.voucher.list': 'F10',
+    'entry.voucher.mode': 'Ctrl+H',
+    'entry.voucher.date': 'F2',
+    'entry.line.remove': 'Ctrl+D',
   },
   'web-safe': {
     ...shared,
@@ -129,6 +139,11 @@ export const keymaps: Record<KeymapName, AppKeymap> = {
     'report.detail': 'Alt+M',
     'report.export': 'Alt+O',
     'report.print': 'Alt+I',
+    'app.working-date': [],
+    'entry.voucher.list': [],
+    'entry.voucher.mode': [],
+    'entry.voucher.date': [],
+    'entry.line.remove': [],
   },
 }
 
@@ -198,6 +213,13 @@ export const classicParity: Record<CommandId, Parity> = {
   'report.zero-lines': { status: 'ours', note: 'A configuration setting in the catalogue, not a key.' },
   'report.export': { status: 'same' },
   'report.print': { status: 'same' },
+  'app.working-date': { status: 'same', note: 'On the company menu. Sets the date new vouchers in this tab open on; any date from the books beginning, so a tab can move into the next year.' },
+  'entry.previous-field': { status: 'same', note: 'Only in an empty field; elsewhere Backspace deletes as usual.' },
+  'entry.skip-account': { status: 'same', note: 'Down on an empty Account goes to the first line without choosing one; with text in it, Down moves in its list.' },
+  'entry.voucher.list': { status: 'same' },
+  'entry.voucher.mode': { status: 'same', note: 'Single or double entry; the journal has double entry only.' },
+  'entry.voucher.date': { status: 'same', note: 'Opens the date field from any field or line; Enter or Escape returns to where the cursor was.' },
+  'entry.line.remove': { status: 'same', note: 'Only with the cursor in a line\'s ledger cell, as observed; Ctrl+D is otherwise kept from the browser\'s bookmark dialog.' },
 }
 
 /**
@@ -207,7 +229,6 @@ export const classicParity: Record<CommandId, Parity> = {
  */
 export type ReservedKey = { readonly context: CommandContext; readonly purpose: string; readonly keys: readonly string[]; readonly catalogueKey?: string; readonly reason?: string }
 export const classicReserved: readonly ReservedKey[] = [
-  { context: 'global', purpose: 'Set the date that new entries start from', keys: ['F2'] },
   { context: 'global', purpose: 'Open a calculator beside the screen', keys: ['Alt+='], catalogueKey: 'Ctrl+N', reason: 'Ctrl+N opens a new browser window; a page never receives it.' },
   { context: 'global', purpose: 'Turn optional accounting features on or off', keys: ['Ctrl+F11'], catalogueKey: 'F11', reason: 'F11 switches the browser to full screen; a page never receives it.' },
   { context: 'global', purpose: 'Choose what the screen shows', keys: ['F12'] },
@@ -221,9 +242,8 @@ export const classicReserved: readonly ReservedKey[] = [
   { context: 'company-home', purpose: 'Menu letters for banking tools, a stock overview, ratio analysis, the full list of reports, an overview page and signing out', keys: ['N', 'S', 'R', 'D', 'O', 'Q'] },
   { context: 'list', purpose: 'Mark a row; hide a row from the view and bring it back', keys: ['Space', 'Alt+R', 'Alt+U'] },
   { context: 'list', purpose: 'List views and settings: another grouping, other kinds of master, valuation settings, other layouts, exception lists, saved layouts and filters', keys: ['F5', 'F10', 'Ctrl+B', 'Ctrl+H', 'Ctrl+J', 'Ctrl+L', 'Ctrl+F'] },
-  { context: 'entry', purpose: 'Pick another voucher type from the full list', keys: ['F10'] },
   { context: 'entry', purpose: 'Switch to the voucher types for returns, stock moves, stock counts and customer orders', keys: ['Alt+F5', 'Alt+F6', 'Alt+F7', 'Ctrl+F7', 'Ctrl+F8'] },
-  { context: 'entry', purpose: 'Change the entry layout, add details, mark the entry provisional, reuse a skipped number, fill from an earlier entry, open reports about it', keys: ['Ctrl+H', 'Ctrl+I', 'Ctrl+L', 'Ctrl+U', 'Ctrl+F', 'Ctrl+O'] },
+  { context: 'entry', purpose: 'Add details, mark the entry provisional, reuse a skipped number, fill from an earlier entry, open reports about it', keys: ['Ctrl+I', 'Ctrl+L', 'Ctrl+U', 'Ctrl+F', 'Ctrl+O'] },
   { context: 'entry', purpose: 'Take a line out of the entry and put it back', keys: ['Alt+R', 'Alt+U'] },
   { context: 'entry', purpose: 'Mark the entry as dated in the future', keys: ['Alt+T'], catalogueKey: 'Ctrl+T', reason: 'Ctrl+T opens a new browser tab; a page never receives it.' },
   { context: 'entry', purpose: 'Close an order before everything on it has been delivered', keys: ['Alt+L'], catalogueKey: 'Ctrl+W', reason: 'Ctrl+W closes the browser tab; a page never receives it.' },
@@ -236,8 +256,8 @@ export const classicReserved: readonly ReservedKey[] = [
   { context: 'report', purpose: 'Save a tax return', keys: ['Alt+B'] },
 ]
 
-/** Inner-context commands that take a global reserved key on purpose, as the catalogue does: F2 is the period on a report. */
-export const reservedShadows: readonly string[] = ['report.period on F2', 'report.export on Ctrl+E', 'report.print on Ctrl+P']
+/** Inner-context commands that take a global reserved key on purpose, as the catalogue does: print and export on a report. */
+export const reservedShadows: readonly string[] = ['report.export on Ctrl+E', 'report.print on Ctrl+P']
 
 const chordsOf = (name: KeymapName, id: CommandId): readonly string[] => { const keys = keymaps[name][id]; return typeof keys === 'string' ? [keys] : keys }
 

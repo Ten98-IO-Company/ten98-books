@@ -1,4 +1,11 @@
-export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string }
+export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string; /** The answer was this application's own error (`isOwnError`), not a proxy's page, another JSON or nothing. */ json = false }
+
+/**
+ * Whether an error body is this application's own: a JSON object whose `error` is a string, as every API route answers.
+ * Anything else (a proxy's `{"message": ...}`, an array, a number, a page) says nothing about what the server did.
+ */
+export const isOwnError = (data: unknown): boolean =>
+  typeof data === 'object' && data !== null && !Array.isArray(data) && 'error' in data && typeof data.error === 'string'
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   let res: Response
@@ -23,6 +30,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     const err = new ApiError(fromBody !== '' ? fromBody : res.status === 401 ? 'Your session has expired. Sign in again.' : `Request failed with status ${res.status}.`)
     err.status = res.status
     if (d !== null && typeof d.code === 'string') err.code = d.code
+    err.json = isOwnError(data)
     throw err
   }
   return data as T
