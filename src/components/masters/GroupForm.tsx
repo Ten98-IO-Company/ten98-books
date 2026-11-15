@@ -69,7 +69,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const fields = groupFields(values)
   // A new entry is dirty once something is typed (the kept parent after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing', initialFocus: 'cancel' }))
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
@@ -120,7 +120,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
 
   async function remove() {
     if (!existing || readOnly || deleteReason) return
-    if (!await confirm({ title: `Delete the group “${existing.name}”?`, description: 'The group is removed from the chart. Its history stays available.', confirmLabel: 'Delete group', danger: true })) return
+    if (!await confirm({ title: `Delete the group “${existing.name}”?`, description: 'The group is removed from the chart. Its history stays available.', confirmLabel: 'Delete group', danger: true, initialFocus: 'cancel' })) return
     const done = await run(() => api(`/api/companies/${company.id}/groups/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
     if (done) { setFlash(`Deleted group “${existing.name}”.`); guard.pass(leave) }
   }

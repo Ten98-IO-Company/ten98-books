@@ -2,13 +2,13 @@ import { Dialog, ShortcutProvider, ShortcutScope, useCommand, useCommandKeys } f
 import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, heldReturn, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
+import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
 import { reportLevel } from '../lib/reports'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
 import { useCanWrite } from './masters/useCanWrite'
-import { reportMenuGroups, useFocusOnOpen } from './reports/ReportScreen'
+import { reportMenuGroups } from './reports/ReportScreen'
 import { reportRoutes, trailMark, trailStepOf } from './reports/navigation'
 
 type KeymapSetting = { keymap: KeymapName; chosen: boolean }
@@ -53,16 +53,17 @@ export function useKeyboard(): KeyboardState {
 /**
  * Registers a command from the registry (commands.ts) in the nearest ShortcutScope, with its title and context heading.
  * `allowInTextInput` lets it run while a text field has focus, for entry screens (Enter, accept, cancel) and for a list
- * that sits under its own search field.
+ * that sits under its own search field. `matchPhysicalKey` lets a letter key run it by its position when the keyboard
+ * layout types another script there (an Arabic layout), for the menu letters.
  */
-export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false, label }: { enabled?: boolean; repeat?: boolean; allowInTextInput?: boolean; /** Wording for this screen when the registry title does not fit it. */ label?: string } = {}) {
+export function useAppCommand(id: CommandId, run: () => void, { enabled = true, repeat = false, allowInTextInput = false, matchPhysicalKey = false, label }: { enabled?: boolean; repeat?: boolean; allowInTextInput?: boolean; matchPhysicalKey?: boolean; /** Wording for this screen when the registry title does not fit it. */ label?: string } = {}) {
   const command = commandOf(id)
   // In classic a switched-off command still keeps its keys from the browser: it registers as a do-nothing claim under an
   // id outside the registry, which the action bar and the help leave out (the registry runs nothing for a disabled one).
   const keymap = useContext(KeyboardContext)?.keymap ?? defaultKeymap
   const claim = enabled ? [] : disabledClaims(keymap, id)
   useCommand(claim.length ? { id: `claim.${id}`, label: command.title, run: nothing, keys: claim }
-    : { id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput })
+    : { id, label: label ?? command.title, group: contextTitles[command.context], run, enabled, repeat, allowInTextInput, matchPhysicalKey })
 }
 
 const nothing = () => undefined
@@ -86,7 +87,8 @@ export function ReservedKeys({ context }: { context: CommandContext }) {
 
 /**
  * Makes nav.back (Escape) run `run` instead of the shell's default (the company menu) while the calling component is
- * mounted and `run` is defined: report screens go back one drill-down level. The Escape guards still apply.
+ * mounted and `run` is defined: report screens go back one drill-down level. A focused field or an open popup still
+ * keeps Escape.
  */
 export function useBackOverride(run: (() => void) | undefined) {
   const set = useContext(BackOverrideContext)
@@ -208,29 +210,15 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
 const popupOpen = () => document.querySelector('dialog[open], :popover-open, [aria-haspopup][aria-expanded="true"], [role="combobox"][aria-expanded="true"]') !== null
 
-/** Whether the focused element keeps Escape for itself (keepsEscape), followed through focus changes. */
-function useFocusKeepsEscape() {
-  const [keeps, setKeeps] = useState(false)
-  useEffect(() => {
-    const update = () => setKeeps(keepsEscape(document.activeElement))
-    update()
-    document.addEventListener('focusin', update)
-    document.addEventListener('focusout', update)
-    return () => { document.removeEventListener('focusin', update); document.removeEventListener('focusout', update) }
-  }, [])
-  return keeps
-}
-
 /** The company open in the address, or undefined outside a company. */
 const useOpenCompanyId = () => (useParams({ strict: false }) as { companyId?: string }).companyId?.toLowerCase()
 
 function GlobalCommands({ back, onSwitchCompany, onHelp, onOpenList }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void; onOpenList: (mode: ScreenMode) => void }) {
   const inCompany = useOpenCompanyId() !== undefined
-  // A disabled command leaves the key to the browser, so a text field keeps its own Escape; the run-time check covers a
-  // key pressed before the focus change has re-rendered, and popups that do not move focus.
-  const fieldKeepsEscape = useFocusKeepsEscape()
   useAppCommand('help.keyboard', onHelp)
-  useAppCommand('nav.back', () => { if (!keepsEscape(document.activeElement) && !popupOpen()) back?.() }, { enabled: back !== undefined && !fieldKeepsEscape })
+  // Not allowed in text input, so a text field, select or open popup keeps Escape (the registry's rule); the check here
+  // covers a dialog or popover that is open while focus is outside it.
+  useAppCommand('nav.back', () => { if (!popupOpen()) back?.() }, { enabled: back !== undefined })
   // Ctrl+Q: the same target as Escape, but a text field does not keep it, so it leaves from inside a field too.
   useAppCommand('nav.quit', () => { if (!popupOpen()) back?.() }, { enabled: back !== undefined })
   useAppCommand('company.switch', () => onSwitchCompany?.(), { enabled: onSwitchCompany !== undefined })
@@ -291,8 +279,7 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
   const shown = useRef<ScreenMode>('go-to')
   if (mode) shown.current = mode
   const [active, setActive] = useState<CommandId>('home.chart-of-accounts')
-  const [focusRequest, setFocusRequest] = useState<number>()
-  useFocusOnOpen(open, () => setFocusRequest(value => (value ?? 0) + 1))
+  const menu = useRef<HTMLElement>(null)
   if (!companyId) return null
   const go = (to: string) => { const how = shown.current; onClose(); void openScreen(how, to, { companyId }) }
   const item = (command: CommandId, to: string) => ({ command, label: commands[command].title, open: () => go(to) })
@@ -307,8 +294,8 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
   ]
   const text = screenModeText[shown.current]
   return <DialogKeys name={text.title} open={open}>
-    <Dialog open={open} onOpenChange={next => { if (!next) onClose() }} title={text.title} description={`${text.description} Use the arrow keys and Enter, or press a letter.`}>
-      {open && <KeyboardMenu label={text.title} groups={groups} active={active} onActiveChange={setActive} focusRequest={focusRequest} />}
+    <Dialog open={open} onOpenChange={next => { if (!next) onClose() }} title={text.title} description={`${text.description} Use the arrow keys and Enter, or press a letter.`} initialFocus={menu}>
+      {open && <KeyboardMenu label={text.title} groups={groups} active={active} onActiveChange={setActive} menuRef={menu} />}
     </Dialog>
   </DialogKeys>
 }

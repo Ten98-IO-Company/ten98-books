@@ -167,7 +167,7 @@ export function FailureAlert({ failure, onReload }: { failure: Failure | null; o
 
 /**
  * "Save this?" after Enter on the last field: an inline panel whose Save button takes focus, so Enter accepts and
- * Escape (the form's cancel command) keeps editing. Built here because the stock dialogs start on their close button.
+ * Escape (the form's cancel command) keeps editing. Inline rather than a stock confirmation, so Y and N answer it.
  */
 export function SaveConfirm({ title, description, onConfirm, onCancel }: { title: string; description: string; onConfirm: () => void; onCancel: () => void }) {
   // Y answers yes and N returns to editing, as the accept question of desktop accounting software does.

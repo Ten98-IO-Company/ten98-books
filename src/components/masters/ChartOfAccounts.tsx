@@ -96,7 +96,7 @@ function ChartBody() {
     if (!row || !canWrite || busy || reason) return
     const name = row.kind === 'group' ? row.group.name : row.ledger.name
     const revision = row.kind === 'group' ? row.group.revision : row.ledger.revision
-    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true })) { focusList(); return }
+    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true, initialFocus: 'cancel' })) { focusList(); return }
     const next = cursors[cursors.indexOf(row) + 1] ?? cursors[cursors.indexOf(row) - 1]
     const done = await run(() => api(`/api/companies/${company.id}/${row.kind === 'group' ? 'groups' : 'ledgers'}/${row.id}/delete`, { method: 'POST', body: { revision } }))
     focusList()

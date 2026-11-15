@@ -105,7 +105,7 @@ function ListBody() {
     const name = centre ? target.centre.name : target.category.name
     const revision = centre ? target.centre.revision : target.category.revision
     const noun = centre ? 'cost centre' : 'cost category'
-    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true })) { focusList(); return }
+    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true, initialFocus: 'cancel' })) { focusList(); return }
     const next = rows[rows.indexOf(target) + 1] ?? rows[rows.indexOf(target) - 1]
     setMessage('')
     neighbour.current = next?.key ?? null
@@ -121,7 +121,7 @@ function ListBody() {
   async function toggle() {
     if (!canSwitch || busy || enabled === null) return
     const next = !enabled
-    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true })) { focusList(); return }
+    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true, initialFocus: 'cancel' })) { focusList(); return }
     setMessage('')
     const done = await run(() => api(`/api/companies/${company.id}/cost-centres-setting`, { method: 'POST', body: { enabled: next } }))
     focusList()

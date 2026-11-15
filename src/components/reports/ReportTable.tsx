@@ -1,4 +1,4 @@
-import { DataTable, Stack, type DataColumn, type TableCursorPage } from '@ten98/ui'
+import { DataTable, Stack, type DataColumn, type DataTableApi, type TableCursorPage } from '@ten98/ui'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useAppCommand } from '../KeyboardShell'
 
@@ -7,9 +7,9 @@ const pageLines = 10
 
 /**
  * A report table with one highlighted line (D-05). The highlight is the table's current row; focus follows it, so the
- * table's own Up, Down, Home, End and Enter work on the focused row, and the report commands (the same keys when focus
- * is elsewhere on the page, plus PageUp and PageDown) move it from anywhere. Enter opens the line (`onOpen`); a paged
- * register moves to the next or previous page when PageDown or PageUp runs past its edge.
+ * table's own Up, Down, PageUp, PageDown, Home, End and Enter work on the focused row, and the report commands (the
+ * same keys) move it when focus is elsewhere on the page. Enter opens the line (`onOpen`); a paged register moves to the
+ * next or previous page when a key runs past its edge.
  *
  * Focus on a row lets screen readers read the line moved to; the row header names it.
  * Must be rendered inside the report's ShortcutScope. Each row needs a stable key; the highlight is that key.
@@ -34,27 +34,30 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   focusOnLoad?: boolean
 }) {
   const frame = useRef<HTMLElement>(null)
+  const table = useRef<DataTableApi>(null)
   const keys = rows.map(rowKey)
   const index = Math.max(0, highlight === undefined ? 0 : keys.indexOf(highlight))
   const position = useRef(index)
   position.current = index
   const current = rows[index]
 
-  /** The table's focusable rows in order; the table renders one per data row. */
-  const rowElements = () => [...(frame.current?.querySelectorAll<HTMLElement>('tbody > tr[tabindex]') ?? [])]
   const move = (to: number) => {
     if (!rows.length) return
     const target = Math.min(Math.max(to, 0), rows.length - 1)
     position.current = target
     onHighlight(keys[target])
-    rowElements()[target]?.focus()
+    table.current?.focusRow(keys[target])
+  }
+  const pages = onPage && page ? page.cursor : null
+  /** Turns the page past an edge, once per key press while no page is loading; false where there is no page that way. */
+  const turn = (direction: 'next' | 'previous') => {
+    if (!pages || !(direction === 'next' ? pages.hasNext : pages.hasPrevious)) return false
+    if (!pageBusy) onPage!(direction)
+    return true
   }
   const step = (by: number) => {
     const target = position.current + by
-    const pages = onPage && page ? page.cursor : null
-    if (pages && target >= rows.length && pages.hasNext) { if (!pageBusy) onPage!('next') }
-    else if (pages && target < 0 && pages.hasPrevious) { if (!pageBusy) onPage!('previous') }
-    else move(target)
+    if (!(target >= rows.length ? turn('next') : target < 0 ? turn('previous') : false)) move(target)
   }
 
   useAppCommand('report.next', () => step(1), { repeat: true })
@@ -73,17 +76,19 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
     if (!focusOnLoad) return
     const active = document.activeElement
     if (active && active !== document.body && !frame.current?.contains(active) && active.closest('input, textarea, select, dialog')) return
-    if (rows.length) rowElements()[position.current]?.focus({ preventScroll: false })
+    if (rows.length) table.current?.focusRow(keys[position.current])
     else frame.current?.focus()
   }, [signature, focusOnLoad])
 
   return <Stack ref={frame} gap={2} tabIndex={-1} aria-label={caption} onFocusCapture={event => {
-    // A row focused by the table's own arrow keys, or by a click, becomes the highlight.
-    const at = rowElements().indexOf(event.target as HTMLElement)
+    // A row focused by the table's own keys, or by a click, becomes the highlight. The table renders one focusable row
+    // per data row, in order, and reports no focus change of its own.
+    const at = [...(frame.current?.querySelectorAll('tbody > tr[tabindex]') ?? [])].indexOf(event.target as HTMLElement)
     if (at >= 0 && at !== position.current) { position.current = at; onHighlight(keys[at]) }
   }}>
     <DataTable caption={caption} columns={columns} rows={rows} rowKey={rowKey} activeKey={current ? keys[index] : undefined}
       onRowActivate={row => onOpen(row)} searchable={false} sortable={false} pagination={page !== undefined} page={page}
+      apiRef={table} pageStep={pageLines} onPageEdge={pages ? turn : undefined}
       onPageChange={change => { if (!pageBusy) onPage?.(change.direction) }} footerCells={footerCells} density='compact' />
   </Stack>
 }

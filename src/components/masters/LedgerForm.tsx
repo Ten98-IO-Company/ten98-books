@@ -93,7 +93,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const side = effectiveSide(values, groups)
   // A new entry is dirty once something is typed (the kept group after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing', initialFocus: 'cancel' }))
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
@@ -142,7 +142,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
 
   async function remove() {
     if (!existing || readOnly || deleteReason) return
-    if (!await confirm({ title: `Delete the ledger “${existing.name}”?`, description: 'The ledger is removed from the chart. Its history stays available. A ledger used in vouchers cannot be deleted.', confirmLabel: 'Delete ledger', danger: true })) return
+    if (!await confirm({ title: `Delete the ledger “${existing.name}”?`, description: 'The ledger is removed from the chart. Its history stays available. A ledger used in vouchers cannot be deleted.', confirmLabel: 'Delete ledger', danger: true, initialFocus: 'cancel' })) return
     const done = await run(() => api(`/api/companies/${company.id}/ledgers/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
     if (done) { setFlash(`Deleted ledger “${existing.name}”.`); guard.pass(leave) }
   }

@@ -1,5 +1,5 @@
 import { Button, DateRangeField, Dialog, Field, Inline, Input, KeyHint, ReportPanel, ReportToolbar, saveFile, ShortcutScope, Stack, Switch, Text } from '@ten98/ui'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode } from 'react'
 import { useCompany } from '../../lib/app-context'
 import { contextTitles, type CommandId } from '../../lib/commands'
 import { longDate, periodText, type PeriodKind, type ReportPeriod } from '../../lib/reports'
@@ -53,9 +53,8 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
   const shownMode = useRef<ScreenMode>('go-to')
   if (goToMode) shownMode.current = goToMode
   const openScreen = useOpenScreen()
-  const [menuFocus, setMenuFocus] = useState(0)
+  const goToMenu = useRef<HTMLElement>(null)
   const [goToActive, setGoToActive] = useState<CommandId>(destinations[0].command)
-  useFocusOnOpen(goToOpen, () => setMenuFocus(request => request + 1))
   const [exportState, setExportState] = useState<{ busy: boolean; message: string; failed: boolean }>({ busy: false, message: '', failed: false })
 
   async function exportCsv() {
@@ -100,8 +99,8 @@ export function ReportScreen({ title, search, periodKind = 'statement', period, 
       </ReportPanel>
     </Stack>
     {period && <PeriodDialog open={periodOpen} onOpenChange={setPeriodOpen} control={period} />}
-    <DialogKeys name={screenModeText[shownMode.current].title} open={goToOpen}><Dialog open={goToOpen} onOpenChange={next => { if (!next) setGoToMode(null) }} title={`${screenModeText[shownMode.current].title} another report`} description={`${screenModeText[shownMode.current].description} ${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`}>
-      {goToOpen && <KeyboardMenu label='Reports' focusRequest={menuFocus} active={goToActive} onActiveChange={setGoToActive}
+    <DialogKeys name={screenModeText[shownMode.current].title} open={goToOpen}><Dialog open={goToOpen} onOpenChange={next => { if (!next) setGoToMode(null) }} title={`${screenModeText[shownMode.current].title} another report`} description={`${screenModeText[shownMode.current].description} ${periodKind === 'statement' ? 'The period carries over. ' : ''}Use the arrow keys and Enter, or press a report’s letter.`} initialFocus={goToMenu}>
+      {goToOpen && <KeyboardMenu label='Reports' menuRef={goToMenu} active={goToActive} onActiveChange={setGoToActive}
         groups={reportMenuGroups(report => { const how = shownMode.current; setGoToMode(null); void openScreen(how, reportRoutes[report], { companyId: company.id }, periodKind === 'statement' ? periodSearch(search) : {}) })} />}
     </Dialog></DialogKeys>
   </ShortcutScope>
@@ -128,22 +127,6 @@ function ReportCommands({ periodOpen, hasPeriod, detail, zeros, exportCsv, openL
   return null
 }
 
-/**
- * Moves focus into a dialog once it has opened (the dialog itself starts on its close button). A stand-in for the
- * initial-focus option the design system is adding to Dialog: replace each use with that prop when it ships.
- */
-export function useFocusOnOpen(open: boolean, focus: () => void) {
-  const latest = useRef(focus)
-  latest.current = focus
-  useEffect(() => {
-    if (!open) return
-    // Two frames, so this runs after the dialog has placed focus on its close button.
-    let second = 0
-    const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => latest.current()) })
-    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second) }
-  }, [open])
-}
-
 /** The period (or the as-at date) of a report: a small form that opens on its first date field; Enter applies it. */
 function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenChange: (open: boolean) => void; control: PeriodControl }) {
   const id = useId()
@@ -153,13 +136,12 @@ function PeriodDialog({ open, onOpenChange, control }: { open: boolean; onOpenCh
   const [problem, setProblem] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(false)
   const body = useRef<HTMLElement>(null)
-  useFocusOnOpen(open, () => body.current?.querySelector<HTMLInputElement>('input')?.focus())
   if (open !== shownFor) {
     // Each time the dialog opens it starts from the report's current period.
     setShownFor(open)
     if (open) { setRange({ start: initial?.from ?? '', end: initial?.to ?? '' }); setDate(control.kind === 'date' ? control.date ?? '' : ''); setProblem(null) }
   }
-  return <DialogKeys name='Period' open={open} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'}
+  return <DialogKeys name='Period' open={open} onAccept={() => body.current?.closest('form')?.requestSubmit()}><Dialog open={open} onOpenChange={onOpenChange} title={control.kind === 'date' ? 'Change the date' : 'Change the period'} initialFocus='first-field'
     description={control.kind === 'date' ? 'The balance sheet shows balances at the end of this day.' : 'Every report you open next uses this period until you change it.'}
     onSubmit={() => {
       if (control.kind === 'date') { if (date) { control.onChange(date); onOpenChange(false) } return }
