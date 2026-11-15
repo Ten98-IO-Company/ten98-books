@@ -66,6 +66,9 @@ test('a register page names the vouchers it shows once the period needs more tha
   assert.equal(registerRange(0, 200, true), 'Vouchers 1 to 200; more on the next page.');
   assert.equal(registerRange(1, 200, true), 'Vouchers 201 to 400; more on the next page.');
   assert.equal(registerRange(1, 103, false), 'Vouchers 201 to 303, the last of the period.');
+  assert.equal(registerRange(1, 1, false), 'Voucher 201, the last of the period.', 'one voucher on the last page');
+  assert.equal(registerRange(1, 0, false), null, 'an empty page (a stale address past the last voucher) names no range');
+  assert.equal(registerRange(2, 0, true), null);
   assert.equal(registerPageSize, reportPageQuery.parse({ from: '2026-01-01', to: '2026-12-31' }).limit, 'the screens rely on the server default page size');
 });
 

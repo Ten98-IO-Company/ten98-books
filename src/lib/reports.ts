@@ -36,13 +36,15 @@ export type ReportPeriod = { from: string; to: string };
 
 /**
  * Which vouchers a page of a register shows, for its summary line: on screen and in print, where the pager is not
- * printed. Null when the whole period fits one page. Every page before the shown one is full (the server gives a next
- * cursor only after a full page), so the first number follows from the pages before it; the period's total is not known.
+ * printed. Null when the whole period fits one page, and for an empty page (a stale address past the last voucher).
+ * Every page before the shown one is full (the server gives a next cursor only after a full page), so the first number
+ * follows from the pages before it; the period's total is not known.
  */
 export function registerRange(pagesBefore: number, shown: number, hasNext: boolean): string | null {
-  if (pagesBefore === 0 && !hasNext) return null;
+  if (shown === 0 || (pagesBefore === 0 && !hasNext)) return null;
   const first = pagesBefore * registerPageSize + 1;
-  return `Vouchers ${first} to ${first + shown - 1}${hasNext ? '; more on the next page' : ', the last of the period'}.`;
+  const vouchers = shown === 1 ? `Voucher ${first}` : `Vouchers ${first} to ${first + shown - 1}`;
+  return `${vouchers}${hasNext ? '; more on the next page' : ', the last of the period'}.`;
 }
 
 /** Report names as they appear in API paths and screen routes. */

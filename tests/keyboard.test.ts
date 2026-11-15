@@ -358,18 +358,28 @@ test('every entry screen guards typed work against leaving: route changes ask fi
 test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
   const files = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : /\.tsx?$/.test(entry.name) ? [new URL(entry.name, dir)] : []);
   const importers: string[] = [];
-  let callers = 0;
+  let questions = 0;
+  // The package itself, in either quote, not one of its files (`@ten98/ui/styles.css`).
+  const pkg = String.raw`['"]@ten98\/ui['"]`;
   for (const file of files(new URL('../src/', import.meta.url))) {
     const source = readFileSync(file, 'utf8');
     const name = file.pathname.slice(file.pathname.indexOf('/src/') + 1);
-    assert.doesNotMatch(source, /import\s*\*\s*as\s+\w+\s+from\s*'@ten98\/ui'/, `${name} imports the whole package`);
-    for (const statement of source.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@ten98\/ui'/g)) {
+    // Every way to reach the whole package: a namespace or default import, `export *` and a dynamic import.
+    assert.doesNotMatch(source, new RegExp(String.raw`import\s+(?:\*\s*as\s+)?\w+\s*(?:,\s*\{[^}]*\}\s*)?from\s*${pkg}`), `${name} imports the whole package`);
+    assert.doesNotMatch(source, new RegExp(String.raw`export\s*\*\s*(?:as\s+\w+\s*)?from\s*${pkg}`), `${name} re-exports the whole package`);
+    assert.doesNotMatch(source, new RegExp(String.raw`import\s*\(\s*${pkg}\s*\)`), `${name} imports the package at run time`);
+    for (const statement of source.matchAll(new RegExp(String.raw`(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*${pkg}`, 'g'))) {
       if (/\b(?:useConfirmDialog|ConfirmDialog|ConfirmDialogProps)\b/.test(statement[1])) importers.push(name);
     }
-    if (/\buseConfirm\(\)/.test(source)) callers++;
+    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
-  assert.ok(callers >= 7, 'the masters screens and the preferences page ask through useConfirm');
+  // Six deletes, switching cost centres off, four "Leave without saving?" and the preferences page's question.
+  assert.equal(questions, 12, 'every question is asked through useConfirm');
+  // The hook forwards each request through its merge rule, not as the caller wrote it.
+  const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
+  assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
+  assert.equal(hook.match(/\bconfirm\(/g)?.length, 1, 'the hook forwards in one place only');
 });
 
 test('a confirmation opens on Cancel unless the caller names the confirm button; a spread cannot change that', () => {
