@@ -139,7 +139,7 @@ function ListBody() {
 
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title='Cost categories and centres'
-      description={categories && centres ? `${count(categories.length, 'category', 'categories')} and ${count(centres.length, 'centre', 'centres')}. Use the arrow keys, then Enter to alter the highlighted row.` : 'Loading…'}
+      description={categories && centres ? `${count(categories.length, 'category', 'categories')} and ${count(centres.length, 'centre', 'centres')}. Use the arrow keys, then Enter to ${writer === false ? 'open' : 'alter'} the highlighted row.` : 'Loading…'}
       actions={canWrite ? <Inline gap={2}>
         <Button variant='secondary' onClick={createCentre}>Create cost centre</Button>
         <Button variant='secondary' onClick={createCategory}>Create cost category</Button>
@@ -156,7 +156,7 @@ function ListBody() {
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     <FailureAlert failure={failure} onReload={reload} />
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>Cost categories and centres could not be loaded: {error}</Alert>}
-    {categories && centres && <MasterList label='Cost categories and centres' entries={entries} active={row?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList listRef={list}
+    {categories && centres && <MasterList label='Cost categories and centres' entries={entries} active={row?.key ?? null} onActiveChange={move} openHint={writer === false ? 'Enter to open' : 'Enter to alter'} focusList listRef={list}
       onOpen={key => { const target = rows.find(item => item.key === key); if (target) open('edit', target) }} />}
     {categories && centres && centres.length === 0 && <Text tone='muted'>No cost centres yet.{canWrite && <> Create the first with the button above or <KeyHint command='list.create' />.</>}</Text>}
     {canWrite && reason && <Text tone='muted' size='sm'>Delete is unavailable for the highlighted row: {reason}</Text>}

@@ -26,6 +26,11 @@ export interface CommandDefinition {
   readonly context: CommandContext
   /** False for keys that move rather than act, and for menu letters the menu shows itself: the action bar leaves them out. */
   readonly bar?: false
+  /**
+   * False for a command a pointer has no use for as a button of its own (it repeats another button): in a keymap that
+   * gives it no key, the action bar leaves it out. A command without a key that a pointer can use stays, without a hint.
+   */
+  readonly pointer?: false
 }
 
 export const commands = {
@@ -33,7 +38,7 @@ export const commands = {
   'nav.back': { title: 'Go back one level', context: 'global' },
   // Ctrl+Q in classic. A separate command from nav.back so that it still works from a text field, which keeps Escape for
   // itself (nav.back does not opt in to text input).
-  'nav.quit': { title: 'Leave this screen', context: 'global' },
+  'nav.quit': { title: 'Leave this screen', context: 'global', pointer: false },
   'company.switch': { title: 'Change company', context: 'global' },
   // Two ways to open a screen from one list (the shell's dialog; a report registers its own, so the period carries over).
   // Go-to stacks: Escape on the opened screen returns here. Switch-to replaces: Escape there ends at the company menu.
@@ -114,7 +119,8 @@ export function isCommandId(id: string): id is CommandId {
 export const commandOf = (id: CommandId): CommandDefinition => commands[id]
 
 /**
- * The commands the action bar lists: enabled, not marked `bar: false`, once each, within `contexts` when given, and for
+ * The commands the action bar lists: enabled (so a command that cannot run where it is offers nothing), not marked
+ * `bar: false`, not keyless in the active keymap when marked `pointer: false`, once each, within `contexts` when given, and for
  * a key that two of them share only the one from the innermost context, which is the one the registry runs. So the bar
  * shows exactly one command per key (Escape on an entry screen is "Leave without saving", not also "Go back one level").
  */
@@ -124,6 +130,7 @@ export function barCommands<T extends { id: string; enabled: boolean; keys: read
     if (!command.enabled || !isCommandId(command.id) || seen.has(command.id)) return false
     const definition = commandOf(command.id)
     if (definition.bar === false || (contexts && !contexts.includes(definition.context))) return false
+    if (!command.keys.length && definition.pointer === false) return false
     seen.add(command.id)
     return true
   })
@@ -190,6 +197,7 @@ export const heldReturn = (at: { path: string; index: number }, stack: readonly 
 /**
  * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take at a location (its path, history position and report trail
  * step number), in this order:
+ * 0. None while the screen for the address is still loading (`loading`).
  * 1. A level drilled into after the innermost go-to takes the screen's own back, one level up.
  * 2. The very entry a go-to opened returns to where that go-to was opened from (heldReturn: the latest return held on
  *    this entry, innermost or not). Go-to stacks, so the next one out applies there. A form opened from it and closed
@@ -199,12 +207,74 @@ export const heldReturn = (at: { path: string; index: number }, stack: readonly 
  * A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes back the usual
  * way, and that ends at the menu.
  */
-export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell }: { screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell, loading = false }: { screen: boolean; shell: boolean; loading?: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+  // While the screen for the address is still loading, nothing below knows where its back leads (a report reached by a
+  // drill-down goes up a level, not to the menu): Escape and Ctrl+Q wait until it has mounted, and do nothing meanwhile.
+  if (loading) return 'none'
   if (screen && drilledFrom(at.step, stack[stack.length - 1])) return 'screen'
   if (heldReturn(at, stack)) return 'go-to'
   return screen ? 'screen' : shell ? 'shell' : 'none'
 }
 
+/**
+ * Where the shell's own back (Escape and Ctrl+Q with no go-to return and no screen back of their own) leads: from a page
+ * of an open company to its menu ('menu'); from a company the person cannot open (not in their list) to the start page
+ * ('start'), which opens the last company used; nowhere from the menu itself, which is the top level, nor from a
+ * company that is not set up yet or a page outside companies (null), where Escape keeps its native meaning.
+ */
+export function shellBackTarget({ companyInAddress, listed, ready, atMenu }: { companyInAddress: boolean; listed: boolean | null; ready: boolean; atMenu: boolean }): 'menu' | 'start' | null {
+  if (ready && !atMenu) return 'menu'
+  if (companyInAddress && listed === false) return 'start'
+  return null
+}
+
 /** The `aria-keyshortcuts` value for registry chords: space-separated, with Ctrl written Control as ARIA requires. */
 export const ariaKeyShortcuts = (keys: readonly string[]): string | undefined =>
   keys.length ? keys.map(chord => chord.split('+').map(part => part === 'Ctrl' ? 'Control' : part).join('+')).join(' ') : undefined
+
+/**
+ * One navigation per menu: the first item opened starts it, and every later open while the menu is still on screen (the
+ * next page has not mounted yet) is dropped, never run as another command. Letters typed straight after a menu key are
+ * therefore lost rather than opening a second screen; they are not carried over to the next page.
+ */
+export function oneNavigation(): (start: () => void) => boolean {
+  let started = false
+  return start => {
+    if (started) return false
+    started = true
+    start()
+    return true
+  }
+}
+
+/** The router events `dropKeysWhileScreenChanges` listens to: a navigation starting (`pathChanged`) and settling. */
+export type ScreenChangeEvents = {
+  subscribe: (type: 'onBeforeNavigate' | 'onResolved', listener: (event: { pathChanged: boolean }) => void) => () => void
+}
+type KeyTarget = {
+  addEventListener: (type: 'keydown', listener: (event: KeyboardEventLike) => void, capture: boolean) => void
+  removeEventListener: (type: 'keydown', listener: (event: KeyboardEventLike) => void, capture: boolean) => void
+}
+type KeyboardEventLike = { key: string; preventDefault: () => void; stopImmediatePropagation: () => void }
+
+/**
+ * From the moment a navigation to another screen starts until that screen has rendered, every key is dropped: it is
+ * neither run on the screen being left (a focused button, a list row) nor by the shell, and it is not carried over to
+ * the next screen. A key pressed before the screen it is meant for is there does nothing. Only a change of path counts
+ * (a period change or page turn on the same report keeps its keys); bare modifier keys pass. Installed on `window` in
+ * the capture phase, so it runs before the shortcut registry and the focused element. Returns the function that stops it.
+ */
+export function dropKeysWhileScreenChanges(router: ScreenChangeEvents, target: KeyTarget): () => void {
+  let changing = false
+  const drop = (event: KeyboardEventLike) => {
+    if (!changing || ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'].includes(event.key)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  const stops = [
+    router.subscribe('onBeforeNavigate', event => { if (event.pathChanged) changing = true }),
+    router.subscribe('onResolved', () => { changing = false }),
+  ]
+  target.addEventListener('keydown', drop, true)
+  return () => { stops.forEach(stop => stop()); target.removeEventListener('keydown', drop, true) }
+}

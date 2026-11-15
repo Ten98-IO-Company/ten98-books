@@ -3,6 +3,7 @@ import type { PasswordChangeValues, TwoFactorSetupStage } from '@ten98/ui'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { useAccountPresentation } from '../lib/account-presentation'
+import { useApp } from '../lib/app-context'
 import { accountLocaleMapping, accountPreferencesDefaults, canonicalAccountTimeZone } from '../lib/account-preferences'
 
 type SessionInfo = { id: string; createdAt: string; expiresAt: string; userAgent: string | null; current: boolean }
@@ -24,6 +25,7 @@ export function AccountSecurityPanel(props: { expectedUserId: string; onUnauthor
 
 function AccountSecurityContent({ expectedUserId, onUnauthorized }: { expectedUserId: string; onUnauthorized: () => void }) {
   const { dateTime: formatDate } = useDisplayFormat()
+  const { reloadCompanies } = useApp()
   const [data, setData] = useState<SecurityData | null>(null)
   const [loadErr, setLoadErr] = useState('')
   const [busy, setBusy] = useState<Op | null>(null)
@@ -61,6 +63,9 @@ function AccountSecurityContent({ expectedUserId, onUnauthorized }: { expectedUs
       const value = await api<T>(path, { method: 'POST', body })
       if (!mounted.current) return
       commit?.(value)
+      // Turning a factor on or off changes which companies' two-factor rule this person meets: the company list (the
+      // switcher, the change-company dialog, the banner) is read again at once, not on the next page change.
+      if (op === 'factor') void reloadCompanies()
       await load()
     } catch (e) { if (mounted.current && !lost(e)) setErrs(previous => ({ ...previous, [op]: errMsg(e) })) }
     finally { lock.current = false; if (mounted.current) setBusy(null) }
@@ -86,7 +91,8 @@ function AccountSecurityContent({ expectedUserId, onUnauthorized }: { expectedUs
       onAcknowledgeCodes={() => setCodes(null)}
       onRegenerate={({ password }) => mutate<{ backupCodes: string[] }>('factor', '/api/account/two-factor/recovery-codes', { password }, value => setCodes(value.backupCodes))}
       onDisable={({ password, code = '' }) => mutate('factor', '/api/account/two-factor/disable', { password, ...(/^\d{6}$/.test(code.trim()) ? { code: code.trim() } : { backupCode: code.trim() }) }, clearSecrets)} />
-    <SessionListFlow title='Signed-in sessions' formatDate={formatDate} busy={busy === 'sessions'} error={errs.sessions || undefined}
+    {/* The server keeps no activity time, so the column shows when each session signed in, and says so. */}
+    <SessionListFlow title='Signed-in sessions' formatDate={formatDate} busy={busy === 'sessions'} error={errs.sessions || undefined} messages={{ lastActive: 'Signed in' }}
       sessions={data.sessions.map(session => ({ id: session.id, device: session.userAgent ?? 'Unknown device', lastActiveAt: session.createdAt, current: session.current }))}
       onRevoke={({ id }) => mutate('sessions', '/api/account/sessions/revoke', { sessionId: id })}
       onRevokeOthers={() => mutate('sessions', '/api/account/sessions/revoke-others', {})} />

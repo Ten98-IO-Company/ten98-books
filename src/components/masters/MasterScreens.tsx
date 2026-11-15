@@ -33,7 +33,7 @@ export function CreateMaster({ kind, under }: { kind: MasterKind; under?: string
   // Remembered so the choice list comes back on what was being created.
   useEffect(() => rememberChoice(company.id, kind), [company.id, kind])
   if (canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
-  if (!canWrite) return <Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert>
+  if (!canWrite) return <Stack gap={4}><PageHeader eyebrow='Masters' title={kind === 'group' ? 'Create group' : 'Create ledger'} /><Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert></Stack>
   if (error) return <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>
   if (!groups || !ledgers) return <StatusLine busy>Loading the chart…</StatusLine>
   const initialGroupId = startGroup(company.id, groups, under)

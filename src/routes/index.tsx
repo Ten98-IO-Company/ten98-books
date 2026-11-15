@@ -2,10 +2,13 @@ import { AppStateScreen, FirstUserSetupFlow, SignInFlow, TwoFactorChallengeFlow 
 import type { FirstUserSetupValues, SignInValues, TwoFactorMode, TwoFactorValues } from '@ten98/ui'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { InvitePanel } from '../components/InvitePanel'
 import { PasswordRecoveryPanel, type PasswordRecovery } from '../components/PasswordRecoveryPanel'
 import { api, ApiError, errMsg } from '../lib/api'
-import { authNoticeTone, readAuthFragment, type AuthFragment, type AuthNotice } from '../lib/auth-messages'
+import { takeAuthFragment, watchAuthFragment } from '../lib/address-fragment'
+import { authNoticeTone, type AuthFragment, type AuthNotice } from '../lib/auth-messages'
+import { focusHeadingAfterLoad } from '../lib/page-focus'
 
 /** Signed-out entry: first-user setup, sign-in, two-factor, password recovery and invitations. A session opens /app. */
 export const Route = createFileRoute('/')({ component: Entry })
@@ -43,10 +46,11 @@ function Entry() {
   }
 
   useEffect(() => {
-    fragment.current = readAuthFragment(window.location.hash)
-    if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+    fragment.current = takeAuthFragment(window)
     void boot()
-    return () => { generation.current++ }
+    // A link opened while this page is already loaded changes only the fragment (address-fragment.ts).
+    const stop = watchAuthFragment(window, next => { fragment.current = next; setPhase('loading'); void boot() })
+    return () => { generation.current++; stop() }
   }, [])
 
   function beginRecovery(value: PasswordRecovery, initialEmail = email) {
@@ -74,9 +78,19 @@ function Entry() {
       catch (error) { if (error instanceof ApiError && error.status === 401) { setEmail(acceptedEmail); setPhase('signin') } else { setPageError(errMsg(error)); setPhase('error') } }
     }}
     onSignIn={async invitedEmail => {
+      setEmail(invitedEmail)
+      // Switch account: sign the other account out and show the invitation again, signed out, so it offers what fits the
+      // invited address (sign in for an existing account, the new-person form otherwise) rather than always asking to sign in.
+      if (signedInEmail) {
+        await api('/api/auth/sign-out', { method: 'POST', body: {} }).catch(() => undefined)
+        // The Switch account button goes with the signed-in view (committed at once), and the invitation's heading takes
+        // focus once the signed-out invitation is shown.
+        flushSync(() => setSignedInEmail(null))
+        focusHeadingAfterLoad(document)
+        return
+      }
       // Sign in as the invited account; the invitation reopens after sign-in.
-      if (signedInEmail) await api('/api/auth/sign-out', { method: 'POST', body: {} }).catch(() => undefined)
-      setSignedInEmail(null); setEmail(invitedEmail); setPhase('signin')
+      setPhase('signin')
     }}
     onCancel={() => { fragment.current = null; void boot() }}
     onUnauthorized={() => { setSignedInEmail(null); setPhase('signin') }} />

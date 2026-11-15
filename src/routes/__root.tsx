@@ -7,6 +7,7 @@ import appStyles from '@ten98/ui/app.css?url';
 import productStyles from '@ten98/ui/product.css?url';
 import { authStory } from '../components/AuthLayout';
 import { getConfig } from '../server/config.ts';
+import { ErrorScreen, NotFoundScreen } from '../components/KeyboardShell';
 
 export const Route = createRootRoute({
   head: () => ({
@@ -30,4 +31,8 @@ export const Route = createRootRoute({
   } : {},
   // suppressHydrationWarning: the theme script sets data-theme on <html> before React hydrates, which the server markup lacks.
   component: () => <html lang='en' suppressHydrationWarning><head><HeadContent /></head><body><ToastProvider><AuthFrameProvider brand={<AppBrand product='Books' />} aside={authStory}><Outlet /></AuthFrameProvider></ToastProvider><Scripts /></body></html>,
+  // Outside the signed-in shell: one not-found screen for every visitor and address, a fixed error text (KeyboardShell.tsx).
+  notFoundComponent: NotFoundScreen,
+  errorComponent: ErrorScreen,
 });
+

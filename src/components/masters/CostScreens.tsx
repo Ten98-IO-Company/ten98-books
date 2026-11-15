@@ -1,4 +1,4 @@
-import { Alert, Button, EmptyState, StatusLine } from '@ten98/ui'
+import { Alert, Button, EmptyState, PageHeader, Stack, StatusLine } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { useCompany } from '../../lib/app-context'
@@ -26,7 +26,7 @@ export function CreateCost({ kind, category, parent }: { kind: CostKind; categor
   // Remembered so the choice list comes back on what was being created.
   useEffect(() => rememberChoice(company.id, kind), [company.id, kind])
   if (canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
-  if (!canWrite) return <Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert>
+  if (!canWrite) return <Stack gap={4}><PageHeader eyebrow='Masters' title={kind === 'cost-category' ? 'Create cost category' : 'Create cost centre'} /><Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert></Stack>
   if (error) return loadFailed(error, reload)
   if (!categories || !centres) return <StatusLine busy>Loading cost categories…</StatusLine>
   if (kind === 'cost-category') return <CostCategoryForm reloadData={reload} />

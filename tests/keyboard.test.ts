@@ -4,15 +4,21 @@ import { chordFromEvent, findChordConflicts, type ConfirmRequest, isPrintableCho
 import { readdirSync, readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, barCommands, commandIds, commands, drilledFrom, dropKeysWhileScreenChanges, heldReturn, oneNavigation, shellBackTarget, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
 import { acceptPress } from '../src/components/masters/accept-press.ts';
-import { createLeaveGuard } from '../src/components/masters/leave-guard.ts';
+import { controlAfterSave, createLeaveGuard, focusAfterKeepEditing } from '../src/components/masters/leave-guard.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
+
+/**
+ * A source without its comments, so a commented-out call or a note cannot satisfy or upset a count. Block comments go
+ * first, then line comments that do not follow a colon or a quote (an address such as `https://` is kept).
+ */
+const withoutComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 
 /** The keymap as the registry sees it: one command per id, scoped by its context, chords in canonical form. */
 function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): ResolvedCommand[] {
@@ -352,8 +358,11 @@ test('every entry screen guards typed work against leaving: route changes ask fi
   assert.match(entry, /const useRouterBlocker: LeaveGuardBlocker = shouldBlock => \{ useBlocker\(\{ shouldBlockFn: shouldBlock, enableBeforeUnload: false \}\) \}/);
   assert.match(entry, /export const useLeaveGuard = createLeaveGuard\(useRouterBlocker\)/, 'the guard of the screens is the factory\'s, built once with that adapter');
   const factory = readFileSync(new URL('../src/components/masters/leave-guard.ts', import.meta.url), 'utf8');
-  assert.match(factory, /usePackageLeaveGuard\(dirty, \{ useBlocker, confirm \}\)/, 'the package guard gets the adapter and the confirm of the screen');
-  assert.doesNotMatch(factory.slice(factory.indexOf('export function')), /\bdialog\b/, 'the package guard has no dialog of its own to render here');
+  // The screen's confirm reaches the package wrapped only to put focus back after "Keep editing" (KEY-063 below).
+  assert.match(factory, /usePackageLeaveGuard\(dirty, \{ useBlocker, confirm: ask \}\)/, 'the package guard gets the adapter and the confirm of the screen');
+  assert.match(factory, /const leave = await confirm\(request\)/, 'the wrapper asks the screen\'s own confirm');
+  // The factory renders and imports no dialog; it names one only to keep its focus memory outside open dialogs.
+  assert.doesNotMatch(factory.slice(factory.indexOf('export function createLeaveGuard')).replaceAll("closest('dialog')", ''), /\bdialog\b|Dialog\b/, 'the package guard has no dialog of its own to render here');
   assert.match(factory, /confirm: \(request: AppConfirmRequest\) => Promise<boolean>\)/, 'the confirm is a required argument');
   const screens = sources(new URL('../src/components/', import.meta.url)).filter(file => /<EntryScope[\s>]/.test(readFileSync(file, 'utf8')));
   assert.ok(screens.length >= 2, 'the group and ledger forms render EntryScope');
@@ -408,7 +417,7 @@ test('only the app confirmation hook imports the package confirmation pieces, so
   // The package itself, in either quote, not one of its files (`@ten98/ui/styles.css`).
   const pkg = String.raw`['"]@ten98\/ui['"]`;
   for (const file of files(new URL('../src/', import.meta.url))) {
-    const source = readFileSync(file, 'utf8');
+    const source = withoutComments(readFileSync(file, 'utf8'));
     const name = file.pathname.slice(file.pathname.indexOf('/src/') + 1);
     // Every way to reach the whole package: a namespace or default import, `export *` and a dynamic import.
     assert.doesNotMatch(source, new RegExp(String.raw`import\s+(?:\*\s*as\s+)?\w+\s*(?:,\s*\{[^}]*\}\s*)?from\s*${pkg}`), `${name} imports the whole package`);
@@ -417,19 +426,42 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     for (const statement of source.matchAll(new RegExp(String.raw`(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*${pkg}`, 'g'))) {
       if (/\b(?:useConfirmDialog|ConfirmDialog|ConfirmDialogProps)\b/.test(statement[1])) importers.push(name);
     }
-    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
+    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions += source.match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
   // What this counts: every `confirm(` call in a file that calls `useConfirm()`, which is every question a screen asks on its own.
-  // Here: six deletes, switching cost centres off and the preferences page's question. The leave question of the master forms is
-  // the package guard's, asked through the form's `confirm` passed to `useLeaveGuard` (checked above), so it is no call site of its
-  // own. A screen that adds a question (the voucher entry screen's leave question, a delete) raises the number by exactly its own
-  // `confirm(` calls; on a merge of two branches, add what each one added to the number on `dev`.
-  assert.equal(questions, 8, 'every question is asked through useConfirm');
+  // The leave question of the master forms and of the account preferences is the package guard's, asked through the screen's
+  // `confirm` passed to `useLeaveGuard` (checked above), so it is no call site of its own. A branch that adds a question (the
+  // voucher entry screen's leave question, a delete) adds a line here for each of its own `confirm(` calls.
+  const expectedQuestions = [
+    'ChartOfAccounts.tsx: delete the highlighted group or ledger',
+    'CostCentreList.tsx: delete the highlighted cost category or centre',
+    'CostCentreList.tsx: switch cost centres off',
+    'CostCategoryForm.tsx: delete this cost category',
+    'CostCentreForm.tsx: delete this cost centre',
+    'GroupForm.tsx: delete this group',
+    'LedgerForm.tsx: delete this ledger',
+  ];
+  assert.equal(questions, expectedQuestions.length, 'every question is asked through useConfirm');
+  // Each named question is a call site in its file, and each file asks exactly the questions named for it.
+  const perFile = new Map<string, number>();
+  for (const line of expectedQuestions) { const file = line.split(':')[0]; perFile.set(file, (perFile.get(file) ?? 0) + 1); }
+  for (const [file, count] of perFile) {
+    const source = withoutComments(readFileSync(new URL(`../src/components/masters/${file}`, import.meta.url), 'utf8'));
+    assert.equal(source.match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0, count, `${file} asks the questions named for it`);
+  }
   // The hook forwards each request through its merge rule, not as the caller wrote it.
-  const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
+  const hook = withoutComments(readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8'));
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
   assert.equal(hook.match(/\bconfirm\(/g)?.length, 1, 'the hook forwards in one place only');
+});
+
+test('the question count reads code, not comments: a commented call is not counted and a commented-out question is not hidden', () => {
+  const asked = (source: string) => withoutComments(source).match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0;
+  assert.equal(asked("const ok = await confirm({ title: 'Delete?' })"), 1);
+  assert.equal(asked("// confirm( before deleting\nconst ok = await confirm({ title: 'Delete?' })"), 1, 'a note naming confirm( is not a question');
+  assert.equal(asked("/* await confirm({ title: 'Delete?' }) */\nremove()"), 0, 'a question commented out is gone');
+  assert.equal(asked("api('https://example.test/confirm(x)')"), 1, 'an address in a string keeps its text');
 });
 
 test('a confirmation opens on Cancel unless the caller names the confirm button; a spread cannot change that', () => {
@@ -804,4 +836,144 @@ test('only a fresh press answers the Save panel: a held Enter, Y or N does nothi
   const panel = entry.slice(entry.indexOf('export function SaveConfirm'));
   assert.match(panel, /const press = acceptPress\(event\)\n\s+if \(press === 'native'\) return\n\s+event\.preventDefault\(\)\n\s+if \(press === 'accept'\) onConfirm\(\); else if \(press === 'keep-editing'\) onCancel\(\)/);
   assert.match(panel, /<Alert [^>]*onKeyDown=\{answer\}/);
+});
+
+/** An element as the focus-return helpers read it, recording the focus it is given. */
+function element(name: string, { connected = true, inDialog = false, disabled = false } = {}) {
+  return { name, isConnected: connected, focus: () => undefined, closest: (selector: string) => selector === 'dialog' && inDialog ? {} : null,
+    getAttribute: (attribute: string) => attribute === 'name' ? name : null, matches: (selector: string) => selector === ':disabled' && disabled }
+}
+
+test('KEY-063: "Keep editing" after go-to, switch-to or the company list returns focus to the field the command was pressed in', () => {
+  // Walk (both keymaps): a field has focus, Alt+G (or classic Ctrl+G and F3, web-safe Alt+K) opens a list dialog, a choice
+  // raises the question from inside it, Enter on "Keep editing" closes it. The question's own focus return points at the
+  // list's item, which is gone, so focus is on the body; the field the command was pressed in takes it back.
+  const field = element('name')
+  const body = {}
+  assert.equal(focusAfterKeepEditing(body, body, field), field, 'focus on the body goes back to the field')
+  assert.equal(focusAfterKeepEditing(null, body, field), field, 'no focus at all counts as the body')
+  // The question raised by Escape or Ctrl+Q returns focus to the field itself: nothing is moved then.
+  assert.equal(focusAfterKeepEditing(field, body, field), null)
+  // A field that went away, or an element inside a dialog, is never focused.
+  assert.equal(focusAfterKeepEditing(body, body, element('gone', { connected: false })), null)
+  assert.equal(focusAfterKeepEditing(body, body, element('menu item', { inDialog: true })), null)
+  assert.equal(focusAfterKeepEditing(body, body, null), null)
+  // The keys that raise the question from a dialog are global commands, run from inside a field in both keymaps.
+  for (const [keymap, keys] of [['classic', ['Alt+G', 'Ctrl+G', 'F3']], ['web-safe', ['Alt+G', 'Alt+K']]] as const)
+    for (const chord of keys) assert.ok(['nav.go-to', 'nav.switch-to', 'company.switch'].includes(resolve(keymap, chord, ['entry'], 'text') ?? ''), `${keymap} ${chord} from a field`)
+  // That the guard applies it after "Keep editing" (and only then) is run in focus-and-fragments.test.ts.
+})
+
+test('KEY-075: after Save on the account page focus stays on, or returns to, the control that saved', () => {
+  const save = element('save')
+  const fresh = { name: element('name'), submit: element('submit'), first: element('first') }
+  const find = (enabled: Partial<typeof fresh>) => (selector: string) => selector.startsWith('[name="name"]') ? enabled.name ?? null
+    : selector.startsWith('button[type="submit"]') ? enabled.submit ?? null : selector.startsWith('input:') ? enabled.first ?? null : null
+  // Still on the page and enabled (a refused save): focus goes back to it.
+  assert.equal(controlAfterSave(save, find(fresh)), save)
+  // A field submitted with Enter was remounted: the field of the same name in the new form.
+  assert.equal(controlAfterSave(element('name', { connected: false }), find(fresh)), fresh.name)
+  // The Save button was remounted: the new Save button while enabled, else (nothing left to save) the first editable field.
+  assert.equal(controlAfterSave(element('', { connected: false }), find(fresh)), fresh.submit)
+  assert.equal(controlAfterSave(element('', { disabled: true }), find({ first: fresh.first })), fresh.first)
+  assert.equal(controlAfterSave(null, find(fresh)), null, 'nothing was focused when the save started')
+  // Focusing it after the save is run in focus-and-fragments.test.ts (refocusAfterSave).
+})
+
+test('KEY-065: with no go-to return left Escape goes one level up; on a company that cannot be opened, to the start page', () => {
+  assert.equal(shellBackTarget({ companyInAddress: true, listed: true, ready: true, atMenu: false }), 'menu', 'a company page goes to its menu')
+  assert.equal(shellBackTarget({ companyInAddress: true, listed: true, ready: true, atMenu: true }), null, 'the menu is the top level')
+  assert.equal(shellBackTarget({ companyInAddress: true, listed: false, ready: false, atMenu: false }), 'start', 'Company not found: the start page')
+  assert.equal(shellBackTarget({ companyInAddress: true, listed: null, ready: false, atMenu: false }), null, 'while the list loads nothing is decided')
+  assert.equal(shellBackTarget({ companyInAddress: true, listed: true, ready: false, atMenu: false }), null, 'a company that is not set up keeps Escape')
+  assert.equal(shellBackTarget({ companyInAddress: false, listed: null, ready: false, atMenu: false }), null, 'outside companies Escape keeps its meaning')
+  // From the page body or a named region (what a full load leaves focused), Escape is nav.back in both keymaps once the
+  // shell has a target, and nothing without one.
+  for (const keymap of keymapNames) {
+    assert.equal(resolve(keymap, 'Escape', [], 'other'), 'nav.back', keymap)
+    assert.equal(resolve(keymap, 'Escape', [], 'other', ['nav.back']), undefined, `${keymap}: no target, nothing runs`)
+  }
+  // After a reload a report holds no go-to return and takes its own back, one level up.
+  assert.equal(backSource({ path: '/app/c/x/reports/trial-balance', index: 3, step: null }, [], { screen: true, shell: true }), 'screen')
+})
+
+test('KEY-065 under a slow load: while the screen for the address is loading, Escape and Ctrl+Q wait, whatever else applies', () => {
+  const report = { path: '/app/c/x/reports/trial-balance', index: 1, step: null };
+  const held: GoToReturn = { from: '/app/c/x/reports/day-book', to: '/app/c/x/reports/trial-balance', level: '', index: 1, fromIndex: 0, mark: 0 };
+  const cases = [[[], true, true, 'screen'], [[], false, true, 'shell'], [[held], true, true, 'go-to']] as const;
+  for (const [stack, screen, shell, mounted] of cases) {
+    assert.equal(backSource(report, stack, { screen, shell, loading: true }), 'none', `${mounted}: nothing runs while loading`);
+    assert.equal(backSource(report, stack, { screen, shell, loading: false }), mounted, `${mounted}: once mounted the usual order applies`);
+  }
+  // The shell counts what is loading: the company read (LoadingState) and a navigation still pending.
+  const shell = withoutComments(readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8'));
+  assert.match(shell, /loading: loadingStates > 0 \|\| navigating \}/);
+  assert.match(shell, /const navigating = useRouterState\(\{ select: state => state\.status === 'pending' \}\)/);
+  const company = withoutComments(readFileSync(new URL('../src/routes/app/c.$companyId.tsx', import.meta.url), 'utf8'));
+  assert.equal(company.match(/<LoadingState message='Loading the company…' \/>/g)?.length, 2, 'both waits for the company are loading states');
+  assert.doesNotMatch(company, /StatusLine/, 'no plain status line that Escape would not wait for');
+});
+
+test('one navigation per menu: letters pressed before the next page mounts are dropped, never run', () => {
+  const opened: string[] = [];
+  const once = oneNavigation();
+  assert.equal(once(() => opened.push('U')), true);
+  assert.equal(once(() => opened.push('N')), false);
+  assert.equal(once(() => opened.push('T')), false);
+  assert.deepEqual(opened, ['U'], 'only the first letter navigates');
+  const fresh: string[] = [];
+  oneNavigation()(() => fresh.push('T'));
+  assert.deepEqual(fresh, ['T'], 'a new menu starts again');
+  const menu = withoutComments(readFileSync(new URL('../src/routes/app/c.$companyId.index.tsx', import.meta.url), 'utf8'));
+  assert.match(menu, /const \[navigateOnce\] = useState\(oneNavigation\)/);
+  assert.match(menu, /open: \(\) => \{ navigateOnce\(\(\) => \{ lastOpened\.set\(company\.id, entry\.command\); void navigate\(/);
+});
+
+test('no environment badge in the shell (owner decision): the top bar has no badge and no screen says "Development preview"', () => {
+  const app = withoutComments(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'));
+  const start = app.indexOf('<AppTopbar');
+  assert.ok(start >= 0, 'the top bar is found');
+  assert.doesNotMatch(app.slice(start, app.indexOf('/>', start)), /\bbadge=/);
+  const files = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : /\.tsx?$/.test(entry.name) ? [new URL(entry.name, dir)] : []);
+  for (const file of files(new URL('../src/', import.meta.url))) assert.doesNotMatch(withoutComments(readFileSync(file, 'utf8')), /Development preview/i, file.pathname);
+});
+
+test('KEY-066: the action bar shows only what can run, and a command without a key only when a pointer can use it', () => {
+  const bar = (keymap: KeymapName, enabled: Partial<Record<CommandId, boolean>>) => barCommands((['help.keyboard', 'nav.back', 'nav.quit', 'company.switch', 'nav.go-to', 'nav.switch-to'] as CommandId[])
+    .map(id => ({ id, enabled: enabled[id] ?? true, keys: mergeKeymaps(keymaps[keymap])[id] ?? [] }))).map(command => command.id)
+  // Company home: nothing is above the menu, so neither back nor leave can run, and neither is offered.
+  assert.deepEqual(bar('classic', { 'nav.back': false, 'nav.quit': false }), ['help.keyboard', 'company.switch', 'nav.go-to', 'nav.switch-to'])
+  // Web-safe: leave has no key and repeats "Go back one level" for a pointer, so it is left out; switch-to has no key
+  // either, but a pointer opens its list from the bar, so it stays (KeyHint shows nothing for a command without keys).
+  assert.deepEqual(bar('web-safe', {}), ['help.keyboard', 'nav.back', 'company.switch', 'nav.go-to', 'nav.switch-to'])
+  assert.deepEqual(bar('classic', {}), ['help.keyboard', 'nav.back', 'nav.quit', 'company.switch', 'nav.go-to', 'nav.switch-to'])
+  // "Company not found": go-to and switch-to have no company to list, so the shell switches them off.
+  assert.deepEqual(bar('classic', { 'nav.go-to': false, 'nav.switch-to': false }), ['help.keyboard', 'nav.back', 'nav.quit', 'company.switch'])
+  const shell = readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8')
+  assert.match(shell, /const inCompany = companyOpen && companyInAddress/)
+  assert.match(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'), /companyOpen=\{ready\}/)
+})
+
+test('while another screen is on its way every key is dropped, before the registry and the focused element see it', () => {
+  const listeners = new Map<string, (event: { pathChanged: boolean }) => void>();
+  const router = { subscribe: (type: 'onBeforeNavigate' | 'onResolved', listener: (event: { pathChanged: boolean }) => void) => { listeners.set(type, listener); return () => listeners.delete(type) } };
+  let keydown: ((event: { key: string; preventDefault: () => void; stopImmediatePropagation: () => void }) => void) | undefined;
+  let capture = false;
+  const target = { addEventListener: (_type: 'keydown', listener: typeof keydown & {}, phase: boolean) => { keydown = listener; capture = phase }, removeEventListener: () => { keydown = undefined } };
+  const press = (key: string) => { const seen: string[] = []; keydown!({ key, preventDefault: () => seen.push('prevented'), stopImmediatePropagation: () => seen.push('stopped') }); return seen };
+  const stop = dropKeysWhileScreenChanges(router, target);
+  assert.equal(capture, true, 'it listens in the capture phase');
+  assert.deepEqual(press('Enter'), [], 'no navigation: keys pass');
+  listeners.get('onBeforeNavigate')!({ pathChanged: false });
+  assert.deepEqual(press('PageDown'), [], 'the same screen with another period or page keeps its keys');
+  listeners.get('onBeforeNavigate')!({ pathChanged: true });
+  for (const key of ['Enter', 'Escape', 'ArrowDown', 'a', 'Tab']) assert.deepEqual(press(key), ['prevented', 'stopped'], `${key} is dropped`);
+  assert.deepEqual(press('Shift'), [], 'a bare modifier passes');
+  listeners.get('onResolved')!({ pathChanged: true });
+  assert.deepEqual(press('Enter'), [], 'once the screen has rendered, keys reach it');
+  stop();
+  assert.equal(keydown, undefined);
+  assert.equal(listeners.size, 0);
+  const shell = withoutComments(readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8'));
+  assert.match(shell, /useEffect\(\(\) => dropKeysWhileScreenChanges\(router as never, window\), \[router\]\)/);
 });

@@ -1,7 +1,9 @@
 import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,type AccountProfileValues,type AuthNotice,type SelectOption} from '@ten98/ui';
 import {useConfirm} from './useConfirm';
 import {useCallback,useEffect,useId,useRef,useState} from 'react';
-import {useBlocker} from '@tanstack/react-router';
+import {useLeaveGuard} from './masters/entry';
+import {refocusAfterSave} from './masters/leave-guard';
+import {preferencesChanged} from '../lib/preferences-draft';
 import {ApiError,errMsg} from '../lib/api';
 import {accountLocaleInventory,accountLocaleMapping,accountLocales,accountPreferencesDefaults,accountPreferencesWireInputSchema,canonicalAccountTimeZone,type AccountLocale,type AccountPreferencesInput,type AccountPreferencesDto} from '../lib/account-preferences';
 import {requestAccountPreferences,useAccountPresentation} from '../lib/account-presentation';
@@ -11,23 +13,30 @@ const localeOptions:SelectOption[]=accountLocaleInventory.map(([code,label,dir])
 const isLocale=(value:string|undefined):value is AccountLocale=>accountLocales.includes(value as AccountLocale);
 const asDraft=(values:AccountProfileValues):Draft=>({name:values.name,timeZone:values.timeZone??'',locale:(isLocale(values.locale)?values.locale:accountPreferencesDefaults.locale),theme:values.theme});
 const savedDraft=(data:AccountPreferencesDto):Draft=>({name:data.user.name,timeZone:data.preferences.timeZone,locale:data.preferences.locale,theme:data.preferences.theme});
-const sameDraft=(a:Draft,b:Draft)=>a.name===b.name&&a.timeZone===b.timeZone&&a.locale===b.locale&&a.theme===b.theme;
 const detectTimeZone=()=>canonicalAccountTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
 
-/** Request/authorization adapter around the canonical AccountProfileFlow: it owns the revision CAS, reload recovery and the router blocker. */
+/** Request/authorization adapter around the canonical AccountProfileFlow: it owns the revision CAS, reload recovery and the leave guard. */
 export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expectedUserId:string;onUnauthorized:()=>void}){
   const account=useAccountPresentation(),[draft,setDraft]=useState<Draft|null>(null),[staged,setStaged]=useState<Draft|null>(null),[generation,setGeneration]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState<AuthNotice|undefined>(),[reloadRequired,setReloadRequired]=useState(false);
   const operation=useRef(0),request=useRef<AbortController|null>(null),mounted=useRef(true),locked=useRef(false);
-  const acknowledged=useRef<AccountPreferencesDto|null>(null),root=useRef<HTMLElement>(null),formatHelp=useId();
+  const acknowledged=useRef<AccountPreferencesDto|null>(null),root=useRef<HTMLElement>(null),formatHelp=useId(),saver=useRef<HTMLElement|null>(null),remountPending=useRef(false);
   const data=account?.data?.user.id===expectedUserId?account.data:null;
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;operation.current++;request.current?.abort();};},[]);
   // Every verified read or save remounts the flow from the saved values, discarding any local draft.
   useEffect(()=>{operation.current++;request.current?.abort();locked.current=false;setBusy(false);setError('');if(!data||data!==acknowledged.current){acknowledged.current=null;setNotice(undefined);}setReloadRequired(false);setStaged(null);setDraft(data?savedDraft(data):null);setGeneration(value=>value+1);},[data]);
   const blocked=!data||!draft||!!account?.loading||!!account?.error||busy;
   const saved=data?savedDraft(data):null;
-  const changed=!!saved&&!!draft&&!sameDraft(draft,saved);
+  const changed=preferencesChanged(draft,saved);
   const [confirm,dialog]=useConfirm();
-  useBlocker({shouldBlockFn:async()=>changed&&!await confirm({title:'Discard your unsaved preferences?',description:'The changes you made on this page are not saved.',confirmLabel:'Discard',cancelLabel:'Keep editing',danger:true}),enableBeforeUnload:()=>changed});
+  // The leave guard of the master forms: the same question, opened on "Keep editing", for a route change or a reload
+  // while the draft differs from what is saved. After a save the draft equals the saved values, so nothing is asked.
+  useLeaveGuard(changed,confirm);
+  // Saving locks the fieldset and a successful save then remounts the flow, a little after the save settles; both drop
+  // focus to the page. Focus goes back to the control that saved (controlAfterSave) once the remount is done, or, for a
+  // refused save that keeps its form, as soon as the fields are enabled again.
+  useEffect(()=>{const previous=saver.current;if(busy||!previous||(remountPending.current&&previous.isConnected))return;
+    saver.current=null;remountPending.current=false;
+    refocusAfterSave(previous,document.activeElement,document.body,selector=>root.current?.querySelector<HTMLElement>(selector)??null);},[busy,generation]);
   const zones=Array.from(new Set(['UTC',...(data?[data.preferences.timeZone]:[]),...Intl.supportedValuesOf('timeZone')])).sort();
   const onValuesChange=useCallback((values:AccountProfileValues)=>setDraft(asDraft(values)),[]);
   const fallback={name:'',...accountPreferencesDefaults};
@@ -39,12 +48,13 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
     if(blocked||locked.current||reloadRequired||!data||!account)return;
     const input=accountPreferencesWireInputSchema.safeParse({expectedRevision:data.preferences.revision,...asDraft(values)});
     if(!input.success){setError('Enter a name of 1–120 characters and choose a recognized named time zone and regional format.');return;}
-    const generation=++operation.current,controller=new AbortController();request.current=controller;locked.current=true;setBusy(true);setError('');setNotice(undefined);
+    const generation=++operation.current,controller=new AbortController();request.current=controller;locked.current=true;
+    saver.current=document.activeElement instanceof HTMLElement&&document.activeElement!==document.body?document.activeElement:null;setBusy(true);setError('');setNotice(undefined);
     const current=()=>mounted.current&&!controller.signal.aborted&&operation.current===generation;
     try{
       const saved=await requestAccountPreferences(controller.signal,input.data);if(!current())return;
       if(saved.user.id!==expectedUserId){account.unavailable('The signed-in account changed.');onUnauthorized();return;}
-      acknowledged.current=saved;if(account.accept(saved))setNotice({tone:'success',text:'Preferences saved.'});else acknowledged.current=null;
+      acknowledged.current=saved;if(account.accept(saved)){remountPending.current=true;setNotice({tone:'success',text:'Preferences saved.'});}else acknowledged.current=null;
     }catch(failure){
       if(!current())return;
       if(failure instanceof ApiError&&failure.status===401){account.unavailable('Your session ended.');onUnauthorized();return;}

@@ -1,21 +1,28 @@
 import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, WorkspaceProjectSwitcher } from '@ten98/ui'
-import type { NavLinkComponent, SidebarNavGroup } from '@ten98/ui'
+import type { SidebarNavGroup } from '@ten98/ui'
 import { AppBrand } from '@ten98/ui/app'
-import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { version } from '../../package.json'
 import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
-import { KeyboardShell } from '../components/KeyboardShell'
+import { KeyboardShell, NotFoundScreen, RouterLink, StateScreen } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
 import { sectionPath, workspaceOptions } from '../lib/company'
+import { shellBackTarget } from '../lib/commands'
+import { focusHeadingAfterLoad } from '../lib/page-focus'
+import { shellPageTitle } from '../lib/shell-title'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
-export const Route = createFileRoute('/app')({ component: AppLayout })
+/**
+ * An address under /app that no route matches shows the not-found state screen inside the shell. A page that fails is
+ * caught by its own route (the router's default error component, src/router.tsx), so the shell stays around it.
+ */
+export const Route = createFileRoute('/app')({ component: AppLayout, notFoundComponent: NotFoundScreen })
 
-const ShellLink: NavLinkComponent = ({ href, ...props }) => <Link to={href} {...props} />
+const ShellLink = RouterLink
 
 /** The company sections; each is its own child route of /app/c/$companyId. */
 const sections = [
@@ -49,6 +56,9 @@ function AppLayout() {
     catch (error) { if (error instanceof ApiError && error.status === 401) unauthorized(); else setLoadError(errMsg(error)) }
   }, [unauthorized])
   useEffect(() => { void loadMe() }, [loadMe])
+  // From the first render of a full load (the loading screen included): focus goes to a named element, never the page
+  // body (src/lib/page-focus.ts), until the first key or pointer press.
+  useEffect(() => focusHeadingAfterLoad(document), [])
 
   const reloadCompanies = useCallback(async () => {
     const request = ++companiesRequest.current
@@ -89,7 +99,7 @@ function AppLayout() {
   }
 
   if (loadError) return <AppStateScreen state='error' title='Unable to load your account' message={loadError} onRetry={() => { setLoadError(''); void loadMe() }} />
-  if (!me || !state) return <AppStateScreen state='loading' message='Loading…' />
+  if (!me || !state) return <StateScreen state='loading' title='Loading' message='Loading…' />
 
   const base = company ? `/app/c/${company.id}` : ''
   const ready = company?.company != null
@@ -98,14 +108,16 @@ function AppLayout() {
   // The Team page and the switcher follow the company in the address, else the current one.
   const shown = company ?? (pathname.startsWith('/app/team') ? current : undefined)
   const manager = current?.role === 'owner' || current?.role === 'admin'
-  const pageTitle = (ready ? currentSection?.label : undefined) ?? (pathname.startsWith('/app/account') ? 'Your account' : pathname.startsWith('/app/team') ? 'Team'
-    : pathname.startsWith('/app/companies/new') ? 'Create company' : company ? 'Set up the company' : 'Companies')
-  // Escape goes back one level, from a company page to the company menu. The menu is the top level: /app only reopens a company.
-  const back = ready && pathname.toLowerCase().replace(/\/$/, '') !== base ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } }) : undefined
+  const pageTitle = shellPageTitle({ section: ready ? currentSection?.label : undefined, path: pathname, company })
+  // Escape goes back one level, from a company page to the company menu (shellBackTarget). The menu is the top level: /app
+  // only reopens a company. A company in the address that the list does not hold cannot be opened: Escape goes to /app.
+  const backTo = shellBackTarget({ companyInAddress: companyId !== undefined, listed: companies === null ? null : company !== undefined, ready, atMenu: pathname.toLowerCase().replace(/\/$/, '') === base })
+  const back = backTo === 'menu' && company ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } })
+    : backTo === 'start' ? () => void navigate({ to: '/app' }) : undefined
   const openCompany = (id: string) => void navigate({ href: `/app/c/${id}${ready ? sectionPath(pathname, base) : ''}` })
 
   return <AppContext value={state}><PresentationProvider userId={me.user.id} onUnauthorized={unauthorized}>
-    <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} onSwitchCompany={companies ? () => setPickerOpen(true) : undefined}>
+    <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} companyOpen={ready} onSwitchCompany={companies ? () => setPickerOpen(true) : undefined}>
     <AppShell sidebarLabel='Application navigation' skipLinkLabel='Skip to main content' mainLabel='Main content' navigation={{ open: menuOpen, onOpenChange: setMenuOpen }}
       sidebar={<>
         <AppBrand product='Books' href='/app' />
@@ -119,7 +131,6 @@ function AppLayout() {
         </SidebarFooter>
       </>}
       topbar={<AppTopbar wrap menuToggle menuLabel='Menu' breadcrumb={{ icon: 'building', scope: shown?.name, current: pageTitle }}
-        badge={{ label: 'Development preview', hideOnMobile: true }}
         actions={<AccountMenu name={me.user.name || 'Account'} email={me.user.email} linkComponent={ShellLink} items={[
           { id: 'account', kind: 'link', label: 'Account and security', href: '/app/account', icon: 'user' },
           { id: 'separator', kind: 'separator' },
@@ -145,3 +156,4 @@ const createCompany = { label: 'Create company', href: '/app/companies/new' }
 function PresentationProvider({ userId, onUnauthorized, children }: { userId: string; onUnauthorized: () => void; children: ReactNode }) {
   return <AccountPresentationContext value={useAccountPresentationState(userId, onUnauthorized)}>{children}</AccountPresentationContext>
 }
+

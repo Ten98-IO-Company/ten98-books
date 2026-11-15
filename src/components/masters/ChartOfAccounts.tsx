@@ -115,14 +115,14 @@ function ChartBody() {
 
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title='Chart of accounts'
-      description={groups && ledgers ? `${count(groups.length, 'group', 'groups')} and ${count(ledgers.length, 'ledger', 'ledgers')}. Use the arrow keys, then Enter to alter the highlighted row.` : 'Loading the chart…'}
+      description={groups && ledgers ? `${count(groups.length, 'group', 'groups')} and ${count(ledgers.length, 'ledger', 'ledgers')}. Use the arrow keys, then Enter to ${writer === false ? 'open' : 'alter'} the highlighted row.` : 'Loading the chart…'}
       actions={canWrite ? <Button variant='secondary' onClick={() => void navigate({ to: '/app/c/$companyId/masters/new', params: { companyId: company.id }, search: under ? { under } : {} })}>Create</Button> : undefined} />
     {writer === false && <Alert tone='info'>Viewers can read the chart but not change it.</Alert>}
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     <FailureAlert failure={failure} />
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
     {groups && ledgers && (rows.length
-      ? <MasterList label='Chart of accounts' entries={entries} active={current?.key ?? null} onActiveChange={move} openHint='Enter to alter' focusList listRef={list}
+      ? <MasterList label='Chart of accounts' entries={entries} active={current?.key ?? null} onActiveChange={move} openHint={writer === false ? 'Enter to open' : 'Enter to alter'} focusList listRef={list}
         onOpen={key => { const row = cursors.find(item => item.key === key); if (row) go('edit', row) }} />
       : <EmptyState icon='book' title='The chart is empty' description='Create a group or a ledger to start.' />)}
     {canWrite && reason && <Text tone='muted' size='sm'>Delete is unavailable for the highlighted row: {reason}</Text>}
