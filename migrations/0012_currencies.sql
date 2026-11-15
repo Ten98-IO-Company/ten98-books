@@ -279,9 +279,10 @@ END $$;
 
 -- ---- Revision log, row-level security and grants ----
 
--- Widened NOT VALID, as 0008 did: every existing row already passes.
+-- Widened from 0011's list NOT VALID, as 0008 did: every existing row already passes.
 ALTER TABLE revision_log DROP CONSTRAINT revision_log_entity_check;
-ALTER TABLE revision_log ADD CONSTRAINT revision_log_entity_check CHECK (entity IN ('group', 'ledger', 'voucher_type', 'voucher', 'cost_category', 'cost_centre', 'currency', 'exchange_rate')) NOT VALID;
+ALTER TABLE revision_log ADD CONSTRAINT revision_log_entity_check CHECK (entity IN ('group', 'ledger', 'voucher_type', 'voucher', 'cost_category', 'cost_centre',
+  'stock_unit', 'stock_group', 'stock_category', 'stock_location', 'stock_item', 'currency', 'exchange_rate')) NOT VALID;
 
 DO $$
 DECLARE table_name text;
@@ -302,7 +303,7 @@ GRANT UPDATE (currency) ON ledger TO books_app;
 -- ---- Seeding (D-10) ----
 
 -- The one seeding routine gains the base currency row, first, so the ledgers it seeds can name it; everything else is
--- as in 0008.
+-- as in 0011 (which added the main location).
 CREATE OR REPLACE FUNCTION ledger_seed_company(p_company text) RETURNS void LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   INSERT INTO currency (company_id, code, system_key, symbol, formal_name, decimals)
@@ -362,6 +363,8 @@ BEGIN
   ON CONFLICT (company_id, system_key) DO NOTHING;
   INSERT INTO cost_category (company_id, system_key, name, allocate_revenue, allocate_non_revenue)
   VALUES (p_company, 'primary', 'General', true, true)
+  ON CONFLICT (company_id, system_key) DO NOTHING;
+  INSERT INTO stock_location (company_id, system_key, name) VALUES (p_company, 'main', 'Main Store')
   ON CONFLICT (company_id, system_key) DO NOTHING;
 END $$;
 

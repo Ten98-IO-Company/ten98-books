@@ -4,8 +4,9 @@ import { after, before, test } from 'node:test';
 import { compareDataset, formatCompareResult } from '../src/server/demo/compare.ts';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
+import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../src/server/reports/statements.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { setupOwner, type Member } from './helpers/ledger.ts';
+import { inCompany, setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
  * The four large companies (gulfline and najd: 319 vouchers each with orders, stock journals, cancelled entries and
@@ -35,15 +36,15 @@ type Expectation = {
 };
 const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 };
 const expectations: Expectation[] = [
-  { slug: 'gulfline', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [64, 0, 0], differs: [],
+  { slug: 'gulfline', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [65, 0, 0], differs: [],
     bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} } },
-  { slug: 'najd', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [64, 0, 0], differs: [],
+  { slug: 'najd', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [65, 0, 0], differs: [],
     bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} } },
   // The four vouchers cancelled without lines (receipt, sales, payment) are voids and hold their numbers, so all 189 numbers match.
   { slug: 'harbourview', created: 192, voids: 4, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: {}, numbers: { checked: 189, matched: 189 }, counts: [81, 0, 12], differs: [],
     bills: { opening: 2, posted: 121, foreign: 17, warnings: {} }, costs: { categories: 2, centres: 5, posted: 147, leftOut: 0, warnings: {} } },
   { slug: 'sunrise', created: 216, voids: 2, unsupported: { stock_journal: 36, sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: {},
-    numbers: { checked: 214, matched: 214 }, counts: [64, 0, 0], differs: [],
+    numbers: { checked: 214, matched: 214 }, counts: [65, 0, 0], differs: [],
     // payment-048 settles SI-STE-11 in full after debit-note-001 already took 88.20 of it: the ledger module accepts that and says so.
     bills: { opening: 1, posted: 145, foreign: 0, warnings: { bill_over_settled: 1 } }, costs: { categories: 1, centres: 6, posted: 25, leftOut: 0, warnings: {} } },
 ];
@@ -77,6 +78,7 @@ for (const expectation of expectations) {
     assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: expectation.created, cancelled: 0 }, 0, 0]);
     assert.deepEqual([again.bills.openingBills, again.bills.rowsPosted, again.bills.warnings], [0, 0, {}], 'a second run posts no bill rows and raises no warning');
     assert.deepEqual([again.voided, again.costs.rowsPosted, again.costs.categories.created, again.costs.centres.created, again.costs.switchedOn, again.costs.warnings], [0, 0, 0, 0, false, {}], 'a second run posts no void and no cost row and creates no cost master');
+    assert.deepEqual([again.stock.units.created, again.stock.locations.created, again.stock.groups.created, again.stock.items.created, again.stock.switchedOn], [0, 0, 0, 0, false], 'and creates no stock master');
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
     assert.deepEqual(first.numberDifferences, [], 'every voucher number equals the dataset\'s');
 
@@ -150,4 +152,44 @@ test('cost centres: every centre total of the year and of both checkpoints match
   const sunrise = (await compareDataset(owner.userId, await loadDataset(join(demoRoot, 'sunrise')))).lines.filter(line => line.block.startsWith('Cost centres '));
   assert.deepEqual([sunrise.length, sunrise.filter(line => line.ok).length], [6, 6], 'six job centres');
   assert.deepEqual(sunrise.find(line => line.label === 'Cost centre JOB-101')!.expected, 'Dr 28400.00 / Cr 6200.00');
+});
+
+test('opening stock: sunrise and gulfline hold it in every statement, their openings agree with it, and profit stays the ledgers\' alone', async () => {
+  const cases = [
+    // sunrise: the profit and loss excluding stock of expected.json; the balance sheet total of expected.json, read on the
+    // reference's screen, where the loss is a positive line with the assets. Valuation will move 53,382.95 from the loss
+    // line into closing stock, both on the assets side, so the total already agrees.
+    { slug: 'sunrise', stock: 3727000n, gross: -9268150n, net: -34132250n, balanceSheet: 52129725n, stockItems: 8 },
+    { slug: 'gulfline', stock: 36944000n, gross: null, net: null, balanceSheet: null, stockItems: 14 },
+  ];
+  for (const expected of cases) {
+    const dataset = await loadDataset(join(demoRoot, expected.slug));
+    const { companyId, period } = await compareDataset(owner.userId, dataset);
+    await inCompany(owner.userId, companyId, async context => {
+      const items = await context.client.query('SELECT count(*)::int AS items FROM stock_item WHERE company_id = $1', [companyId]);
+      assert.equal(items.rows[0].items, expected.stockItems, `${expected.slug}: every item seeded`);
+      const nextYear = String(Number(period.to.slice(0, 4)) + 1);
+      for (const [from, to] of [[period.from, period.to], [`${nextYear}-01-01`, `${nextYear}-12-31`]]) {
+        const trial = await trialBalanceReport(context, { from, to });
+        const row = trial.nodes.find(node => node.kind === 'stock')!;
+        const parent = trial.nodes.find(node => node.key === row.parentKey)!;
+        assert.deepEqual([row.name, row.openingDebit, row.closingDebit, parent.systemKey], ['Opening stock', expected.stock, expected.stock, 'current_assets'], `${expected.slug} ${from}`);
+        assert.deepEqual(trial.openingDifference, { amount: 0n, side: null }, `${expected.slug} ${from}: no difference`);
+        assert.deepEqual([trial.grandTotals.openingDebit, trial.grandTotals.closingDebit], [trial.grandTotals.openingCredit, trial.grandTotals.closingCredit], `${expected.slug} ${from}: balanced`);
+        // Without the row the ledger openings alone fall short by exactly the opening stock, on the debit side.
+        if (from === period.from) {
+          const ledgers = trial.nodes.filter(node => node.kind === 'ledger');
+          const net = ledgers.reduce((sum, node) => sum + node.openingDebit - node.openingCredit, 0n);
+          assert.equal(net, -expected.stock, `${expected.slug}: the ledger openings net to the opening stock on the credit side`);
+        }
+      }
+      const profit = await profitAndLossReport(context, { from: period.from, to: period.to });
+      assert.deepEqual(profit.stock, { opening: expected.stock, closing: expected.stock }, expected.slug);
+      if (expected.gross !== null) assert.deepEqual([profit.grossProfit, profit.netProfit], [expected.gross, expected.net]);
+      const sheet = await balanceSheetReport(context, { date: period.to });
+      assert.equal(sheet.closingStock, expected.stock);
+      assert.equal(sheet.totals.liabilities, sheet.totals.assets, `${expected.slug}: the balance sheet balances`);
+      if (expected.balanceSheet !== null) assert.equal(sheet.totals.assets, expected.balanceSheet);
+    });
+  }
 });

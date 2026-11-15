@@ -24,13 +24,13 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 
 | Piece | Status | Notes |
 |---|---|---|
-| Keyboard shell: command registry, `classic` and `web-safe` keymaps, company menu | merged | [KEYBOARD.md](KEYBOARD.md) |
+| Keyboard shell: command registry, `classic` and `web-safe` keymaps, company menu | merged | [KEYBOARD.md](KEYBOARD.md). A go-to returns once to the screen it was opened from and gives way to a report's own drill-down trail; covered by key-walk tests, not yet checked in a real browser by a reviewer |
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides). A trial balance for a period starting after the books begin carries all earlier income and expense in one profit and loss row, as observed |
-| Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2). Master names are unique under the name match key ([D-10](DECISIONS.md), migration 0010): names that differ only by case, spaces or the ignored characters are one name, as observed |
+| Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2). Master names are unique under the name match key ([D-10](DECISIONS.md), migration 0010): names that differ only by case, spaces or the ignored characters are one name, as observed The forms' lookups compare typed text and choices under the same key, and a duplicate-name refusal shows on the Name field with what was typed kept. The order in which Enter resolves typed text is ours and provisional ([KEYBOARD.md](KEYBOARD.md)); it is not yet settled by observation |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
-| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies, a masters-only seed, and bill rows posted from the datasets. Pending bills are compared with the reference installation: they match in the two companies that list them bill by bill; the two large trading companies now match on every bill line. Lines that need features not built yet (foreign currency, vouchers cancelled without lines, cost and stock figures) are reported as not yet comparable |
+| Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies seeded through the ledger module: masters and bills matched under the name match key, vouchers cancelled without lines, and each line's cost rows. Compared with the reference installation, voucher numbers, pending bills and cost centre figures show no difference in any company (lines matching: starter 30, two trading companies 64 each, the fabrication company 64, the consulting company 81). The consulting company's 12 foreign-currency lines are reported as not yet comparable; stock figures are not compared yet |
 | Voucher entry screen | blocked | Needs the entry grid from the next `@ten98/ui` release. Design reviewed and revised against observed entry flows; three slices planned. The reads the screen needs are merged (expected next number, resulting balances of a draft, proposed counter ledger: [LEDGER.md](LEDGER.md)) |
 | `classic` as the default keymap and a parity audit of every command ([D-05](DECISIONS.md) as amended) | merged | Parity table and reserved keys in [KEYBOARD.md](KEYBOARD.md) |
 | Voucher numbers per voucher type and financial year of the voucher's date; posting rules per voucher type as observed | merged | [LEDGER.md](LEDGER.md), migrations 0007 and 0009, [D-04](DECISIONS.md) as amended. A voucher can be saved as cancelled without lines and altered into another voucher type (it takes that type's next number). Prefix, suffix, manual numbering and other restart periods are not built |
@@ -41,6 +41,7 @@ Open items inside merged pieces:
 - Report page keys reach into the table's rows for focus until `@ten98/ui` exposes focus control.
 - Apple-platform chords and hot letters on non-Latin keyboard layouts wait for the next `@ten98/ui` release.
 - Cross-browser key reachability is unmeasured; the profile has no browser test runner yet.
+- The profile has no DOM test setup either: how a form is wired to its lookups and messages is covered by tests that read the source and by key-by-key walks, not by rendered tests.
 - The period lock is enforced in the application only, and the audited unlock is not built.
 
 M1 is accepted when, on a fresh installation and by keyboard only in both keymaps, a user can set up a company, maintain masters, enter and alter every accounting voucher type, and read the reports with drill-down; and `demo:compare` shows no difference on the starter company.
@@ -60,7 +61,7 @@ Open items inside merged pieces:
 
 - Bills are base-currency only; interest on bills and credit limits are not built.
 - The voucher check and the opening-bill check re-read their voucher or ledger for every row (measured in [LEDGER.md](LEDGER.md)); not optimised.
-- Cost centres: the other observed cost reports, allocation on the voucher entry screen and the demo seeder's cost rows are not built.
+- Cost centres: the other observed cost reports and allocation on the voucher entry screen are not built.
 
 Stock masters, units and locations; inventory vouchers and valuation (weighted average and FIFO first); orders and their tracking; bill-wise receivables and payables with credit periods and ageing; cost centres and accounting projects (the project dimension of D-03); multi-currency with exchange differences; banking with cheque details and reconciliation; interest. Budgets are not planned: the reference installation has no budget masters, switch or reports, so there is nothing to match.
 

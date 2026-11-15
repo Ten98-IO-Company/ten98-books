@@ -23,12 +23,12 @@ export const ledgerErrorCodes = [
   'not_found', // the company, master or voucher (or one it refers to) is not there or not reachable
   'stale_revision', // someone changed the row since the client read it
   'retry', // a deadlock or serialization failure; nothing was saved
-  'duplicate_name', // another group, ledger, voucher type, cost category or cost centre (across categories) has the name under the name match key (0010); a currency code or symbol equals another currency's code or symbol under the key
-  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference); a currency is named by a ledger, or a ledger's currency is fixed by its postings, opening, bill rows or cost rows
-  'seeded_row', // a built-in row (also the seeded cost category) cannot be deleted; the base currency keeps its code and decimals
+  'duplicate_name', // another master of the same kind has the name under the name match key (0010): group, ledger, voucher type, cost category, cost centre (across categories), unit symbol, stock group, stock category, location or stock item (0011); a currency code or symbol equals another currency's code or symbol under the key (0012)
+  'in_use', // a group holds sub-groups or ledgers, a ledger has voucher lines, a cost category holds centres or a cost centre or category is used (also by deleted vouchers: a declared difference); a stock master holds sub-masters or items or opening stock, a used unit's decimals would drop, an item with stock would change unit, or inventory would be switched off with items; a currency is named by a ledger, or a ledger's currency is fixed by its postings, opening, bill rows or cost rows
+  'seeded_row', // a built-in row (also the seeded cost category and the main location) cannot be deleted; the base currency keeps its code and decimals
   'nature_fixed', // a nature cannot change here (built-in rows, or ledgers with postings or openings below)
   'family_rule', // a built-in ledger would leave its behaviour family
-  'cycle', // a group or cost centre would sit under its own sub-group or sub-centre
+  'cycle', // a group, cost centre, stock group, stock category or location would sit under itself or one of its own sub-masters
   'locked_period', // the date or the opening balances are inside the locked period (also: a rate row dated in it)
   'before_books_beginning', // the date is before the company's books begin
   'unbalanced', // fewer than two lines, or debits differ from credits
@@ -38,6 +38,7 @@ export const ledgerErrorCodes = [
   'not_set_up', // the company has no books settings yet; members get this, non-members get not_found
   'allocation_total', // a line's (or an opening balance's) bill rows net to more than it, or to its other side; or a line's cost rows of one category do not add up to it
   'bill_inactive', // a settlement names a bill whose vouchers were all deleted or cancelled
+  'feature_off', // the company feature this needs is switched off (a stock item while inventory is off)
 ] as const;
 export type LedgerErrorCode = (typeof ledgerErrorCodes)[number];
 
@@ -253,12 +254,14 @@ export type TrialBalanceRow = {
 export type TrialBalance = {
   from: string; to: string; rows: TrialBalanceRow[];
   totals: { openingDebit: bigint; openingCredit: bigint; debit: bigint; credit: bigint; closingDebit: bigint; closingCredit: bigint };
-  /** Opening balances entered out of balance while a company is set up (D-10): shown, never blocking. */
+  /** The opening stock rows' value (M2b slice a), a debit beside the ledgers; null when the company has none. */
+  openingStock: bigint | null;
+  /** Opening balances entered out of balance while a company is set up (D-10), opening stock included: shown, never blocking. */
   openingDifference: { amount: bigint; side: Side | null };
 };
 
 export type Revision = {
-  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher' | 'cost_category' | 'cost_centre' | 'currency' | 'exchange_rate'; entityId: string;
+  id: string; entity: 'group' | 'ledger' | 'voucher_type' | 'voucher' | 'cost_category' | 'cost_centre' | 'stock_unit' | 'stock_group' | 'stock_category' | 'stock_location' | 'stock_item' | 'currency' | 'exchange_rate'; entityId: string;
   /** `actorName` is the user's display name, or null once that user no longer exists; never an email. */
   action: 'create' | 'alter' | 'cancel' | 'delete'; actorId: string; actorName: string | null; at: string; before: unknown; after: unknown;
 };

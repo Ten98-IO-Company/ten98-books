@@ -384,16 +384,17 @@ test('blocks and fields the comparison cannot read are named with their reason; 
   const expected = { ...good().expected, source: 'x', voucherCountNote: 'y', stockSummary: { closingValue: '1.00' }, receivables: {}, payables: {}, vat: {},
     trialBalance: { ...good().expected.trialBalance, report: 'r', note: 'n' }, balanceSheet: { total: '1.00', closingStockInAssets: '1.00' } };
   assert.deepEqual(notComparable(expected), [
-    'stockSummary (needs inventory)',
+    'stockSummary (needs valuation (slice c))',
     'vat (needs the VAT return, which ten98-books does not compute yet)',
   ]);
 });
 
-test('the skipped-feature summary words items.json with its counts and the opening stock value', () => {
+test('the skipped-feature summary words items.json with its counts, the opening stock value held unvalued, and the item extras it does not read', () => {
   const raw = good();
-  raw.extraFiles = { 'items.json': stock(), 'employees.json': [] };
+  raw.extraFiles = { 'items.json': { ...stock(), items: stock().items.map(item => ({ ...item, extras: { billOfMaterials: [] } })) }, 'employees.json': [] };
   assert.deepEqual(unmodelled(parseDataset(raw, 'demo/sample-shop')), [
-    'items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)',
+    'items.json: stock is not valued yet (1 item(s), 1 location(s)): the statements hold the opening stock of 500.00 in every period',
+    'items.json: extras on 1 item(s) (billOfMaterials)',
     'employees.json: feature file not modelled (kept as is)',
   ]);
 });

@@ -141,7 +141,8 @@ export function cashFamilyIds(groups: readonly GroupRow[]): Set<string> {
   return family;
 }
 
-export type Choice = { value: string; label: string; description?: string; disabled?: boolean; disabledReason?: string };
+/** `builtIn` marks a choice that is not a user's name ("Primary", "Top level"); one a typed name equals wins over a user's name. */
+export type Choice = { value: string; label: string; description?: string; disabled?: boolean; disabledReason?: string; builtIn?: boolean };
 
 /**
  * Lookup choices for a group field, in tree order so a sub-group follows its parent. Each shows where the group sits, so
@@ -159,7 +160,7 @@ export function groupChoices(groups: readonly GroupRow[], options: { primary?: b
       ...(reason ? { disabled: true, disabledReason: reason } : {}),
     };
   });
-  return options.primary ? [{ value: primaryChoice, label: 'Primary', description: 'A top-level group with its own nature' }, ...choices] : choices;
+  return options.primary ? [{ value: primaryChoice, label: 'Primary', description: 'A top-level group with its own nature', builtIn: true }, ...choices] : choices;
 }
 
 /** Whether the group's sub-tree holds anything the nature must not change under (D-10), as far as the page's data shows. */
@@ -355,29 +356,6 @@ export function ledgerFormOf(ledger: LedgerRow): LedgerFormValues {
 }
 
 // ---- Lookups ----
-
-const words = (text: string) => text.toLocaleLowerCase().split(/[\s·›/-]+/).filter(Boolean);
-
-/**
- * What a lookup field's typed text means. The field's value is always one of its options, never the text: blank text
- * clears it, text equal to the chosen label keeps it, and text that names exactly one choice (the whole label, or the
- * start of the label or of one of its words, such as "cre" for "Cr · Credit") picks it. Anything else, including text
- * that fits several choices or only a choice a rule disables, is an error in plain words and nothing is chosen.
- */
-export function resolveLookup(options: readonly Choice[], text: string, current: string): { value: string } | { error: string } {
-  const typed = text.trim().toLocaleLowerCase();
-  if (typed === '') return { value: '' };
-  const chosen = options.find(option => option.value === current && !option.disabled);
-  if (chosen && chosen.label.toLocaleLowerCase() === typed) return { value: current };
-  const fits = (option: Choice) => option.label.toLocaleLowerCase().startsWith(typed) || words(option.label).some(word => word.startsWith(typed));
-  const exact = options.filter(option => !option.disabled && option.label.toLocaleLowerCase() === typed);
-  const found = exact.length ? exact : options.filter(option => !option.disabled && fits(option));
-  if (found.length === 1) return { value: found[0].value };
-  if (found.length > 1) return { error: `“${text.trim()}” could mean more than one choice. Type more of the name, or pick from the list.` };
-  const blocked = options.filter(option => option.disabled && fits(option));
-  if (blocked.length === 1 && blocked[0].disabledReason) return { error: blocked[0].disabledReason };
-  return { error: `“${text.trim()}” is not one of the choices. Pick one from the list.` };
-}
 
 /** Whether `value` is the value of an enabled option: the only values a lookup may hold. */
 export const isChoice = (options: readonly Choice[], value: string): boolean => options.some(option => option.value === value && !option.disabled);

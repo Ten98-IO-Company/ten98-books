@@ -42,12 +42,14 @@ export type NodeAmounts = {
 export const amountKeys = ['openingDebit', 'openingCredit', 'debit', 'credit', 'closingDebit', 'closingCredit'] as const satisfies readonly (keyof NodeAmounts)[];
 
 /**
- * One line of the group hierarchy: a group (with the sums of every ledger below it) or a ledger. `depth` 0 is a primary
- * group, or a ledger outside every group (the profit and loss ledger). Lists are in pre-order, so a group is followed by
- * its sub-groups and then its ledgers.
+ * One line of the group hierarchy: a group (with the sums of every ledger below it), a ledger, or the company's stock
+ * (M2b: a computed debit inside the seeded current assets group, first among its lines, when the company holds opening
+ * stock; it is no ledger, so it has no drill-down). `depth` 0 is a primary group, or a ledger outside every group (the
+ * profit and loss ledger). Lists are in pre-order, so a group is followed by its stock line, its sub-groups and then its
+ * ledgers.
  */
 export type StatementNode = BalancedAmounts & {
-  key: string; kind: 'group' | 'ledger'; id: string; name: string; parentKey: string | null; depth: number;
+  key: string; kind: 'group' | 'ledger' | 'stock'; id: string; name: string; parentKey: string | null; depth: number;
   nature: Nature | null; grossProfit: boolean; systemKey: string | null;
 };
 /** The six amounts plus the signed opening and closing balances they net to. */
@@ -73,7 +75,7 @@ export type TrialBalanceReport = {
  */
 export type StatementLine = {
   key: string;
-  kind: 'heading' | 'group' | 'ledger' | 'subtotal' | 'result' | 'profit-and-loss' | 'difference';
+  kind: 'heading' | 'group' | 'ledger' | 'stock' | 'subtotal' | 'result' | 'profit-and-loss' | 'difference';
   label: string; depth: number | null; amount: bigint | null;
   /** Where Enter leads: a group's summary, a ledger's monthly summary, or another statement. */
   target: { report: 'group-summary'; groupId: string } | { report: 'ledger-monthly'; ledgerId: string } | { report: 'profit-and-loss' } | null;
@@ -83,6 +85,8 @@ export type ProfitAndLossReport = {
   from: string; to: string; lines: StatementLine[];
   /** Signed results: profit positive, loss negative. */
   grossProfit: bigint; netProfit: bigint;
+  /** Opening and closing stock in the cost of sales; null when the company holds no stock. */
+  stock: { opening: bigint; closing: bigint } | null;
 };
 
 export type BalanceSheetReport = {
@@ -90,6 +94,8 @@ export type BalanceSheetReport = {
   totals: { liabilities: bigint; assets: bigint };
   /** Results carried into the balance sheet: profit positive, loss negative. */
   profitAndLoss: { broughtForward: bigint; currentPeriod: bigint };
+  /** The stock in current assets at the end of the date; null when the company holds no stock. */
+  closingStock: bigint | null;
   openingDifference: OpeningDifference;
 };
 

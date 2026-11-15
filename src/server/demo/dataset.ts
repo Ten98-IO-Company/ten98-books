@@ -106,8 +106,8 @@ const expectedFile = z.looseObject({
   }).optional(),
 });
 /**
- * items.json (units, locations, stock groups, items with opening stock per location): ten98-books does not model stock
- * yet, so only its shape and references are checked; every other field is kept as it is.
+ * items.json (units, locations, stock groups, items with opening stock per location): its shape and references are
+ * checked here, the seeder creates the stock masters and openings it holds, and every other field is kept as it is.
  */
 const itemsFile = z.looseObject({
   units: z.array(z.looseObject({ key: slug, name: text, decimals: z.number().int().min(0).max(4).optional() })).optional(),
@@ -155,7 +155,7 @@ export type RawDataset = { company: unknown; groups?: unknown; ledgers: unknown;
 
 /**
  * What the opening stock in items.json is worth in minor units: quantity times rate for every item and location, each
- * rounded half up. Opening stock is not a ledger balance, so ledger openings alone leave a difference of this amount.
+ * rounded half up: the value the trial balance's "Opening stock" row holds once the items are seeded.
  */
 export function openingStockValue(items: ItemsFile | undefined, exponent: MoneyExponent): bigint {
   let total = 0n;
