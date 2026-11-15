@@ -2,7 +2,7 @@ import { Alert, AuthLayout, Button, Dialog, ShortcutProvider, ShortcutScope, Sta
 import { Link, useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
-import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
+import { afterHistory, ariaKeyShortcuts, backSource, commandOf, dropKeysWhileScreenChanges, commands, contextTitles, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
 import { reportLevel } from '../lib/reports'
 import { focusFirstHeading, focusHeadingAfterLoad } from '../lib/page-focus'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
@@ -208,6 +208,8 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
   const state = useMemo<KeyboardState>(() => ({ keymap, chosen: setting?.chosen ?? null, saving, error, choose, openHelp }), [keymap, setting, saving, error, choose, openHelp])
 
   // The last element focused outside a dialog, for "Keep editing" to return to (leave-guard.ts).
+  // Keys pressed while another screen is on its way do nothing (dropKeysWhileScreenChanges in commands.ts).
+  useEffect(() => dropKeysWhileScreenChanges(router as never, window), [router])
   const focusMemory = useRef<FocusMemory['current']>(null)
   useEffect(() => rememberFocusOutsideDialogs(document, focusMemory), [])
 
@@ -372,12 +374,33 @@ export function ErrorScreen({ reset }: { reset?: () => void }) {
  * to while it is shown (a status region that can take focus, labelled with what is loading), and while it is on screen
  * Escape and Ctrl+Q wait: the page that will know where its back leads has not mounted yet (backSource `loading`).
  */
-export function LoadingState({ message }: { message: string }) {
+export function LoadingState({ message, holder }: { message: string; holder?: (status: HTMLElement | null) => void | (() => void) }) {
   const change = useContext(LoadingContext)
   useEffect(() => {
     if (!change) return
     change(1)
     return () => change(-1)
   }, [change])
-  return <Stack role='status' tabIndex={-1} aria-label={message} data-loading-state=''><StatusLine busy>{message}</StatusLine></Stack>
+  return <Stack ref={holder} role='status' tabIndex={-1} aria-label={message} data-loading-state=''><StatusLine busy>{message}</StatusLine></Stack>
+}
+
+/**
+ * The router's pending screen (`defaultPendingComponent`, src/router.tsx): shown in the shell's main area only when a
+ * page inside the app takes longer than the router's pending delay to arrive, so a fast navigation shows nothing. It is
+ * the loading state, and it takes focus when the page it replaced has dropped it (the body has focus, or an element of
+ * that page, which the router hides rather than removes while it waits), so the keys it ignores are ignored visibly. When it gives way, the page-focus rule puts focus on the page that arrived. Outside the shell (the sign-in
+ * and invitation pages) it shows nothing: those pages have loading states of their own.
+ */
+/** Whether focus is lost: on nothing, the body, or an element no longer shown. */
+export const focusLost = (active: unknown, body: unknown): boolean =>
+  active === null || active === body || (typeof active === 'object' && 'checkVisibility' in active && typeof active.checkVisibility === 'function' && !active.checkVisibility())
+
+export function PendingScreen() {
+  const inShell = useContext(KeyboardContext) !== null
+  const hold = useCallback((status: HTMLElement | null) => {
+    if (!status) return
+    if (focusLost(document.activeElement, document.body)) status.focus()
+    return () => { if (document.activeElement === status || focusLost(document.activeElement, document.body)) focusHeadingAfterLoad(document) }
+  }, [])
+  return inShell ? <LoadingState message='Loading the page…' holder={hold} /> : null
 }

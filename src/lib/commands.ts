@@ -246,3 +246,35 @@ export function oneNavigation(): (start: () => void) => boolean {
     return true
   }
 }
+
+/** The router events `dropKeysWhileScreenChanges` listens to: a navigation starting (`pathChanged`) and settling. */
+export type ScreenChangeEvents = {
+  subscribe: (type: 'onBeforeNavigate' | 'onResolved', listener: (event: { pathChanged: boolean }) => void) => () => void
+}
+type KeyTarget = {
+  addEventListener: (type: 'keydown', listener: (event: KeyboardEventLike) => void, capture: boolean) => void
+  removeEventListener: (type: 'keydown', listener: (event: KeyboardEventLike) => void, capture: boolean) => void
+}
+type KeyboardEventLike = { key: string; preventDefault: () => void; stopImmediatePropagation: () => void }
+
+/**
+ * From the moment a navigation to another screen starts until that screen has rendered, every key is dropped: it is
+ * neither run on the screen being left (a focused button, a list row) nor by the shell, and it is not carried over to
+ * the next screen. A key pressed before the screen it is meant for is there does nothing. Only a change of path counts
+ * (a period change or page turn on the same report keeps its keys); bare modifier keys pass. Installed on `window` in
+ * the capture phase, so it runs before the shortcut registry and the focused element. Returns the function that stops it.
+ */
+export function dropKeysWhileScreenChanges(router: ScreenChangeEvents, target: KeyTarget): () => void {
+  let changing = false
+  const drop = (event: KeyboardEventLike) => {
+    if (!changing || ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'].includes(event.key)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  const stops = [
+    router.subscribe('onBeforeNavigate', event => { if (event.pathChanged) changing = true }),
+    router.subscribe('onResolved', () => { changing = false }),
+  ]
+  target.addEventListener('keydown', drop, true)
+  return () => { stops.forEach(stop => stop()); target.removeEventListener('keydown', drop, true) }
+}

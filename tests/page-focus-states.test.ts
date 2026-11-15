@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { createElement, type ComponentType, type ReactNode } from 'react';
 import { afterLoadTarget } from '../src/lib/page-focus.ts';
 import { appModules, renderInRouter } from './helpers/render.ts';
@@ -9,7 +10,8 @@ import { appModules, renderInRouter } from './helpers/render.ts';
  * components, rendered on the server as a full load first draws them, and `afterLoadTarget` (the rule's pure decision)
  * is asked where focus goes while the body has it. A page that focuses its own first place (a menu, a list, a form's
  * first field, a report's row) does so in an effect once its data is there; until then it shows a loading line and the
- * rule holds focus on the main area. The answer must never be the body or nothing.
+ * rule holds focus on the main area. The answer must never be the body or nothing. A refusal (a viewer on a create
+ * form, an editor or viewer on the Team page) has a page heading of its own.
  */
 let modules: Awaited<ReturnType<typeof appModules>>;
 before(async () => { modules = await appModules(); });
@@ -43,6 +45,8 @@ test('after a full load focus goes to a named element in the main area on every 
   const layout = await modules.load<{ CompanyUnavailable: ComponentType<{ kind: 'missing' | 'failed'; message: string; onRetry: () => void; locked?: boolean }>; CompanyNotSetUp: ComponentType<{ name: string; onRetry: () => void }> }>('/src/routes/app/c.$companyId.tsx');
   const team = await modules.load<{ Route: { options: { component: ComponentType } } }>('/src/routes/app/team.tsx');
   const masters = await modules.load<{ CreateMaster: ComponentType<{ kind: 'group' | 'ledger' }> }>('/src/components/masters/MasterScreens.tsx');
+  const picker = await modules.load<{ NewMasterChoice: ComponentType<{ under?: string }> }>('/src/components/masters/MasterPicker.tsx');
+  const cost = await modules.load<{ CreateCost: ComponentType<{ kind: 'cost-category' | 'cost-centre' }> }>('/src/components/masters/CostScreens.tsx');
   const signedIn = (role: Role | null, child: ReactNode) => createElement(context.AppContext, {
     value: {
       me: { user: { id: 'u', name: 'U', email: 'u@example.test' }, instanceOperator: false },
@@ -59,9 +63,12 @@ test('after a full load focus goes to a named element in the main area on every 
     ['/app/c/<id>', 'not set up, member', createElement(layout.CompanyNotSetUp, { name: 'Gulfline', onRetry: () => undefined }), 'h3 Gulfline is not set up yet'],
     ['any page', 'failed', createElement(shell.ErrorScreen), `h1 ${shell.stateCopy.error.title}`],
     ['no route', 'not found', createElement(shell.NotFoundScreen), `h1 ${shell.stateCopy.notFound.title}`],
-    ['/app/team', 'viewer', createElement(team.Route.options.component), 'main area'],
-    ['/app/team', 'editor', createElement(team.Route.options.component), 'main area'],
-    ['/app/c/<id>/masters/new/group', 'viewer', createElement(masters.CreateMaster, { kind: 'group' }), 'main area'],
+    ['/app/team', 'viewer', createElement(team.Route.options.component), 'h1 Gulfline team'],
+    ['/app/team', 'editor', createElement(team.Route.options.component), 'h1 Gulfline team'],
+    ['/app/c/<id>/masters/new/group', 'viewer', createElement(masters.CreateMaster, { kind: 'group' }), 'h1 Create group'],
+    ['/app/c/<id>/masters/new/ledger', 'viewer', createElement(masters.CreateMaster, { kind: 'ledger' }), 'h1 Create ledger'],
+    ['/app/c/<id>/masters/new', 'viewer', createElement(picker.NewMasterChoice, {}), 'h1 Create a master'],
+    ['/app/c/<id>/masters/new/cost-category', 'viewer', createElement(cost.CreateCost, { kind: 'cost-category' }), 'h1 Create cost category'],
     ['/app/c/<id>/masters/new/group', 'editor, chart loading (the form then focuses its first field)', createElement(masters.CreateMaster, { kind: 'group' }), 'main area'],
   ];
   const roles: Record<string, Role> = { viewer: 'viewer', editor: 'editor' };
@@ -90,4 +97,18 @@ test('focus the rule put on the main area or a loading state moves on to the hea
   assert.equal((afterLoadTarget(loading, body, loadingThenPage) as Target | null)?.name, 'h2 Trial balance');
   const stillLoading = mainArea('<div data-loading-state></div>');
   assert.equal(afterLoadTarget(stillLoading.querySelector('[data-loading-state]'), body, stillLoading), null, 'already there');
+});
+
+test('a viewer\'s master lists say open, not alter: the same keys, the wording of the read-only form', async () => {
+  const code = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const picker = code('../src/components/masters/MasterPicker.tsx');
+  assert.match(picker, /const verb = useCanWrite\(\) === false \? 'open' : 'alter'/);
+  assert.match(picker, /title=\{verb === 'open' \? 'Open a master' : 'Alter a master'\}/);
+  assert.match(picker, /openHint=\{`Enter to \$\{verb\}`\}/);
+  for (const file of ['ChartOfAccounts.tsx', 'CostCentreList.tsx']) {
+    const list = code(`../src/components/masters/${file}`);
+    assert.match(list, /then Enter to \$\{writer === false \? 'open' : 'alter'\} the highlighted row\./, file);
+    assert.match(list, /openHint=\{writer === false \? 'Enter to open' : 'Enter to alter'\}/, file);
+    assert.doesNotMatch(list, /openHint='Enter to alter'/, `${file}: no fixed alter hint`);
+  }
 });

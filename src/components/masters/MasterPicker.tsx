@@ -42,7 +42,7 @@ function NewMasterBody({ under }: { under?: string }) {
     ? { to: createRoutes[key], params: { companyId: company.id }, search: under ? { under } : {} }
     : { to: createRoutes[key as 'cost-category' | 'cost-centre'], params: { companyId: company.id }, search: {} })
   if (canWrite === undefined) return <StatusLine busy>Loading…</StatusLine>
-  if (!canWrite) return <Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert>
+  if (!canWrite) return <Stack gap={4}><PageHeader eyebrow='Masters' title='Create a master' /><Alert tone='info'>Viewers cannot create masters. Ask an owner, admin or editor of the company.</Alert></Stack>
   return <Stack gap={4}>
     <PageHeader eyebrow='Masters' title='Create a master' description='Choose what to create with the arrow keys, then press Enter.' />
     <MasterList label='What to create' entries={entries} active={active} onActiveChange={setActive} onOpen={open} openHint='Enter to create' focusList />
@@ -61,6 +61,8 @@ const normalise = (text: string) => text.toLocaleLowerCase()
 
 function PickerBody() {
   const company = useCompany()
+  // A viewer opens a master read-only, so the list says open, not alter; the keys are the same.
+  const verb = useCanWrite() === false ? 'open' : 'alter'
   const navigate = useNavigate()
   const { groups, ledgers, error, reload } = useMasterData(company.id)
   const cost = useCostData(company.id)
@@ -108,7 +110,7 @@ function PickerBody() {
     else void navigate({ to: '/app/c/$companyId/masters/edit/cost-centre/$centreId', params: { ...params, centreId: item.id }, search: {} })
   }
   return <Stack gap={4}>
-    <PageHeader eyebrow='Masters' title='Alter a master' description='Type to filter by name, move with the Up and Down keys, then press Enter to open the highlighted master.' />
+    <PageHeader eyebrow='Masters' title={verb === 'open' ? 'Open a master' : 'Alter a master'} description='Type to filter by name, move with the Up and Down keys, then press Enter to open the highlighted master.' />
     {message && <StatusLine tone='success' live='polite'>{message}</StatusLine>}
     {error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={reload}>Try again</Button>}>The chart could not be loaded: {error}</Alert>}
     {cost.error && <Alert tone='danger' actions={<Button size='sm' variant='secondary' onClick={cost.reload}>Try again</Button>}>Cost categories and centres could not be loaded: {cost.error}</Alert>}
@@ -116,6 +118,6 @@ function PickerBody() {
       onChange={event => setQuery(event.target.value)} />
     <Text size='sm' tone='muted' aria-live='polite'>{query ? `${shown.length} ${shown.length === 1 ? 'match' : 'matches'}` : 'Escape clears the filter, then moves to the list; Escape again goes back.'}</Text>
     {groups && ledgers && <MasterList label='Masters' entries={entries} active={current?.key ?? null} onActiveChange={setActive} onOpen={open}
-      openHint='Enter to alter' searchField listRef={list} emptyMessage='No master matches the filter.' />}
+      openHint={`Enter to ${verb}`} searchField listRef={list} emptyMessage='No master matches the filter.' />}
   </Stack>
 }

@@ -187,3 +187,34 @@ test('the real app layout draws its first screen (the account read) as a state s
   // The layout starts the page-focus rule from its first render, before the account has loaded (an effect, read here).
   assert.match(code('../src/routes/app.tsx'), /useEffect\(\(\) => focusHeadingAfterLoad\(document\), \[\]\)\n\n\s+const reloadCompanies/);
 });
+
+test('a slow page inside the shell shows the loading state, which takes focus only from the body; outside the shell nothing', async () => {
+  const { getRouter } = await modules.load<typeof import('../src/router.tsx')>('/src/router.tsx');
+  assert.equal(getRouter().options.defaultPendingComponent, shell.PendingScreen);
+  const inside = await renderInRouter(() => inShell(createElement(shell.PendingScreen)));
+  assert.match(inside, /aria-label="Loading the page…"/);
+  assert.match(inside, /data-loading-state=""/);
+  const outside = await renderInRouter(() => createElement(shell.PendingScreen));
+  assert.doesNotMatch(outside, /Loading the page/, 'the sign-in and invitation pages keep their own loading states');
+  // The holder it hands the loading state: focus from the body, a page's own focus left alone, the rule on giving way.
+  const { tree } = await rendered(shell.PendingScreen, {}, inShell);
+  const hold = (tree as { props: { holder: (node: unknown) => (() => void) | void } }).props.holder;
+  const log: string[] = [];
+  const status = focusable('status', log);
+  // As the loading state gives way it is still in the main area, beside the page that arrived.
+  const restore = fakeDocument(log, { h1: focusable('next page heading', log), '[data-loading-state]': status });
+  try {
+    const doc = (globalThis as { document: { activeElement: unknown; body: unknown } }).document;
+    const release = hold(status);
+    assert.deepEqual(log, ['status'], 'the page it replaced dropped focus: the loading state takes it');
+    doc.activeElement = status;
+    release?.();
+    assert.deepEqual(log, ['status', 'next page heading'], 'giving way, it hands focus to the page that arrived');
+    doc.activeElement = { ...focusable('hidden row of the page being left', log), checkVisibility: () => false };
+    hold(focusable('status from a hidden row', log));
+    assert.deepEqual(log, ['status', 'next page heading', 'status from a hidden row'], 'focus on the hidden page counts as lost');
+    doc.activeElement = { ...focusable('field', log), checkVisibility: () => true };
+    hold(focusable('status again', log));
+    assert.deepEqual(log, ['status', 'next page heading', 'status from a hidden row'], 'focus held on a shown element is left alone');
+  } finally { restore() }
+});

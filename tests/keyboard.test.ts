@@ -4,7 +4,7 @@ import { chordFromEvent, findChordConflicts, type ConfirmRequest, isPrintableCho
 import { readdirSync, readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { afterHistory, ariaKeyShortcuts, backSource, barCommands, commandIds, commands, drilledFrom, heldReturn, oneNavigation, shellBackTarget, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, barCommands, commandIds, commands, drilledFrom, dropKeysWhileScreenChanges, heldReturn, oneNavigation, shellBackTarget, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
@@ -953,3 +953,27 @@ test('KEY-066: the action bar shows only what can run, and a command without a k
   assert.match(shell, /const inCompany = companyOpen && companyInAddress/)
   assert.match(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'), /companyOpen=\{ready\}/)
 })
+
+test('while another screen is on its way every key is dropped, before the registry and the focused element see it', () => {
+  const listeners = new Map<string, (event: { pathChanged: boolean }) => void>();
+  const router = { subscribe: (type: 'onBeforeNavigate' | 'onResolved', listener: (event: { pathChanged: boolean }) => void) => { listeners.set(type, listener); return () => listeners.delete(type) } };
+  let keydown: ((event: { key: string; preventDefault: () => void; stopImmediatePropagation: () => void }) => void) | undefined;
+  let capture = false;
+  const target = { addEventListener: (_type: 'keydown', listener: typeof keydown & {}, phase: boolean) => { keydown = listener; capture = phase }, removeEventListener: () => { keydown = undefined } };
+  const press = (key: string) => { const seen: string[] = []; keydown!({ key, preventDefault: () => seen.push('prevented'), stopImmediatePropagation: () => seen.push('stopped') }); return seen };
+  const stop = dropKeysWhileScreenChanges(router, target);
+  assert.equal(capture, true, 'it listens in the capture phase');
+  assert.deepEqual(press('Enter'), [], 'no navigation: keys pass');
+  listeners.get('onBeforeNavigate')!({ pathChanged: false });
+  assert.deepEqual(press('PageDown'), [], 'the same screen with another period or page keeps its keys');
+  listeners.get('onBeforeNavigate')!({ pathChanged: true });
+  for (const key of ['Enter', 'Escape', 'ArrowDown', 'a', 'Tab']) assert.deepEqual(press(key), ['prevented', 'stopped'], `${key} is dropped`);
+  assert.deepEqual(press('Shift'), [], 'a bare modifier passes');
+  listeners.get('onResolved')!({ pathChanged: true });
+  assert.deepEqual(press('Enter'), [], 'once the screen has rendered, keys reach it');
+  stop();
+  assert.equal(keydown, undefined);
+  assert.equal(listeners.size, 0);
+  const shell = withoutComments(readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8'));
+  assert.match(shell, /useEffect\(\(\) => dropKeysWhileScreenChanges\(router as never, window\), \[router\]\)/);
+});
