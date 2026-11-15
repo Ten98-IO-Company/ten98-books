@@ -4,7 +4,7 @@ import { after, before, test } from 'node:test';
 import pg from 'pg';
 import { migrationFiles } from '../src/server/db.ts';
 import { createCostCategory, createCostCentre } from '../src/server/ledger/cost-centres.ts';
-import { createGroup, createLedger } from '../src/server/ledger/masters.ts';
+import { createGroup } from '../src/server/ledger/masters.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { inCompany } from './helpers/ledger.ts';
@@ -30,8 +30,8 @@ before(async () => {
   await inCompany(user, company, async context => {
     const group = async (key: string) => (await context.client.query('SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2', [company, key])).rows[0].id;
     const expenses = await group('indirect_expenses');
-    ids.first = (await createLedger(context, { name: 'Rent-A', groupId: expenses })).id;
-    ids.second = (await createLedger(context, { name: 'RentA', groupId: expenses })).id;
+    ids.first = (await context.client.query('INSERT INTO ledger (company_id, group_id, name) VALUES ($1, $2, $3) RETURNING id', [company, expenses, 'Rent-A'])).rows[0].id;
+    ids.second = (await context.client.query('INSERT INTO ledger (company_id, group_id, name) VALUES ($1, $2, $3) RETURNING id', [company, expenses, 'RentA'])).rows[0].id;
     ids.group = (await createGroup(context, { name: 'Office Costs', parentId: expenses })).id;
     ids.groupTwin = (await createGroup(context, { name: 'OfficeCosts', parentId: expenses })).id;
     const category = (await createCostCategory(context, { name: 'Area' })).id;

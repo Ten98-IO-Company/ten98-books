@@ -18,6 +18,7 @@ import { voucherEntryApi } from './api/voucher-entry.ts';
 import { settingsApi } from './api/settings.ts';
 import { costCentresApi } from './api/cost-centres.ts';
 import { stockMastersApi } from './api/stock-masters.ts';
+import { currenciesApi } from './api/currencies.ts';
 
 // Checked once per process (and bundle) after it first passes: the role and its RLS guarantees do not change at runtime.
 let rolesChecked: Promise<void> | undefined;
@@ -27,7 +28,7 @@ const accountApi: ApiArea = ({ request }) => handleAccountSecurity(request, limi
 
 // The route table: public areas first, then areas that require a signed-in user. Each area answers only its own paths.
 const publicAreas: readonly ApiArea[] = [accountApi, sessionApi];
-const signedInAreas: readonly SignedInArea[] = [teamApi, companiesApi, settingsApi, mastersApi, vouchersApi, reportsApi, billsApi, voucherEntryApi, costCentresApi, stockMastersApi];
+const signedInAreas: readonly SignedInArea[] = [teamApi, companiesApi, settingsApi, mastersApi, vouchersApi, reportsApi, billsApi, voucherEntryApi, costCentresApi, stockMastersApi, currenciesApi];
 
 export async function handleApi(request: Request): Promise<Response> {
   try {
