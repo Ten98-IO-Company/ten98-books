@@ -1,16 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { appOrigin, parseTrustedProxies, type TrustedProxies } from '@ten98/runtime';
-
-export function environmentValue(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  if (env[name] && env[`${name}_FILE`]) throw new Error(`Set only ${name} or ${name}_FILE`);
-  return env[`${name}_FILE`] ? readFileSync(env[`${name}_FILE`]!, 'utf8').trim() : env[name];
-}
-
-export function secret(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  const value = environmentValue(name, env);
-  if (!value || value.length < 32) throw new Error(`${name} must contain at least 32 characters`);
-  return value;
-}
+import { readEnvironment, readSecret } from '@ten98/runtime/config';
 
 // TRUSTED_PROXIES changes only at restart (or in tests that set process.env), so one parsed copy is kept per value.
 let parsedProxies: { raw: unknown; list: TrustedProxies } | null = null;
@@ -33,7 +22,7 @@ function appUrlOrigin(raw: string): string {
 }
 
 export function postgresUrl(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const value = environmentValue(name, env);
+  const value = readEnvironment(name, env);
   if (value !== undefined && !['postgres:', 'postgresql:'].includes(new URL(value).protocol)) throw new Error(`${name} must be a PostgreSQL URL`);
   return value;
 }
@@ -49,5 +38,5 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env) {
   // Compose web and worker services never receive it (a one-shot migrate service does).
   const databaseUrl = postgresUrl('DATABASE_URL', env);
   if (!databaseUrl) throw new Error('A PostgreSQL DATABASE_URL is required');
-  return { appUrl, databaseUrl, authSecret: secret('AUTH_SECRET', env) };
+  return { appUrl, databaseUrl, authSecret: readSecret('AUTH_SECRET', { env }) };
 }

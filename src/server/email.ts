@@ -1,7 +1,7 @@
 import { Socket, isIP } from 'node:net';
 import type { SendMailOptions } from 'nodemailer';
 import { z } from 'zod';
-import { environmentValue } from './config.ts';
+import { readEnvironment } from '@ten98/runtime/config';
 
 const malformedUnicode = /[\uD800-\uDFFF]/u;
 const mailbox = z.string().max(254).email(); // Exactly one bare mailbox; no names/lists/header syntax.
@@ -20,13 +20,13 @@ export class EmailDeliveryError extends Error {
 function configuration(env: NodeJS.ProcessEnv) {
   const transport = z.enum(['disabled', 'smtp']).parse(env.EMAIL_TRANSPORT || 'disabled');
   if (transport === 'disabled') return { transport };
-  const from = mailbox.parse(environmentValue('EMAIL_FROM', env));
+  const from = mailbox.parse(readEnvironment('EMAIL_FROM', env));
   const tls = z.enum(['starttls', 'tls']).parse(env.EMAIL_SMTP_TLS || 'starttls');
-  const host = z.string().max(253).regex(/^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/).refine(v => !isIP(v)).parse(environmentValue('EMAIL_SMTP_HOST', env));
+  const host = z.string().max(253).regex(/^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/).refine(v => !isIP(v)).parse(readEnvironment('EMAIL_SMTP_HOST', env));
   const portText = z.string().regex(/^[1-9]\d{0,4}$/).parse(env.EMAIL_SMTP_PORT || (tls === 'tls' ? '465' : '587'));
   const port = z.number().int().min(1).max(65_535).parse(Number(portText));
-  const user = z.string().min(1).max(256).refine(v => !/[\u0000-\u001f\u007f]/.test(v) && !malformedUnicode.test(v)).parse(environmentValue('EMAIL_SMTP_USER', env));
-  const password = z.string().min(1).max(4096).refine(v => !/[\u0000\r\n]/.test(v) && !malformedUnicode.test(v)).parse(environmentValue('EMAIL_SMTP_PASSWORD', env));
+  const user = z.string().min(1).max(256).refine(v => !/[\u0000-\u001f\u007f]/.test(v) && !malformedUnicode.test(v)).parse(readEnvironment('EMAIL_SMTP_USER', env));
+  const password = z.string().min(1).max(4096).refine(v => !/[\u0000\r\n]/.test(v) && !malformedUnicode.test(v)).parse(readEnvironment('EMAIL_SMTP_PASSWORD', env));
   return { transport, from, host, port, tls, user, password };
 }
 

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import pg from 'pg';
 import { handleApi } from '../src/server/api.ts';
@@ -128,4 +131,22 @@ test('state-changing requests from another origin or without an Origin header ar
   assert.equal(await count('SELECT count(*) FROM workspace'), workspaces);
   assert.equal(await count('SELECT count(*) FROM workspace_invitation'), invitations);
   assert.equal((await session.call('/api/me')).status, 200, 'the forged sign-out did not end the session');
+});
+
+test('a secret file that cannot be read answers 503 without a path, and the answer returns once it is readable', async () => {
+  const saved = { AUTH_SECRET: process.env.AUTH_SECRET, AUTH_SECRET_FILE: process.env.AUTH_SECRET_FILE };
+  const dir = mkdtempSync(join(tmpdir(), 'books-secret-')), caller = browser();
+  try {
+    delete process.env.AUTH_SECRET;
+    process.env.AUTH_SECRET_FILE = join(dir, 'missing');
+    const unreadable = await caller.call('/api/session');
+    assert.equal(unreadable.status, 503);
+    assert.deepEqual(unreadable.body, { error: 'The installation is not ready. Check configuration and database migrations.' });
+    assert.ok(!JSON.stringify(unreadable.body).includes(dir));
+    writeFileSync(process.env.AUTH_SECRET_FILE, saved.AUTH_SECRET!);
+    assert.equal((await caller.call('/api/session')).status, 200);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

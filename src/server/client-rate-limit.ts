@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Socket } from 'node:net';
 import { clientLimitKey as runtimeClientLimitKey, normalizeClientAddress, resolveClientAddress } from '@ten98/runtime';
-import { secret, trustedProxies } from './config.ts';
+import { readSecret } from '@ten98/runtime/config';
+import { trustedProxies } from './config.ts';
 
 function ownValue(value: unknown, key: string): unknown {
   if (value === null || typeof value !== 'object') return undefined;
@@ -34,7 +35,7 @@ export function clientLimitKey(scope: string, address: string | null, key: strin
 /** The request's per-client limit key and whether its client address resolved. */
 export function clientRateIdentity(request: Request, scope: string, env: NodeJS.ProcessEnv = process.env): { key: string; resolved: boolean } {
   const address = requestClientAddress(request, env);
-  return { key: clientLimitKey(scope, address, secret('AUTH_SECRET', env)), resolved: address !== null };
+  return { key: clientLimitKey(scope, address, readSecret('AUTH_SECRET', { env })), resolved: address !== null };
 }
 
 export function clientRateKey(request: Request, scope: string, env: NodeJS.ProcessEnv = process.env): string {
