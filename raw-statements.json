@@ -36,8 +36,8 @@
     "reason": "One read of the seeded vouchers' numbers by idempotency key. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/demo/seed.ts": {
-    "count": 5,
-    "reason": "Demo seeder: finds the owner by email, reads the markers of an earlier seed, and takes and releases a session advisory lock. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+    "count": 9,
+    "reason": "Demo seeder: finds the owner by email, reads the markers of an earlier seed, and takes and releases a session advisory lock. M2b slice b2 adds four: the read of which of the dataset's item invoices the company holds with item rows (voucher by key, an EXISTS on inventory_line), and, on the owner-role connection of the seed command only, the MAINTAIN privilege check, the ANALYZE of the seeded tables and the check that they have statistics (pg_class.reltuples); ANALYZE and the catalog reads have no builder form. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/jobs.ts": {
     "count": 2,

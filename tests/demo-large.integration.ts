@@ -3,12 +3,12 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { compareDataset, formatCompareResult } from '../src/server/demo/compare.ts';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
-import { seedDataset } from '../src/server/demo/seed.ts';
+import { formatSeedReport, seedDataset } from '../src/server/demo/seed.ts';
 import { readStockQuantity } from '../src/server/ledger/item-lines.ts';
 import { listItems, listTree } from '../src/server/ledger/stock-masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../src/server/reports/statements.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { inCompany, setupOwner, type Member } from './helpers/ledger.ts';
+import { inCompany, invite, rowCount, setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
  * The four large companies (gulfline and najd: 319 vouchers each with orders, stock journals, cancelled entries and
@@ -76,7 +76,7 @@ for (const expectation of expectations) {
     assert.deepEqual(Object.fromEntries(Object.entries(first.costs.warnings).map(([code, which]) => [code, which.length])), expectation.costs.warnings);
     assert.equal(first.bills.skipped.length, expectation.bills.foreign ? 1 : 0);
     if (expectation.bills.foreign) assert.match(first.bills.skipped[0], new RegExp(`^${expectation.bills.foreign} bill rows on foreign-currency lines`));
-    assert.deepEqual([first.stock.itemLines, first.stock.warnings], [expectation.itemLines, []], 'every item line posted, and no stock goes negative');
+    assert.deepEqual([first.stock.itemLines, first.stock.warnings, first.stock.shape], [expectation.itemLines, [], expectation.itemLines ? 'items' : 'none'], 'every item line posted, and no stock goes negative');
 
     started = Date.now();
     const again = await seedDataset(owner.userId, dataset);
@@ -217,4 +217,34 @@ test('item lines: sunrise\'s closing quantities at the end of 2026, and gulfline
     return [await at(), await at('Dubai Warehouse'), await at('Jebel Ali Store'), await at('Showroom - Al Quoz')];
   });
   assert.deepEqual(panel, ['660', '420', '160', '80'], 'all locations, then Dubai Warehouse, Jebel Ali Store and Showroom - Al Quoz');
+});
+
+test('a company seeded before item lines keeps that shape for every item invoice, also after a stopped run: no stock journal, no movement, quantities not compared', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const sunrise = await loadDataset(join(demoRoot, 'sunrise'));
+  const invoices = sunrise.vouchers.filter(voucher => voucher.inventory?.length && ['sales', 'purchase', 'credit_note', 'debit_note'].includes(voucher.type));
+  const cut = sunrise.vouchers.findIndex(voucher => voucher.key === invoices[Math.floor(invoices.length / 2)].key);
+  // The seeder before item lines read no items.json, skipped stock journals and posted invoices with their ledger lines
+  // alone; this one stopped half way through the item invoices.
+  const { 'items.json': _items, ...otherFiles } = sunrise.extraFiles;
+  const earlier = await seedDataset(user.userId, { ...sunrise, extraFiles: otherFiles, vouchers: sunrise.vouchers.slice(0, cut).filter(voucher => voucher.type !== 'stock_journal') });
+  assert.equal(earlier.stock.shape, 'none');
+
+  const report = await seedDataset(user.userId, sunrise);
+  assert.deepEqual([report.stock.shape, report.stock.journalsLeftOut, report.stock.itemLines], ['accounting', 36, 0]);
+  assert.deepEqual(report.vouchers, { created: 216 - earlier.vouchers.created, present: earlier.vouchers.created, cancelled: 0 }, 'the remaining vouchers, item invoices among them, as before item lines');
+  assert.equal(await rowCount(database.adminUrl, 'inventory_line', report.companyId), 0, 'no item row at all');
+  assert.ok(formatSeedReport(report).includes('  item lines: none: this company was seeded before item lines existed, so its item invoices stay accounting invoices and it holds no stock movements (36 stock journal(s) not posted); seed into a new company to get them'));
+  const openings = Object.fromEntries((sunrise.extraFiles['items.json'] as { items: { name: string; opening?: { quantity: string }[] }[] }).items
+    .map(item => [item.name, (item.opening ?? []).reduce((sum, row) => sum + Number(row.quantity), 0)]));
+  const closing = await inCompany(user.userId, report.companyId, async context => Object.fromEntries(await Promise.all((await listItems(context))
+    .map(async item => [item.name, Number((await readStockQuantity(context, item.id, { date: '2026-12-31' })).quantity)]))));
+  assert.deepEqual(closing, openings, 'every quantity is its opening: nothing moved');
+
+  const again = await seedDataset(user.userId, sunrise);
+  assert.deepEqual([again.vouchers.created, again.stock.shape], [0, 'accounting'], 'a further run changes nothing');
+  const result = await compareDataset(user.userId, sunrise);
+  assert.deepEqual([result.matches, result.differences, result.pending], [65, 0, 8], formatCompareResult(result).join('\n'));
+  assert.ok(result.lines.filter(line => line.reason).every(line => line.label.startsWith('Closing quantity of ') && line.reason!.startsWith('this company was seeded before item lines existed')));
+  assert.ok(result.notComparable.includes('stock journals left out of the voucher counts: 36 (this company was seeded before item lines existed and holds no stock movements; seed into a new company to compare them)'));
 });

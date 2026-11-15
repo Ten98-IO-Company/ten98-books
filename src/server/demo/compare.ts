@@ -12,7 +12,7 @@ import { withCompany } from '../tenancy.ts';
 import { compareBills } from './compare-bills.ts';
 import { compareCosts } from './compare-costs.ts';
 import { checkNumbers, DemoError, dispositionOf, numbersKind, openingStockValue, seededVoucherTypeKeys, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
-import { findDemoCompany, findUserId, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
+import { findDemoCompany, findUserId, seededBeforeItemLines, selectDatasets, voucherKeyPrefix, type DemoSelection } from './seed.ts';
 
 /**
  * Compares a seeded company's figures with the dataset's expected.json. Figures come from the report modules and the ledger
@@ -102,7 +102,12 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     const prefix = voucherKeyPrefix(dataset.slug);
     const assigned = new Map((await client.query<{ key: string; number: number | null }>('SELECT idempotency_key AS key, number FROM voucher WHERE company_id = $1 AND starts_with(idempotency_key, $2)', [access.companyId, prefix])).rows.map((row): [string, number | null] => [row.key.slice(prefix.length), row.number]));
     const seeded = new Set(assigned.keys());
-    const absent = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && (dispositionOf(voucher) === 'post' || dispositionOf(voucher) === 'void') && !seeded.has(voucher.key));
+    // A company seeded before item lines holds no stock journal and no stock movement (see seededBeforeItemLines): its
+    // stock journals are left out of the counts and its quantities are not yet comparable, with that reason.
+    const beforeItemLines = await seededBeforeItemLines(client, access.companyId, dataset);
+    const beforeReason = 'this company was seeded before item lines existed and holds no stock movements; seed into a new company to compare them';
+    const leftOut = (voucher: Dataset['vouchers'][number]) => beforeItemLines && voucher.type === 'stock_journal';
+    const absent = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && (dispositionOf(voucher) === 'post' || dispositionOf(voucher) === 'void') && !leftOut(voucher) && !seeded.has(voucher.key));
     const absentNote = (type?: string) => {
       const those = absent.filter(voucher => type === undefined || voucher.type === type);
       return those.length ? `${those.length} voucher(s) of the dataset are not in the books: ${those.map(voucher => `${voucher.key} (${voucher.type}, ${voucher.status})`).join(', ')}` : undefined;
@@ -122,18 +127,20 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         if (!page.next) break;
         after = page.next;
       }
-      const unposted = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && dispositionOf(voucher) !== 'post' && dispositionOf(voucher) !== 'void');
+      const unposted = dataset.vouchers.filter(voucher => voucher.date >= from && voucher.date <= to && ((dispositionOf(voucher) !== 'post' && dispositionOf(voucher) !== 'void') || leftOut(voucher)));
       const unpostedOf = (type: string) => unposted.filter(voucher => voucher.type === type && dispositionOf(voucher) === 'no-entries').length;
       if (expected.voucherCount !== undefined) number('Vouchers', 'Voucher count (types ten98-books has)', expected.voucherCount - unposted.length, total);
       const expectedTypes = expected.vouchersByType ?? {};
       for (const type of [...new Set([...Object.keys(expectedTypes), ...expected.vouchersByType ? byType.keys() : []])].sort()) {
-        if (!seededVoucherTypeKeys.includes(type)) continue;
+        if (!seededVoucherTypeKeys.includes(type) || (beforeItemLines && type === 'stock_journal')) continue;
         number('Vouchers', `Vouchers of type ${type}`, (expectedTypes[type] ?? 0) - unpostedOf(type), byType.get(type) ?? 0, type);
       }
       const listed = (counts: [string, number][]) => counts.map(([type, count]) => `${type} ${count}`).join(', ');
       const unsupported = Object.entries(expectedTypes).filter(([type]) => !seededVoucherTypeKeys.includes(type));
       if (unsupported.length) skipped.push(`voucher types ten98-books does not have, left out of the voucher counts: ${listed(unsupported)} (needs those voucher types)`);
       const noEntries = [...new Set(unposted.filter(voucher => dispositionOf(voucher) === 'no-entries').map(voucher => voucher.type))].map((type): [string, number] => [type, unpostedOf(type)]);
+      const journals = unposted.filter(leftOut).length;
+      if (journals) skipped.push(`stock journals left out of the voucher counts: ${journals} (${beforeReason})`);
       if (noEntries.length) skipped.push(`vouchers without lines of supported types that are not cancelled (no accounting effect) cannot be represented yet, left out of the voucher counts: ${listed(noEntries)}`);
     }
 
@@ -168,6 +175,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
         const id = entry && stored.get(nameMatchKey(entry.name));
         if (typeof figure?.quantity !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(figure.quantity)) { push('Stock summary', label, String(figure?.quantity), 'not read', 'n/a', false); continue; }
         if (!id) { push('Stock summary', label, figure.quantity, 'item missing', 'n/a', false); continue; }
+        if (beforeItemLines) { lines.push({ block: 'Stock summary', label, expected: figure.quantity, actual: 'not compared', difference: 'n/a', ok: false, reason: beforeReason }); continue; }
         const actual = (await readStockQuantity(context, id, { date: to })).quantity;
         const difference = scaledQuantity(actual) - scaledQuantity(figure.quantity);
         push('Stock summary', label, figure.quantity, actual, quantityText(difference), difference === 0n);

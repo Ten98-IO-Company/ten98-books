@@ -371,7 +371,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (no entries)']);
   assert.ok(report.skipped.includes('items.json: stock is not valued yet (1 item(s), 1 location(s)): the statements hold the opening stock of 500.00 in every period'));
   const created = { created: 1, present: 0 };
-  assert.deepEqual(report.stock, { masters: true, switchedOn: false, units: created, locations: created, groups: created, items: created, openingValue: '500.00', itemLines: 0, warnings: [] }, 'inventory is on for a new company');
+  assert.deepEqual(report.stock, { masters: true, switchedOn: false, units: created, locations: created, groups: created, items: created, openingValue: '500.00', itemLines: 0, warnings: [], shape: 'none', journalsLeftOut: 0 }, 'inventory is on for a new company');
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
   assert.match(printed, /no entries to post .*: 1 journal/);
@@ -381,7 +381,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   const again = await seedDataset(owner.userId, stockDataset());
   assert.deepEqual([again.vouchers, again.refused.length], [{ created: 0, present: 5, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
   const present = { created: 0, present: 1 };
-  assert.deepEqual(again.stock, { masters: true, switchedOn: false, units: present, locations: present, groups: present, items: present, openingValue: '', itemLines: 0, warnings: [] }, 'and creates no stock master twice');
+  assert.deepEqual(again.stock, { masters: true, switchedOn: false, units: present, locations: present, groups: present, items: present, openingValue: '', itemLines: 0, warnings: [], shape: 'none', journalsLeftOut: 0 }, 'and creates no stock master twice');
 });
 
 test('the comparison leaves skipped vouchers out of the counts, checks the opening stock and a zero opening difference, and names what it cannot compare', async () => {
@@ -533,7 +533,7 @@ test('an item invoice posts its items to the ledger of its line worth their sum;
   }
   const report = await seedDataset(user.userId, only(purchase.lines));
   assert.deepEqual([report.companyCreated, report.vouchers.created, await rowCount(database.adminUrl, 'voucher', report.companyId)], [false, 1, 1], 'the refusals posted nothing; the company they created is resumed');
-  assert.equal(report.stock.itemLines, 2);
+  assert.deepEqual([report.stock.itemLines, report.stock.shape], [2, 'items']);
   await inCompany(user.userId, report.companyId, async context => {
     const [row] = (await listVouchers(context, { from: '2026-01-01', to: '2026-12-31' })).vouchers;
     const posted = await readVoucher(context, row.id);

@@ -44,7 +44,8 @@ function startupError(error: unknown, generic: string): unknown {
  * `cli.ts migrate` and both startup paths use this one routine.
  */
 export async function migrateDatabase({ pool, ledger = migrationLedger, timeoutMs = startupMigrationTimeoutMs, log = console.log }: MigrationOptions = {}): Promise<readonly string[]> {
-  // The only reader of the owner role's URL; it is never part of getConfig().
+  // One of the two readers of the owner role's URL (the other is the demo seed command's ANALYZE, refreshStatistics in
+  // src/server/demo/seed.ts); it is never part of getConfig().
   const url = pool ? undefined : postgresUrl('MIGRATION_DATABASE_URL');
   if (!pool && !url) throw new StartupError('MIGRATION_DATABASE_URL is required to apply migrations; it connects as the migrator role that owns the tables.');
   const migrator = pool ?? createPool(url!, { max: 2 });
