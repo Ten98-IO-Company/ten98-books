@@ -1,9 +1,10 @@
 import { DataTable, Stack, type DataColumn, type DataTableApi, type TableCursorPage } from '@ten98/ui'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type MutableRefObject, type ReactNode } from 'react'
+import { lineToOpen, listTarget, pageLines, type ListMove } from '../../lib/reports'
 import { useAppCommand } from '../KeyboardShell'
 
-/** Lines one PageDown or PageUp moves. */
-const pageLines = 10
+/** What a find field above the table can do to it without taking focus from the field: move the highlight. */
+export type TableControl = { move: (move: ListMove) => void }
 
 /**
  * A report table with one highlighted line (D-05). The highlight is the table's current row; focus follows it, so the
@@ -14,7 +15,7 @@ const pageLines = 10
  * Focus on a row lets screen readers read the line moved to; the row header names it.
  * Must be rendered inside the report's ShortcutScope. Each row needs a stable key; the highlight is that key.
  */
-export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, pageBusy = false, focusOnLoad = true }: {
+export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, pageBusy = false, focusOnLoad = true, controlRef }: {
   caption: string
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
@@ -32,11 +33,15 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   pageBusy?: boolean
   /** Moves focus to the highlighted line once the rows arrive, so the keys work at once. */
   focusOnLoad?: boolean
+  /** Filled with a handle that moves the highlight while focus stays where it is (a chooser's find field). */
+  controlRef?: MutableRefObject<TableControl | null>
 }) {
   const frame = useRef<HTMLElement>(null)
   const table = useRef<DataTableApi>(null)
   const keys = rows.map(rowKey)
-  const index = Math.max(0, highlight === undefined ? 0 : keys.indexOf(highlight))
+  // The first line shows highlighted before any key, and Enter opens the line shown highlighted (lineToOpen).
+  const opening = lineToOpen(keys, highlight)
+  const index = opening === undefined ? 0 : keys.indexOf(opening)
   const position = useRef(index)
   position.current = index
   const current = rows[index]
@@ -68,6 +73,12 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   useAppCommand('report.last', () => move(rows.length - 1))
   const openable = current !== undefined && (canOpen?.(current) ?? true)
   useAppCommand('report.drill', () => { if (current) onOpen(current) }, { enabled: openable })
+
+  useEffect(() => {
+    if (!controlRef) return
+    controlRef.current = { move: change => { const target = listTarget(change, position.current, rows.length); if (target !== null) { position.current = target; onHighlight(keys[target]) } } }
+    return () => { controlRef.current = null }
+  })
 
   // Once rows arrive (and after each page), the highlighted row takes focus unless the user is typing somewhere. With no
   // rows the table frame takes it, so focus is inside the report rather than on the page body.

@@ -1,15 +1,16 @@
-import { Field, Input, type DataColumn } from '@ten98/ui'
+import type { DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
-import { useId, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
 import { CostCentresOff } from '../../components/reports/CostCentresOff'
 import { query, reportSearch, useReport, type ReportSearch } from '../../components/reports/navigation'
+import { PickerFind, useChooser } from '../../components/reports/PickerFind'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { CostBreakupRow, CostCentreBreakup, CostCentreListItem } from '../../lib/cost-centres'
 import type { Wire } from '../../lib/money'
-import { costBreakupKey, costBreakupSummary, costBreakupTarget, matchingCentres } from '../../lib/reports'
+import { costBreakupKey, costBreakupSummary, costBreakupTarget, narrowByName } from '../../lib/reports'
 
 /**
  * One cost centre's break-up for the period (`centre` in the address): its direct sub-centres, each with its own
@@ -41,7 +42,7 @@ function Breakup({ search, centreId }: { search: ReportSearch; centreId: string 
   const rows = data?.rows ?? []
   const centre = data?.centre
   return <ReportScreen title={centre ? `Cost centre break-up: ${centre.name}` : 'Cost centre break-up'} search={search} status={screen.status} error={screen.error}
-    onRetry={screen.report.reload} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
+    onRetry={screen.report.reload} failure={screen.failure} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/cost-centre-breakup/${centreId}/export?${query(screen.period)}` : null}
     back={() => screen.back({ report: 'cost-category-summary', search: { from: search.from, to: search.to } })}
     summary={data ? costBreakupSummary(data) : undefined}>
@@ -60,22 +61,19 @@ const centreColumns: DataColumn<Centre>[] = [
   { key: 'category', header: 'Category', wrap: true, render: row => row.categoryName },
 ]
 
-/** Choose a centre: typing narrows the list and Enter opens the highlighted centre's break-up, as the ledger chooser does. */
+/** Choose a centre, as the ledger chooser does: the find field has focus on arrival, typing narrows the list, and Enter opens the highlighted centre's break-up (the first of the narrowed list, shown highlighted from the start). */
 function CentreChooser({ search }: { search: ReportSearch }) {
-  const id = useId()
   const screen = useReportScreen<never>(search, 'statement', () => null)
   const centres = useReport<Centre[]>(`/api/companies/${screen.company.id}/cost-centres`, 'costCentres')
-  const [filter, setFilter] = useState('')
-  const rows = useMemo(() => matchingCentres(centres.data ?? [], filter), [centres.data, filter])
+  const chooser = useChooser(screen.company.id, 'cost-centre', search.hl, screen.setHighlight)
+  const rows = useMemo(() => narrowByName(centres.data ?? [], chooser.filter), [centres.data, chooser.filter])
   return <ReportScreen title='Cost centre break-up' search={search} status={centres.status} error={centres.error} onRetry={centres.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} back={() => screen.back(null)}
     summary={centres.data && !centres.data.length ? 'This company has no cost centres yet.' : undefined}>
     <CostCentresOff companyId={screen.company.id} />
-    <Field label='Find a cost centre' htmlFor={`${id}find`} description='Enter opens the highlighted centre.'>
-      <Input id={`${id}find`} type='search' value={filter} autoComplete='off' onChange={event => { setFilter(event.target.value); screen.setHighlight(undefined) }} />
-    </Field>
-    <ReportTable caption='Cost centres' columns={centreColumns} rows={rows} rowKey={row => row.id} focusOnLoad={false}
+    <PickerFind label='Find a cost centre' noun='cost centre' filter={chooser.filter} onFilter={chooser.onFilter} matches={rows.length} controlRef={chooser.controlRef} />
+    <ReportTable caption='Cost centres' columns={centreColumns} rows={rows} rowKey={row => row.id} focusOnLoad={false} controlRef={chooser.controlRef}
       highlight={screen.highlight} onHighlight={screen.setHighlight}
-      onOpen={row => screen.open({ report: 'cost-centre-breakup', search: { centre: row.id } })} />
+      onOpen={row => { chooser.remember(); screen.open({ report: 'cost-centre-breakup', search: { centre: row.id } }, row.id) }} />
   </ReportScreen>
 }

@@ -32,7 +32,7 @@ function CostCategorySummaryScreen() {
     (period, companyId) => `/api/companies/${companyId}/reports/cost-category-summary?${query(period)}`)
   const data = screen.report.data
   const lines = useMemo(() => data ? costSummaryLines(data) : [], [data])
-  return <ReportScreen title='Cost category summary' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Cost category summary' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/cost-category-summary/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}

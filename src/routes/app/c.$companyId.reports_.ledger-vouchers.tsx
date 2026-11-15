@@ -37,7 +37,7 @@ function LedgerVouchersScreen() {
   const ledger = data?.ledger
   const range = data ? registerRange(pages.before, data.rows.length, data.next !== null) : null
   return <ReportScreen title={ledger ? `Ledger vouchers: ${ledger.name}` : 'Ledger vouchers'} search={search} status={search.ledger ? screen.status : 'error'}
-    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload}
+    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period && search.ledger ? `/api/companies/${screen.company.id}/reports/ledger-vouchers/${search.ledger}/export?${query(screen.period)}` : null}
     back={() => screen.back(ledgerVouchersParent(search))} summary={range ?? undefined}>

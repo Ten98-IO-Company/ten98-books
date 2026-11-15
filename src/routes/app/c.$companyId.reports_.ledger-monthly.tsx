@@ -7,7 +7,7 @@ import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { longDate, monthText, type LedgerMonthlyReport } from '../../lib/reports'
+import { monthlyClipNotice, monthText, type LedgerMonthlyReport } from '../../lib/reports'
 
 /** A ledger's opening, then debit, credit and closing per month of the period (one financial year at a time). */
 export const Route = createFileRoute('/app/c/$companyId/reports_/ledger-monthly')({ validateSearch: reportSearch, component: LedgerMonthlyScreen })
@@ -31,11 +31,11 @@ function LedgerMonthlyScreen() {
   ] : [], [data])
   const ledger = data?.ledger
   return <ReportScreen title={ledger ? `Monthly summary: ${ledger.name}` : 'Monthly summary'} search={search} status={search.ledger ? screen.status : 'error'}
-    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload}
-    period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
+    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload} failure={screen.failure}
+    period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} shown={data ? { from: data.from, to: data.to } : null}
     exportPath={screen.period && search.ledger ? `/api/companies/${screen.company.id}/reports/ledger-monthly/${search.ledger}/export?${query(screen.period)}` : null}
     back={() => screen.back(ledger?.groupId ? { report: 'group-summary', search: { from: search.from, to: search.to, group: ledger.groupId } } : { report: 'ledger', search: { from: search.from, to: search.to } })}
-    summary={data && data.to !== search.to ? `Shown through ${longDate(data.to)}, the end of the financial year.` : undefined}>
+    summary={data && screen.period ? monthlyClipNotice(screen.period, { from: data.from, to: data.to }) ?? undefined : undefined}>
     {data && <ReportTable caption={`Monthly summary of ${data.ledger.name}`} columns={columns} rows={rows} rowKey={row => row.key}
       highlight={screen.highlight ?? rows[1]?.key} onHighlight={screen.setHighlight} canOpen={row => row.month}
       onOpen={row => { if (row.month) screen.open({ report: 'ledger-vouchers', search: { ledger: data.ledger.id, from: row.from, to: row.to } }) }}

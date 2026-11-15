@@ -15,7 +15,7 @@ function ProfitAndLossScreen() {
   const screen = useReportScreen<Wire<ProfitAndLossReport>>(search, 'statement', (period, companyId) => `/api/companies/${companyId}/reports/profit-and-loss?${query(period)}`)
   const data = screen.report.data
   const net = data?.netProfit
-  return <ReportScreen title='Profit and loss' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Profit and loss' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} detail={screen.detail} zeros={screen.zeros}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/profit-and-loss/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}

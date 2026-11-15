@@ -1,8 +1,14 @@
+/*
+ * Report screens have no DOM test runner, so each decision a screen makes is a pure function in src/lib/reports.ts and is
+ * tested here. Only a walk proves what these cannot: that the choosers' find field has focus on arrival (autoFocus), that
+ * Escape from an empty field goes back through the shell, that the movement keys reach the table from the field, that the
+ * scope line and the failure buttons render what the functions return, and that the cost list calls its notice function.
+ */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { addressDate, asAtPeriod, balanceSheetDates, centreOriginNotice, chooserFilters, costCentresOffNotice, failureActions, lineToOpen, listTarget, monthlyClipNotice, readReportSearch, unreadableTo, narrowByName, pickerEscape, restoredFilter, scopeLine, isUnreadableDate, unreadableDateNotice, defaultScopeNote, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -142,9 +148,9 @@ test('cost report lines: which open, what they open, the chooser filter and the 
   assert.match(costBreakupSummary({ centre, rows: [row('ledger')] }), /^Category: Area\. A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers/);
 
   const centres = [{ name: 'North', secondLanguageName: 'شمال' }, { name: 'South Harbour', secondLanguageName: null }];
-  assert.deepEqual(matchingCentres(centres, '').map(item => item.name), ['North', 'South Harbour']);
-  assert.deepEqual(matchingCentres(centres, ' harb ').map(item => item.name), ['South Harbour']);
-  assert.deepEqual(matchingCentres(centres, 'شمال').map(item => item.name), ['North']);
+  assert.deepEqual(narrowByName(centres, '').map(item => item.name), ['North', 'South Harbour']);
+  assert.deepEqual(narrowByName(centres, ' harb ').map(item => item.name), ['South Harbour']);
+  assert.deepEqual(narrowByName(centres, 'شمال').map(item => item.name), ['North']);
 
   assert.equal(centreOriginNotice({}), null);
   assert.match(centreOriginNotice({ fromCentre: 'c1' })!, /all of the ledger’s vouchers .* not the centre’s/);
@@ -177,4 +183,167 @@ test('report screens take their highlight through syncHighlight and their data p
   const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8');
   assert.ok(navigation.includes('data: dataForSubject(state, subject)'));
   assert.ok(navigation.includes('const levelOf = reportLevel'));
+});
+
+test('the cost list tells only those who can write that they can set up categories and centres', () => {
+  const viewer = costCentresOffNotice({ canWrite: false, canSwitch: false });
+  assert.doesNotMatch(viewer, /You can set up/);
+  assert.match(viewer, /Ask an owner or admin/);
+  const editor = costCentresOffNotice({ canWrite: true, canSwitch: false });
+  assert.match(editor, /You can set up categories and centres now./);
+  assert.match(editor, /Ask an owner or admin/);
+  const admin = costCentresOffNotice({ canWrite: true, canSwitch: true });
+  assert.match(admin, /You can set up/);
+  assert.doesNotMatch(admin, /Ask an owner/);
+});
+
+test('the clipped monthly summary says what was asked for and why it ends earlier, and says nothing when nothing was cut', () => {
+  const asked = { from: '2026-01-01', to: '2027-02-27' };
+  const notice = monthlyClipNotice(asked, { from: '2026-01-01', to: '2026-12-31' });
+  assert.match(notice ?? '', /1 January 2026 to 27 February 2027/);
+  assert.match(notice ?? '', /ends on 31 December 2026/);
+  assert.match(notice ?? '', /one financial year/);
+  assert.equal(monthlyClipNotice({ from: '2026-01-01', to: '2026-06-30' }, { from: '2026-01-01', to: '2026-06-30' }), null);
+});
+
+test('the scope line names why a report opened on the period it did, only when it is the default', () => {
+  const defaults = { lastVoucherDate: '2027-02-27', period: { from: '2027-01-01', to: '2027-02-27' }, dayBookDate: '2027-02-27' };
+  assert.equal(defaultScopeNote(defaults.period, 'statement', false, defaults), 'the financial year to the last voucher date');
+  assert.equal(defaultScopeNote({ from: '2027-01-01', to: '2027-01-31' }, 'statement', false, defaults), null);
+  assert.equal(defaultScopeNote({ from: '2026-01-01', to: '2027-02-27' }, 'statement', false, defaults), null, 'another start is no default');
+  assert.equal(defaultScopeNote({ from: '2027-02-27', to: '2027-02-27' }, 'statement', true, defaults), 'the last voucher date', 'an as-at date counts by its end only');
+  assert.equal(defaultScopeNote({ from: '2027-02-27', to: '2027-02-27' }, 'day', false, defaults), 'the day of the last voucher');
+  assert.equal(defaultScopeNote({ from: '2027-02-26', to: '2027-02-26' }, 'day', false, defaults), null);
+  assert.equal(defaultScopeNote(defaults.period, 'none', false, defaults), null);
+  const empty = { lastVoucherDate: null, period: { from: '2026-01-01', to: '2026-01-01' }, dayBookDate: '2026-01-01' };
+  assert.equal(defaultScopeNote(empty.period, 'statement', false, empty), 'the financial year to the date the books begin');
+});
+
+test('every address a person can type reads as a date or as nothing: the balance sheet search never passes a raw value on', () => {
+  // The router parses a number as a number and a repeated parameter as an array; the shared schema drops what it cannot read.
+  const strange: unknown[] = [2027, 2026.5, ['2026-06-30', '2026-07-31'], ['2026-06-30'], [], {}, { a: 1 }, true, null, undefined, '', 'soon', '2026-02-30', '1850-01-01', '2026-06-30 '];
+  for (const value of strange) {
+    assert.deepEqual(balanceSheetDates({ from: value, to: value }), { from: undefined, to: undefined }, String(JSON.stringify(value)));
+    assert.equal(addressDate(value), undefined);
+  }
+  assert.deepEqual(balanceSheetDates({ from: '2026-01-10', to: '2026-06-30' }), { from: '2026-01-10', to: '2026-06-30' });
+  // Both keys are always present, so that the router's raw value cannot show through under an absent key.
+  assert.deepEqual(Object.keys(balanceSheetDates({})).sort(), ['from', 'to']);
+  assert.deepEqual(Object.keys(balanceSheetDates({ to: 2027, from: ['x'] })).sort(), ['from', 'to']);
+  assert.deepEqual(balanceSheetDates({ from: '2026-02-30', to: '2026-06-30' }), { from: undefined, to: '2026-06-30' }, 'an invalid from is not passed on');
+});
+
+test('the balance sheet honours a lone to as its as-at date and reads nothing else as a date', () => {
+  const january = { month: 1, day: 1 };
+  const april = { month: 4, day: 1 };
+  assert.deepEqual(asAtPeriod({ to: '2026-01-31' }, january), { from: '2026-01-01', to: '2026-01-31' });
+  assert.deepEqual(asAtPeriod({ to: '2026-12-31' }, april), { from: '2026-04-01', to: '2026-12-31' });
+  assert.deepEqual(asAtPeriod({ to: '2026-03-31' }, april), { from: '2025-04-01', to: '2026-03-31' });
+  assert.deepEqual(asAtPeriod({ from: '2026-01-10', to: '2026-01-31' }, january), { from: '2026-01-10', to: '2026-01-31' });
+  assert.deepEqual(asAtPeriod({ from: '2026-02-10', to: '2026-01-31' }, january), { from: '2026-01-01', to: '2026-01-31' });
+  assert.deepEqual(asAtPeriod({ from: '2026-02-30', to: '2026-06-30' }, january), { from: '2026-01-01', to: '2026-06-30' }, 'an invalid from is replaced by the year start');
+  // No date: no period, so the screen fills in its default (a lone from stays ignored, as on every report). Nothing throws.
+  for (const to of [undefined, '', 'soon', '2026-02-30', 2027, ['2026-06-30', '2026-07-31'], {}, null]) assert.equal(asAtPeriod({ to }, january), null, JSON.stringify(to));
+  assert.equal(asAtPeriod({ from: '2026-01-10' }, january), null);
+});
+
+test('a value that is no date, and the notice: a fixed sentence that never carries text from the address', () => {
+  for (const value of ['soon', '2026-02-30', '1850-01-01', 2027, 0, false, true, ['2026-06-30', '2026-07-31'], { a: 1 }]) assert.equal(isUnreadableDate(value), true, JSON.stringify(value));
+  for (const value of ['2026-01-31', '', undefined, null, []]) assert.equal(isUnreadableDate(value), false, JSON.stringify(value));
+  const notice = unreadableDateNotice('2026-02-03');
+  assert.match(notice, /could not be read/);
+  assert.match(notice, /3 February 2026/);
+  assert.match(unreadableDateNotice(null), /Change date/);
+});
+
+test('which actions a failed load offers: a refusal the user can fix offers to change the period (and the first page of a register), anything else Try again', () => {
+  const offers = (status: number | undefined, hasPeriod = true, onLaterPage = false) => failureActions({ failure: status === undefined ? null : { status }, hasPeriod, onLaterPage });
+  assert.deepEqual(offers(400), ['change-period'], 'a period or date the server refused');
+  assert.deepEqual(offers(400, true, true), ['first-page', 'change-period'], 'on a later page the cursor may be the cause');
+  assert.deepEqual(offers(400, false, true), ['first-page']);
+  assert.deepEqual(offers(400, false, false), ['retry'], 'nothing the user can change');
+  for (const status of [0, 401, 403, 404, 409, 429, 500, 502, 503]) assert.deepEqual(offers(status, true, true), ['retry'], String(status));
+  assert.deepEqual(offers(undefined), ['retry']);
+  assert.deepEqual(failureActions({ failure: {}, hasPeriod: true, onLaterPage: false }), ['retry'], 'no answer from the server');
+});
+
+test('the scope line states the period actually shown and the as-of date, with the default period named', () => {
+  const defaults = { lastVoucherDate: '2027-02-27', period: { from: '2027-01-01', to: '2027-02-27' }, dayBookDate: '2027-02-27' };
+  assert.deepEqual(scopeLine(undefined, null, 'none', null), { scope: 'Read-only', asOf: null });
+  const asked = { kind: 'range' as const, period: { from: '2026-01-01', to: '2027-02-27' } };
+  assert.deepEqual(scopeLine(asked, { from: '2026-01-01', to: '2026-12-31' }, 'statement', defaults), { scope: '1 January 2026 to 31 December 2026', asOf: '31 December 2026' }, 'the clipped period, not the asked one');
+  assert.deepEqual(scopeLine(asked, null, 'statement', null), { scope: '1 January 2026 to 27 February 2027', asOf: '27 February 2027' });
+  assert.deepEqual(scopeLine({ kind: 'range', period: defaults.period }, null, 'statement', defaults), { scope: '1 January 2027 to 27 February 2027 (the financial year to the last voucher date)', asOf: '27 February 2027' });
+  assert.deepEqual(scopeLine({ kind: 'range', period: null }, null, 'statement', defaults), { scope: 'Choosing the period…', asOf: null });
+  assert.deepEqual(scopeLine({ kind: 'date', date: '2027-02-27' }, null, 'statement', defaults), { scope: 'As at 27 February 2027 (the last voucher date)', asOf: '27 February 2027' });
+  assert.deepEqual(scopeLine({ kind: 'date', date: null }, null, 'statement', defaults), { scope: 'Choosing the date…', asOf: null });
+  assert.deepEqual(scopeLine({ kind: 'range', period: { from: '2027-02-27', to: '2027-02-27' } }, null, 'day', defaults), { scope: '27 February 2027 (the day of the last voucher)', asOf: '27 February 2027' });
+});
+
+test('a chooser narrows by the product\'s name match key, as the master forms\' lookups do', () => {
+  const ledgers = [{ name: 'JOB-105', secondLanguageName: null }, { name: 'Job 2', secondLanguageName: null }, { name: 'Bank A/c', secondLanguageName: 'حساب' }];
+  assert.deepEqual(narrowByName(ledgers, 'job 105').map(row => row.name), ['JOB-105']);
+  assert.deepEqual(narrowByName(ledgers, 'JOB105').map(row => row.name), ['JOB-105']);
+  assert.deepEqual(narrowByName(ledgers, 'bank ac').map(row => row.name), ['Bank A/c']);
+  assert.deepEqual(narrowByName(ledgers, 'حس').map(row => row.name), ['Bank A/c']);
+  assert.deepEqual(narrowByName(ledgers, ' - ').length, 3, 'only ignored characters counts as empty');
+  assert.deepEqual(narrowByName(ledgers, 'zzz'), []);
+});
+
+test('a chooser\'s keys: Escape clears text first, Enter opens the highlighted line (the first before any key), the movement keys stay inside the list', () => {
+  assert.equal(pickerEscape('north'), 'clear');
+  assert.equal(pickerEscape(' '), 'clear', 'spaces are text too');
+  assert.equal(pickerEscape(''), 'back');
+  const keys = ['a', 'b', 'c'];
+  assert.equal(lineToOpen(keys, undefined), 'a', 'the first line shows highlighted before any key');
+  assert.equal(lineToOpen(keys, 'c'), 'c');
+  assert.equal(lineToOpen(keys, 'gone'), 'a', 'a highlight that left the narrowed list falls back to the first line');
+  assert.equal(lineToOpen([], undefined), undefined, 'nothing to open in an empty list');
+  assert.equal(listTarget('next', 0, 3), 1);
+  assert.equal(listTarget('next', 2, 3), 2, 'stops at the last line');
+  assert.equal(listTarget('previous', 0, 3), 0, 'stops at the first line');
+  assert.equal(listTarget('previous', 2, 3), 1);
+  assert.equal(listTarget('first', 2, 3), 0);
+  assert.equal(listTarget('last', 0, 3), 2);
+  assert.equal(listTarget('page-down', 0, 25), 10);
+  assert.equal(listTarget('page-down', 20, 25), 24);
+  assert.equal(listTarget('page-up', 12, 25), 2);
+  assert.equal(listTarget('page-up', 3, 25), 0);
+  for (const move of ['next', 'previous', 'first', 'last', 'page-down', 'page-up'] as const) assert.equal(listTarget(move, 0, 0), null, move);
+});
+
+test('coming back to a chooser from the line opened restores the typed text; any other arrival starts empty', () => {
+  const memory = new Map([['c1:ledger', 'job 105']]);
+  assert.equal(restoredFilter(memory, 'c1:ledger', 'led-1'), 'job 105');
+  assert.equal(restoredFilter(memory, 'c1:ledger', undefined), '', 'a fresh arrival has no hl');
+  assert.equal(restoredFilter(memory, 'c2:ledger', 'led-1'), '', 'another company or chooser');
+  assert.ok(chooserFilters instanceof Map);
+});
+
+test('whether a balance sheet address held a to that was no date: a marker, never text; and never on a date that was read', () => {
+  assert.equal(unreadableTo({ to: 2027 }), true);
+  assert.equal(unreadableTo({ to: ['2026-06-30', '2026-07-31'] }), true);
+  assert.equal(unreadableTo({ to: '2026-02-30' }), true);
+  assert.equal(unreadableTo({ badTo: true }), true, 'the address after the server rewrote it');
+  assert.equal(unreadableTo({ to: '2026-06-30', badTo: true }), undefined, 'a link cannot put a notice on a date that was read');
+  assert.equal(unreadableTo({ to: '2026-06-30', badTo: 'Call support on 000' }), undefined);
+  // A crafted badTo with words of its own is no marker: nothing is shown, and none of its text is carried.
+  for (const badTo of ['Call support on 000', '2027', 1, ['x'], { a: 1 }, false, '']) assert.equal(unreadableTo({ badTo }), undefined, JSON.stringify(badTo));
+  assert.equal(unreadableTo({}), undefined);
+  assert.equal(unreadableTo({ to: '' }), undefined);
+});
+
+test('every report route reads its address through readReportSearch: only readable values, every key written, so no raw value shows through', () => {
+  const id = '5A11A54F-CA35-4CE7-942F-4BAB9AD3F660';
+  const keys = ['centre', 'detail', 'from', 'fromCentre', 'group', 'hl', 'ledger', 'pages', 'to', 'voucher', 'zeros'];
+  const read = readReportSearch({ from: '2026-01-01', to: '2026-02-03', detail: true, zeros: true, hl: `p:${id.toLowerCase()}`, ledger: id, pages: 'AAA.BBB' });
+  assert.deepEqual(Object.keys(read).sort(), keys);
+  assert.deepEqual({ ...read }, { from: '2026-01-01', to: '2026-02-03', detail: true, zeros: true, hl: `p:${id.toLowerCase()}`, group: undefined, ledger: id.toLowerCase(), voucher: undefined, centre: undefined, fromCentre: undefined, pages: 'AAA.BBB' });
+  // Values the router parses into numbers, lists and objects, and texts that are no date or no id, read as nothing, never as themselves.
+  for (const value of [2027, ['2026-06-30', '2026-07-31'], {}, true, null, '', 'soon', '2026-02-30', '1850-01-01']) {
+    const strange = readReportSearch({ from: value, to: value, detail: value, zeros: value, hl: value, group: value, ledger: value, voucher: value, centre: value, fromCentre: value, pages: value });
+    assert.deepEqual(Object.keys(strange).sort(), keys, 'every key is written');
+    for (const key of keys.filter(name => name !== 'pages' || typeof value !== 'string')) assert.equal((strange as Record<string, unknown>)[key], key === 'detail' || key === 'zeros' ? (value === true ? true : undefined) : undefined, `${key} from ${JSON.stringify(value)}`);
+  }
+  assert.deepEqual(Object.keys(readReportSearch({})).sort(), keys);
 });

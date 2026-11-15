@@ -36,7 +36,7 @@ function TrialBalanceScreen() {
     return shown
   }, [data, search.detail, search.zeros])
   const totals = data?.grandTotals
-  return <ReportScreen title='Trial balance' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Trial balance' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} detail={screen.detail} zeros={screen.zeros}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/trial-balance/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}

@@ -25,11 +25,12 @@ export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path:
   const setHighlight = useCallback((key: string | undefined) => setTracked(previous => ({ ...previous, highlight: key })), [])
   const update = useCallback((change: (previous: ReportSearch) => ReportSearch) =>
     void navigate({ to: '.', search: change as never, replace: true }), [navigate])
-  const open = useCallback((link: ReportLink) => navigation.open({ ...link, search: { ...periodSearch(search), ...link.search } }, highlight),
+  // `at` is the line the user opens it from when that is not the highlight (a chooser opens the first line before any key).
+  const open = useCallback((link: ReportLink, at?: string) => navigation.open({ ...link, search: { ...periodSearch(search), ...link.search } }, at ?? highlight),
     [navigation, search, highlight])
   return {
     company, period, report, highlight, setHighlight, open, back: navigation.back, hrefOf: navigation.hrefOf,
-    status: periodError ? 'error' as const : report.status, error: periodError || report.error,
+    status: periodError ? 'error' as const : report.status, error: periodError || report.error, failure: periodError ? null : report.failure,
     setPeriod: (next: ReportPeriod) => update(previous => ({ ...previous, ...next, hl: undefined, pages: undefined })),
     detail: { on: search.detail === true, toggle: () => update(previous => ({ ...previous, detail: previous.detail ? undefined : true })) },
     zeros: { shown: search.zeros === true, toggle: () => update(previous => ({ ...previous, zeros: previous.zeros ? undefined : true })) },
