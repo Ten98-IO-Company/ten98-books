@@ -116,6 +116,12 @@ export async function trialBalance(context: LedgerContext, from: string, to: str
     for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] = addMoney(totals[key], row[key]);
     return row;
   });
+  // The opening stock is a debit beside the ledgers, at the opening rows' value in the opening and closing columns of
+  // every period (no valuation yet), as the statement's "Opening stock" row: the totals count it, the rows stay ledgers.
+  if (openingStock !== null) {
+    totals.openingDebit = addMoney(totals.openingDebit, openingStock);
+    totals.closingDebit = addMoney(totals.closingDebit, openingStock);
+  }
   return { ...period, rows: result, totals, openingStock, openingDifference };
 }
 

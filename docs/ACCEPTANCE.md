@@ -228,7 +228,7 @@ The chart of accounts, the create and change forms for groups and ledgers, the c
 | MAS-029 | The opening balance takes the company's decimal places; extra places, letters and signs are refused | ledger form | Two- and three-decimal companies | | | |
 | MAS-030 | The side defaults from the group's nature (debit for assets and expenses, credit for liabilities and income) until chosen | ledger form | | | | |
 | MAS-031 | Opening balances are locked, with a note, when the books are locked through the books-beginning date | ledger form | Needs a company with the lock set outside the app | | | |
-| MAS-032 | The "Opening balances of the company" card shows total debit, total credit and the difference, and updates after each save | ledger form | Saving is never blocked by a difference | | | |
+| MAS-032 | The "Opening balances of the company" card shows the opening stock when there is one, total debit and total credit (counting the stock) and the difference, and updates after each save | ledger form | Saving is never blocked by a difference | | | |
 | MAS-033 | A duplicate ledger name is refused on the Name field | ledger form | | | | |
 | MAS-034 | "Takes cost centres" follows the group (income and expense: yes) until chosen, says what applies, and the profit and loss ledger has it locked | ledger form | See also COS-029 | | | |
 | MAS-035 | Change a ledger's name, group and opening balance | `/masters/edit/ledger/<ledger>`, `POST .../ledgers/<ledger>` | | | | |
@@ -360,7 +360,7 @@ Eleven report screens, the drill-down between them, period handling, paging, CSV
 | REP-056 | The cost category summary can be limited to one category | `GET .../reports/cost-category-summary?categoryId=` | API only, no screen for the filter | | | |
 | REP-057 | The report defaults: last voucher date, default statement period, day book day, books-beginning date | `GET .../reports/defaults` | API only (the screens call it) | | | |
 | REP-058 | An unknown or repeated query parameter, a start after the end, and a group or ledger id that names nothing are refused (400, 400, 404) | report routes | API only | | | |
-| REP-059 | The trial balance as a verification read, with the opening stock row when there is one | `GET .../trial-balance?from=&to=` | API only | | | |
+| REP-059 | The trial balance as a verification read: ledger rows, the opening stock beside them when there is one, and totals that count it | `GET .../trial-balance?from=&to=` | API only | | | |
 | REP-060 | Bills receivable or payable by party, as at a date, with paging and a first-page total | `GET .../reports/bills-outstanding?side=&asOf=` | API only, no screen; `side` receivable or payable, optional `groupId`, `limit`, `after` | | | |
 | REP-061 | One party's bills on either side, with on-account and balance | `GET .../reports/party-bills/<ledger>?asOf=` | API only, no screen | | | |
 | REP-062 | One bill's rows with the running pending | `GET .../reports/bill/<bill>?asOf=` | API only, no screen | | | |
