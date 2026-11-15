@@ -114,10 +114,23 @@ Decision records for ten98-books. Levels follow [ten98-code-system DECISIONS](ht
 - **Reversal trigger.** The pilot showing that a material share of the ledger's statements has no builder form with the same emitted shape; the owner then decides the scope again.
 - **Confidence.** Medium until the pilot reports.
 
+## D-13 How dates and numbers are shown
+
+- **Decision (L2, coordinator, 2026-11-15, on the owner's direction that book dates read day, short month, two-digit year, and that the default can be changed).** Three kinds of date are kept apart:
+  1. **Book dates on screen** (a voucher's date, a bill's date and due date, a report's period and as-of date, a rate's date): day, short month name, two-digit year, as `4-Jan-26`, the form accountants type and read in keyboard-driven accounting. It is the default, not a fixed form: the setting that changes it is not designed yet.
+  2. **Dates on printed statutory documents** (tax invoices, returns, statements sent outside the business): the same order with a four-digit year, `4-Jan-2026`, unless a tax authority's rule states another form.
+  3. **Dates in machine output** (CSV exports, the HTTP API, addresses, the demo datasets): ISO `YYYY-MM-DD`, always.
+  Times of system events (sessions, invitations, the revision history) are not book dates and follow the account's locale and time zone. Amounts are grouped in the `en-US` way (`1,234,567.50`) with the company currency's decimal places, in every locale, until localisation is designed (M3).
+- **Where it stands.** Not in effect. Screens today show book dates in a long day-first form (`4 January 2026`, `src/lib/reports.ts`) and the revision history in a British medium form. The first form arrives with the date-format option of `@ten98/ui` (its release after 0.39), adopted as one change with a test for each of the three kinds; the second arrives with the first printed document (M3). Typing a date is a separate matter: the date fields on `dev` are the browser's own date inputs, which follow the browser's form, not this one; typed day-first entry comes with the voucher entry screen (in progress) and the report period fields are to follow it.
+- **Rationale.** A two-digit year with a month name cannot be misread as month-first, and it is what the reference workflow's users read all day; a statutory printout must not leave the century to the reader; a file read by a program must not depend on anyone's locale.
+- **Rejected.** One locale-driven form everywhere, which would show `1/4/26` to an `en-US` account and make the same voucher look like two different days to two members of one company; and an ISO date on screens, which no accountant types.
+- **Reversal trigger.** The owner choosing another default, or user feedback from the interviews of O-7.
+- **Confidence.** High for the separation into three kinds; medium for the exact default.
+
 ## Open owner decisions (L3)
 
 | ID | Question |
 |---|---|
 | O-6 | UAE e-invoicing route: which accredited service provider to contract (paid). Needed at M3 planning. |
 | O-7 | Interviews with 10–15 GCC accountants before locking the M3–M5 order. |
-| O-8 | Hosting region and Saudi data residency. Needed before any production deploy. |
+| O-8 | Hosting region and Saudi data residency. Needed before any production deploy. Nothing is deployed. The direction so far is the self-hosted platform the other Ten98 applications are deployed on; the region and the residency question are still open, and the acceptance walks run on a local production image only. |

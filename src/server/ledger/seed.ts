@@ -2,7 +2,8 @@ import type { PoolClient } from 'pg';
 
 /**
  * D-10: seeds a company's default chart (15 primary groups, 13 sub-groups, the cash and profit and loss ledgers) and its
- * eight voucher types. The routine itself is the SQL function `ledger_seed_company` in migrations/0004_ledger.sql, so
+ * nine voucher types (the stock journal since 0013), with the later masters (the cost category, the main location, the
+ * base currency). The routine itself is the SQL function `ledger_seed_company`, last recreated in migration 0013, so
  * company creation (here, inside the company's withCompany transaction) and the migration's backfill of existing
  * companies run exactly the same statements. It is idempotent: rows already present by system_key are left alone.
  */

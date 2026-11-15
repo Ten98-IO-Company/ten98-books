@@ -89,7 +89,7 @@ test('every voucher keeps its number and is filed under the year of its date', a
     { type: ids.journal, period: '2026-01-01', last: 5 }, { type: ids.journal, period: '2027-01-01', last: 6 }, { type: ids.payment, period: '2027-01-01', last: 1 }]);
   const rules = await admin.query(`SELECT to_char(applicable_from, 'YYYY-MM-DD') AS "from", starting_number AS start, periodicity, count(*)::int AS types
     FROM voucher_numbering_restart WHERE company_id = $1 GROUP BY 1, 2, 3`, [company]);
-  assert.deepEqual(rules.rows, [{ from: '2026-01-01', start: 1, periodicity: 'yearly', types: 8 }], 'each existing voucher type gets the default restart rule, dated on the financial year start, not the books beginning (15 February)');
+  assert.deepEqual(rules.rows, [{ from: '2026-01-01', start: 1, periodicity: 'yearly', types: 9 }], 'each existing voucher type gets the default restart rule, dated on the financial year start, not the books beginning (15 February)');
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
   await assertDatabaseRoles(getDatabase().pool);
   // The company existed before 0007; its financial year start is now fixed too, even for the migrating owner.

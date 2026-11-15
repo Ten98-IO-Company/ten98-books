@@ -2,7 +2,7 @@
 
 What ten98-books is building, in what order, and where each piece stands. The order and scope come from [D-01](DECISIONS.md); this page records progress. The coordinator updates it with every merge into `dev`.
 
-Nothing is deployed. `main` holds no application code yet; everything below is on `dev` or on a branch.
+Nothing is deployed ([O-8](DECISIONS.md) is open). `main` holds no application code yet; everything below is on `dev` or on a branch.
 
 ## Status words
 
@@ -28,7 +28,7 @@ First-user setup, sign-in and account security, team and invitations, the shell,
 | Ledger core: groups, ledgers, voucher types, vouchers, numbering, revision log, seeded chart | merged | [LEDGER.md](LEDGER.md) |
 | Ledger API additions: names in history, stable error codes, in-use flags | merged | |
 | Reports: day book, trial balance, profit and loss, balance sheet, group and ledger drill-down, CSV export | merged | [REPORTS.md](REPORTS.md). Re-checked independently on `dev`; its findings are fixed (statements before the books begin, register pages kept in the address, statement CSV sides). A trial balance for a period starting after the books begin carries all earlier income and expense in one profit and loss row, as observed |
-| Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2). Master names are unique under the name match key ([D-10](DECISIONS.md), migration 0010): names that differ only by case, spaces or the ignored characters are one name, as observed The forms' lookups compare typed text and choices under the same key, and a duplicate-name refusal shows on the Name field with what was typed kept. The order in which Enter resolves typed text is ours and provisional ([KEYBOARD.md](KEYBOARD.md)); it is not yet settled by observation The company switcher, the theme and the unsaved-changes question come from `@ten98/ui` 0.39.0; the accept question at the end of a form answers only a fresh key press, so a held key cannot save |
+| Masters screens: chart of accounts, create and alter group and ledger, history | merged | The group and ledger forms share one lookup behaviour with the cost-centre forms (see M2). Master names are unique under the name match key ([D-10](DECISIONS.md), migration 0010): names that differ only by case, spaces or the ignored characters are one name, as observed The forms' lookups compare typed text and choices under the same key, and a duplicate-name refusal shows on the Name field with what was typed kept. The order in which Enter resolves typed text is ours and provisional ([KEYBOARD.md](KEYBOARD.md)); it is not yet settled by observation The company switcher, the theme and the unsaved-changes question come from `@ten98/ui` 0.39.0; the accept question at the end of a form answers only a fresh key press, so a held key cannot save. Text typed straight after Enter in a lookup, or after the accept key in an open lookup, goes where the key leads: focus moves within the key press (found by acceptance run 1) |
 | Company model: a workspace is one company ([D-03](DECISIONS.md) as amended) | merged | [TENANCY.md](TENANCY.md), migration 0005 |
 | Demo data: dataset format, `seed:demo`, `demo:compare` | merged | [demo/README.md](../demo/README.md). Five companies seeded through the ledger module: masters and bills matched under the name match key, vouchers cancelled without lines, and each line's cost rows. Compared with the reference installation, voucher numbers, pending bills and cost centre figures show no difference in any company (lines matching: starter 30, two trading companies 64 each, the fabrication company 64, the consulting company 81). The consulting company's 12 foreign-currency lines are reported as not yet comparable; stock figures are not compared yet |
 | Voucher entry screen | in progress | The entry grid arrived with `@ten98/ui` 0.38.0, which is adopted. Design reviewed and revised against observed entry flows; three slices planned; the first (payment, receipt, contra, journal: create) is being built. The reads the screen needs are merged (expected next number, resulting balances of a draft, proposed counter ledger: [LEDGER.md](LEDGER.md)) |
@@ -55,7 +55,8 @@ Delivered in slices, each from a design reviewed against observed behaviour.
 | Bill-wise receivables and payables in the base currency: bills, bill rows on voucher lines and opening balances, credit periods, pending list, outstanding, party bills and ageing reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migrations 0006 and 0009. Bills are identified by the name match key ([D-10](DECISIONS.md)); the outstanding lists go by the side a bill lies on, so a customer's advance is a payable, as observed. No screen yet: the bill panel comes with the voucher entry screen |
 | Cost categories and cost centres: masters, allocation rows on voucher lines, category summary and centre break-up reports (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0008. The masters screens are merged (categories, centres with their tree, the company switch, the ledger setting; [KEYBOARD.md](KEYBOARD.md)); the category summary and centre break-up screens are merged too ([REPORTS.md](REPORTS.md)); allocation on the voucher entry screen and the other observed cost reports are not built. Accounting projects ride on cost centres; how they are marked awaits an owner decision |
 | Stock masters and opening stock: units, stock groups, categories, locations, items, opening stock per item and location, the company inventory switch (server and API) | merged | [LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md), migration 0011. Statements stay balanced with stock in them: an opening stock row on the trial balance, opening and closing stock on the profit and loss account and the balance sheet. Stock is not valued yet: closing stock equals the opening rows' value. The demo datasets' stock masters are seeded and compared. Screens for the stock masters are not built |
-| Item lines on vouchers and the stock journal; valuation (weighted average and FIFO) and stock reports; orders and notes | not started | Designed and reviewed against observed behaviour; built in three further slices |
+| Item lines on sales, purchase, credit note and debit note vouchers, and the stock journal voucher type (server and API) | merged | [LEDGER.md](LEDGER.md), migration 0013. Item rows agree with their voucher line in sum, sign and direction, in the application and in the database; the item-ledger line is derived from the item rows; a stock journal carries item rows only; quantities and rates are exact decimals, money stays in minor units. A voucher request without item lines is recognised as the same request before and after the upgrade. Open, listed in LEDGER.md: rows attached to a voucher that is cancelled at the same moment (a class shared with voucher lines, bills and cost rows); slow voucher lookups on a table that was never analysed (a bulk load into a fresh database). No screen yet |
+| Stock quantity and last-rate reads, the negative-stock warning, valuation (weighted average and FIFO), stock reports; orders and notes | in progress | The reads and the warning are the next slice; valuation and the reports follow; orders and notes after them |
 | Currency masters, dated rates and a currency on ledgers (server and API) | merged | [LEDGER.md](LEDGER.md), migration 0012. Currencies are company masters with a symbol unique under the name match key; three dated rate lists (standard, selling, buying) with the latest rate on or before a date; rates inside the locked period are refused. Nothing changes for vouchers yet: a line in another currency is refused by the application and the database. Screens for currencies and rates are not built |
 | Foreign amounts on voucher lines and bills; exchange differences at report time | not started | Designed and reviewed against observed behaviour; follows the inventory item lines, which change the same posting code |
 
@@ -79,12 +80,32 @@ Payroll masters and vouchers; audit views over the revision log; import of data 
 
 Everything in the requirement inventory not covered above, in the order the evidence and user feedback justify.
 
+## Platform and shared packages
+
+| Piece | Status | Notes |
+|---|---|---|
+| `@ten98/runtime` 0.27.1 and `@ten98/ui` 0.39.0, from the released archives in `vendor/` | merged | Versions follow the code-system architecture declaration ([D-02](DECISIONS.md)) |
+| Typed queries and generated schema changes ([D-12](DECISIONS.md)), step 1: hand-written SQL counted per source file in `raw-statements.json` (239 statements in 28 files when recorded), a rise refused by the architecture check | merged | Each file's entry says what its statements are and why they are hand-written. The rule for raising and lowering a count is in [AGENTS.md](../AGENTS.md) |
+| D-12 step 2: the pilot on cost categories and centres, reporting each query shape | planned | Starts when the inventory slices have left the posting files. Steps 3 and 4 follow its findings; migrations stay hand-written and numbered until the generated baseline |
+| Book dates as `4-Jan-26` on screen, four-digit years on statutory print, ISO in machine output ([D-13](DECISIONS.md)) | planned | Waits for the date-format option of `@ten98/ui`. Screens show long day-first dates until then |
+
+## Acceptance walks
+
+A walk of the production image in a real browser, row by row against [ACCEPTANCE.md](ACCEPTANCE.md), in addition to the automated tests. Testers change nothing; a row is `pass`, `fail`, `blocked` or `not tested`, with evidence.
+
+| Run | Commit | Where | Status | Notes |
+|---|---|---|---|---|
+| 1 | `973c1b4` (`dev`, 2026-11-15) | The production image on a local machine, a fresh database, the five demo companies, generated test accounts, email disabled | in progress | Covers companies, team, masters, cost centres, reports and the keyboard; the account pages and the API-only areas (stock, currencies, operations) follow in the same run. Voucher entry is not in this commit and is left to run 2. Results, defects, critique, missing dependencies and what was not tested are written into [ACCEPTANCE.md](ACCEPTANCE.md) when the run ends; a security defect is reported privately, not there |
+
+No result of a walk is recorded yet.
+
 ## How work is verified
 
 - Each feature set is built on its own branch from `dev` and reviewed independently before merging; reviewers run the code and try to break it.
 - Tests run against a real PostgreSQL 18 as the non-owner database role; each handler module has a wrong-company negative test.
 - Accounting outcomes are pinned by golden fixtures and by comparison with the same demo data in the reference installation.
 - Decisions that change scope, tenancy, money handling or keyboard behaviour are recorded in [DECISIONS.md](DECISIONS.md) with their evidence.
+- The production image is walked feature by feature against [ACCEPTANCE.md](ACCEPTANCE.md) (see "Acceptance walks"); a passing test suite is not a substitute for it.
 
 ## Documentation map
 
@@ -99,4 +120,4 @@ Everything in the requirement inventory not covered above, in the order the evid
 | [KEYBOARD.md](KEYBOARD.md) | Commands and both keymaps |
 | [demo/README.md](../demo/README.md) | The demo dataset format, seeding and comparison |
 | [TENANCY.md](TENANCY.md) | Company model, roles, creation paths, what migration 0005 changes |
-| [ACCEPTANCE.md](ACCEPTANCE.md) | The feature inventory an acceptance walk of the production build is measured against, with the result columns left empty until a run |
+| [ACCEPTANCE.md](ACCEPTANCE.md) | The feature inventory an acceptance walk of the production build is measured against, and each run's results: status per row, defects, critique, missing dependencies, what was not tested |

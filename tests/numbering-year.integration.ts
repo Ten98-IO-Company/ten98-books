@@ -126,7 +126,7 @@ test('every voucher type starts with one stored restart rule: its financial year
   const rules = await asAdmin(database.adminUrl, admin => admin.query(`SELECT to_char(applicable_from, 'YYYY-MM-DD') AS "from", starting_number AS start, periodicity, count(*) OVER () AS rows
     FROM voucher_numbering_restart WHERE company_id = $1 AND voucher_type_id = $2`, [books.id, books.books.type('payment')]));
   assert.deepEqual(rules.rows, [{ from: '2026-04-01', start: 1, periodicity: 'yearly', rows: '1' }], 'the start of the financial year in which the books begin');
-  assert.equal(Number((await asAdmin(database.adminUrl, admin => admin.query('SELECT count(*) FROM voucher_numbering_restart WHERE company_id = $1', [books.id]))).rows[0].count), 8, 'one per voucher type');
+  assert.equal(Number((await asAdmin(database.adminUrl, admin => admin.query('SELECT count(*) FROM voucher_numbering_restart WHERE company_id = $1', [books.id]))).rows[0].count), 9, 'one per voucher type (the nine seeded types)');
   const add = (periodicity: string, from: string) => asApp(books.id, client => client.query(
     `INSERT INTO voucher_numbering_restart (company_id, voucher_type_id, series, applicable_from, starting_number, periodicity) VALUES ($1, $2, 'main', $3, 1, $4)`,
     [books.id, books.books.type('payment'), from, periodicity]));

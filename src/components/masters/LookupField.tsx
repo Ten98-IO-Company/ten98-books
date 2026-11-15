@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { chordFromEvent, Combobox, Stack, useShortcutCommands, type ComboboxProps } from '@ten98/ui'
 import { filterChoices } from '../../lib/lookup-entry'
 import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
+import { inOnePress } from '../../lib/key-press-steps'
 
 /**
  * A lookup whose value is always one of its options. The stock combobox can hand its text back as the value, and on
@@ -15,7 +17,8 @@ import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
  * keys the form binds to accept, so what each key does is decided by `lookupKeyAction` (src/lib/masters.ts) and handed on
  * through the shortcut registry: a closed lookup's Escape runs `entry.cancel`; a chord bound to `entry.accept` in the
  * active keymap (read from the registry, whatever it is) first picks the highlighted row or settles the typed text, then
- * accepts once.
+ * accepts once. Both happen within the key press (`inOnePress`): the pick is committed first, then accept runs, so a key
+ * pressed straight after the accept chord never reaches this field.
  */
 export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: Omit<ComboboxProps, 'options' | 'allowCustom'> & {
   options: readonly Choice[]
@@ -36,10 +39,13 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
     if (action === 'cancel') { registered.find(command => command.id === 'entry.cancel' && command.enabled)?.run(); return }
     if (action === 'pick-text') { onTypedEnter?.(input.value, true); return }
     if (action === 'accept-row') {
-      // The combobox picks on click; the pick settles before accept runs.
-      if (highlighted) document.getElementById(highlighted)?.click()
-    } else if (onTypedEnter?.(input.value, false) === 'error') return
-    window.setTimeout(() => accept?.run(), 0)
+      // The combobox picks on click; the pick is committed before accept runs, in this same key press.
+      inOnePress({ commit: flushSync, change: () => { if (highlighted) document.getElementById(highlighted)?.click() }, then: () => accept?.run() })
+      return
+    }
+    // onTypedEnter commits its own pick (useEntryLookups); accept then runs at once.
+    if (onTypedEnter?.(input.value, false) === 'error') return
+    accept?.run()
   }}>
     {/* allowCustom is true only so the field's own `error` shows (the stock combobox hides it for closed lists unless its own check fails); the guard below keeps free text from ever becoming a value. */}
     <Combobox {...rest} options={[...listed]} valueLabel={options.find(option => option.value === rest.value)?.label} filter={false} onInputChange={setTyped} allowCustom
