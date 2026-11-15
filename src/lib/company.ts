@@ -79,6 +79,18 @@ export type CompanySummary = {
   company: Company | null;
 };
 
+/** How a role reads in the company switcher and the company list. */
+export const roleLabels: Record<CompanySummary['role'], string> = { owner: 'Owner', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
+
+/**
+ * The company switcher's options (the design system's workspace options): each company with its role as the caption, and
+ * "not set up yet" for one without books settings that is not two-factor locked. null while the list loads.
+ */
+export const workspaceOptions = (companies: readonly CompanySummary[] | null): { id: string; name: string; roleLabel: string }[] | null =>
+  companies?.map(item => ({
+    id: item.id, name: item.name, roleLabel: `${roleLabels[item.role]}${item.company || item.twoFactorLocked ? '' : ' · not set up yet'}`,
+  })) ?? null;
+
 /** The financial year containing `date` (YYYY-MM-DD), as inclusive first and last calendar dates. */
 export function financialYearOf(start: { month: number; day: number }, date: string): { from: string; to: string } {
   const [year, month, day] = date.split('-').map(Number);
