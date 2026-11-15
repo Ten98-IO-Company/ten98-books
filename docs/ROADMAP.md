@@ -2,7 +2,7 @@
 
 What ten98-books is building, in what order, and where each piece stands. The order and scope come from [D-01](DECISIONS.md); this page records progress. The coordinator updates it with every merge into `dev`.
 
-Nothing is deployed. `main` holds no application code yet; everything below is on `dev` or on a branch.
+Nothing is deployed ([O-8](DECISIONS.md) is open). `main` holds no application code yet; everything below is on `dev` or on a branch.
 
 ## Status words
 
@@ -79,12 +79,32 @@ Payroll masters and vouchers; audit views over the revision log; import of data 
 
 Everything in the requirement inventory not covered above, in the order the evidence and user feedback justify.
 
+## Platform and shared packages
+
+| Piece | Status | Notes |
+|---|---|---|
+| `@ten98/runtime` 0.27.1 and `@ten98/ui` 0.39.0, from the released archives in `vendor/` | merged | Versions follow the code-system architecture declaration ([D-02](DECISIONS.md)) |
+| Typed queries and generated schema changes ([D-12](DECISIONS.md)), step 1: hand-written SQL counted per source file in `raw-statements.json` (239 statements in 28 files when recorded), a rise refused by the architecture check | merged | Each file's entry says what its statements are and why they are hand-written. The rule for raising and lowering a count is in [AGENTS.md](../AGENTS.md) |
+| D-12 step 2: the pilot on cost categories and centres, reporting each query shape | planned | Starts when the inventory slices have left the posting files. Steps 3 and 4 follow its findings; migrations stay hand-written and numbered until the generated baseline |
+| Book dates as `4-Jan-26` on screen, four-digit years on statutory print, ISO in machine output ([D-13](DECISIONS.md)) | planned | Waits for the date-format option of `@ten98/ui`. Screens show long day-first dates until then |
+
+## Acceptance walks
+
+A walk of the production image in a real browser, row by row against [ACCEPTANCE.md](ACCEPTANCE.md), in addition to the automated tests. Testers change nothing; a row is `pass`, `fail`, `blocked` or `not tested`, with evidence.
+
+| Run | Commit | Where | Status | Notes |
+|---|---|---|---|---|
+| 1 | `973c1b4` (`dev`, 2026-11-15) | The production image on a local machine, a fresh database, the five demo companies, generated test accounts, email disabled | in progress | Covers companies, team, masters, cost centres, reports and the keyboard; the account pages and the API-only areas (stock, currencies, operations) follow in the same run. Voucher entry is not in this commit and is left to run 2. Results, defects, critique, missing dependencies and what was not tested are written into [ACCEPTANCE.md](ACCEPTANCE.md) when the run ends; a security defect is reported privately, not there |
+
+No result of a walk is recorded yet.
+
 ## How work is verified
 
 - Each feature set is built on its own branch from `dev` and reviewed independently before merging; reviewers run the code and try to break it.
 - Tests run against a real PostgreSQL 18 as the non-owner database role; each handler module has a wrong-company negative test.
 - Accounting outcomes are pinned by golden fixtures and by comparison with the same demo data in the reference installation.
 - Decisions that change scope, tenancy, money handling or keyboard behaviour are recorded in [DECISIONS.md](DECISIONS.md) with their evidence.
+- The production image is walked feature by feature against [ACCEPTANCE.md](ACCEPTANCE.md) (see "Acceptance walks"); a passing test suite is not a substitute for it.
 
 ## Documentation map
 
@@ -99,4 +119,4 @@ Everything in the requirement inventory not covered above, in the order the evid
 | [KEYBOARD.md](KEYBOARD.md) | Commands and both keymaps |
 | [demo/README.md](../demo/README.md) | The demo dataset format, seeding and comparison |
 | [TENANCY.md](TENANCY.md) | Company model, roles, creation paths, what migration 0005 changes |
-| [ACCEPTANCE.md](ACCEPTANCE.md) | The feature inventory an acceptance walk of the production build is measured against, with the result columns left empty until a run |
+| [ACCEPTANCE.md](ACCEPTANCE.md) | The feature inventory an acceptance walk of the production build is measured against, and each run's results: status per row, defects, critique, missing dependencies, what was not tested |
