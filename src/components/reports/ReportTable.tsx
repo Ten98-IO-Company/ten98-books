@@ -81,8 +81,9 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   }, [signature, focusOnLoad])
 
   return <Stack ref={frame} gap={2} tabIndex={-1} aria-label={caption} onFocusCapture={event => {
-    // A row focused by the table's own keys, or by a click, becomes the highlight. The table renders one focusable row
-    // per data row, in order, and reports no focus change of its own.
+    // A row focused by the table's own keys, or by a click, becomes the highlight. The table reports no focus change of
+    // its own, so this reads its rows: one focusable row per data row, in order. That stops holding once the table's
+    // `virtualize` is on (only the rows in view are rendered, so positions no longer match `rows`).
     const at = [...(frame.current?.querySelectorAll('tbody > tr[tabindex]') ?? [])].indexOf(event.target as HTMLElement)
     if (at >= 0 && at !== position.current) { position.current = at; onHighlight(keys[at]) }
   }}>

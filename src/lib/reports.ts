@@ -23,13 +23,27 @@ const checkPeriod = <T extends { from: string; to: string }>(schema: z.ZodType<T
 
 export const reportPeriodQuery = checkPeriod(z.object(periodShape).strict());
 export const balanceSheetQuery = z.object({ date: calendarDate }).strict();
+/** Vouchers on one page of a paged register when the request sets no limit, as the screens do. */
+export const registerPageSize = 200;
+
 /** Paged registers (day book, ledger vouchers): a keyset cursor from the previous page's `next`. */
 export const reportPageQuery = checkPeriod(z.object({
   ...periodShape,
-  limit: z.coerce.number().int().min(1).max(500).default(200),
+  limit: z.coerce.number().int().min(1).max(500).default(registerPageSize),
   after: z.string().max(200).optional(),
 }).strict());
 export type ReportPeriod = { from: string; to: string };
+
+/**
+ * Which vouchers a page of a register shows, for its summary line: on screen and in print, where the pager is not
+ * printed. Null when the whole period fits one page. Every page before the shown one is full (the server gives a next
+ * cursor only after a full page), so the first number follows from the pages before it; the period's total is not known.
+ */
+export function registerRange(pagesBefore: number, shown: number, hasNext: boolean): string | null {
+  if (pagesBefore === 0 && !hasNext) return null;
+  const first = pagesBefore * registerPageSize + 1;
+  return `Vouchers ${first} to ${first + shown - 1}${hasNext ? '; more on the next page' : ', the last of the period'}.`;
+}
 
 /** Report names as they appear in API paths and screen routes. */
 export const reportNames = ['day-book', 'trial-balance', 'profit-and-loss', 'balance-sheet', 'group-summary', 'ledger-monthly', 'ledger-vouchers'] as const;
