@@ -41,7 +41,7 @@ const annotations = ['source', 'voucherCountNote', 'report', 'note'];
 
 /** Why a whole block of expected.json cannot be compared yet; any other block gets the general reason. */
 const blockReasons: Record<string, string> = {
-  stockSummary: 'needs inventory',
+  stockSummary: 'needs valuation (slice c)',
   vat: 'needs the VAT return, which ten98-books does not compute yet',
   exchangeDifferences: 'needs foreign-currency accounting; the realised amount is the closing of the exchange gain and loss ledger, compared above, and the unrealised row is listed separately',
 };
@@ -145,15 +145,17 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       const report = await trialBalanceReport(context, { from, to });
       amount('Trial balance', 'Total debit', trial.totalDebit, report.grandTotals.closingDebit);
       amount('Trial balance', 'Total credit', trial.totalCredit, report.grandTotals.closingCredit);
-      // Opening stock is not a ledger balance: ledger openings alone leave a difference of exactly its value (credit side
-      // when capital was entered with the stock counted).
+      // Opening stock is seeded from items.json (M2b slice a): the trial balance's "Opening stock" row holds its value,
+      // and the opening difference counts it, so ledger openings entered with the stock counted leave no difference.
       const stockItems = dataset.extraFiles['items.json'] as ItemsFile | undefined;
       const stock = openingStockValue(stockItems, exponent);
       if (stockItems && stock > 0n) {
+        const row = report.nodes.find(node => node.kind === 'stock');
+        const held = row ? subtractMoney(row.openingDebit, row.openingCredit) : 0n;
+        push('Trial balance', 'Opening stock (the opening rows of items.json)', balance(stock), row ? balance(held) : 'row missing', balance(subtractMoney(held, stock)), held === stock);
         const difference = report.openingDifference;
         const actual = difference.side === 'Dr' ? difference.amount : difference.side === 'Cr' ? subtractMoney(0n, difference.amount) : 0n;
-        const wanted = subtractMoney(0n, stock);
-        push('Trial balance', 'Opening-balance difference (equals the opening stock value)', balance(wanted), balance(actual), balance(subtractMoney(actual, wanted)), actual === wanted);
+        push('Trial balance', 'Opening-balance difference (opening stock counted)', balance(0n), balance(actual), balance(actual), actual === 0n);
       }
       const stored = await listLedgers(context);
       const closing = new Map(report.nodes.filter(node => node.kind === 'ledger').map(node => [node.id, subtractMoney(node.closingDebit, node.closingCredit)]));
@@ -182,14 +184,16 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       // up to its total debit and total credit, to the cent), the zero is not a figure the file stands behind: the
       // per-ledger closings are incomplete, so these lines are not yet comparable rather than differences.
       if (zeroed.length) {
-        let [debit, credit] = [report.difference?.closingDebit ?? 0n, report.difference?.closingCredit ?? 0n];
+        // The opening stock row (no ledger, so never listed per ledger) stands in the totals like the difference line.
+        const stockRow = report.nodes.find(node => node.kind === 'stock');
+        let [debit, credit] = [addMoney(report.difference?.closingDebit ?? 0n, stockRow?.closingDebit ?? 0n), addMoney(report.difference?.closingCredit ?? 0n, stockRow?.closingCredit ?? 0n)];
         for (const figure of Object.values(trial.ledgers)) {
           const closingAmount = toMinor(figure.closing, exponent);
           if (figure.side === 'Dr') debit = addMoney(debit, closingAmount); else credit = addMoney(credit, closingAmount);
         }
         for (const { actual } of zeroed) if (actual > 0n) debit = addMoney(debit, actual); else credit = addMoney(credit, subtractMoney(0n, actual));
         if (debit === toMinor(trial.totalDebit, exponent) && credit === toMinor(trial.totalCredit, exponent)) {
-          const reason = `expected.json lists these ${zeroed.length} ledger(s) at zero, but its own totals need their balances: the listed closings, the opening-balance difference and the app's balances for exactly these ledgers add up to its total debit ${trial.totalDebit} and total credit ${trial.totalCredit}; their per-ledger closings are missing from the file`;
+          const reason = `expected.json lists these ${zeroed.length} ledger(s) at zero, but its own totals need their balances: the listed closings, the opening stock, the opening-balance difference and the app's balances for exactly these ledgers add up to its total debit ${trial.totalDebit} and total credit ${trial.totalCredit}; their per-ledger closings are missing from the file`;
           for (const { line } of zeroed) line.reason = reason;
         }
       }
@@ -245,12 +249,13 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
       } else {
         const report = await profitAndLossReport(context, { from, to });
         const figures = expected.profitAndLoss;
-        // When the file gives figures from the ledgers alone, the stock-inclusive ones cannot be compared (no stock here).
+        // When the file gives figures from the ledgers alone, the stock-inclusive ones cannot be compared until stock is valued:
+        // here opening and closing stock are both the opening rows' value, so the profit is the ledgers' alone.
         const excludingStock = figures.grossProfitExcludingStock !== undefined || figures.netProfitExcludingStock !== undefined;
         if (excludingStock) {
           if (figures.grossProfitExcludingStock !== undefined) amount('Profit and loss', 'Gross profit (excluding stock)', figures.grossProfitExcludingStock, report.grossProfit);
           if (figures.netProfitExcludingStock !== undefined) amount('Profit and loss', 'Net profit (excluding stock)', figures.netProfitExcludingStock, report.netProfit);
-          skipped.push('profitAndLoss.grossProfit and profitAndLoss.netProfit (include opening and closing stock; need inventory)');
+          skipped.push('profitAndLoss.grossProfit and profitAndLoss.netProfit (include the valued closing stock; needs valuation (slice c))');
         } else {
           amount('Profit and loss', 'Gross profit', figures.grossProfit, report.grossProfit);
           amount('Profit and loss', 'Net profit', figures.netProfit, report.netProfit);
@@ -261,7 +266,7 @@ export async function compareDataset(userId: string, dataset: Dataset): Promise<
     // Balance sheet as at the end of the period; both sides are compared with the one expected total.
     if (expected.balanceSheet) {
       if (expected.balanceSheet.closingStockInAssets !== undefined) {
-        skipped.push('balanceSheet.total and balanceSheet.closingStockInAssets (include closing stock; need inventory)');
+        skipped.push('balanceSheet.total and balanceSheet.closingStockInAssets (include the valued closing stock; needs valuation (slice c))');
       } else {
         const report = await balanceSheetReport(context, { date: to });
         amount('Balance sheet', 'Total capital and liabilities', expected.balanceSheet.total, report.totals.liabilities);

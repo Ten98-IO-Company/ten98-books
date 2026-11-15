@@ -9,6 +9,7 @@ import { getDatabase } from '../db.ts';
 import { ledgerContext, runLedger, type LedgerContext } from '../ledger/context.ts';
 import { createCostCategory, createCostCentre, listCostCategories, listCostCentres, saveCostCentresSetting } from '../ledger/cost-centres.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
+import { createItem, createTree, createUnit, listItems, listTree, listUnits, readInventorySetting, saveInventorySetting } from '../ledger/stock-masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
 import { withCompany } from '../tenancy.ts';
 import { readLedgerBills } from './bill-rows.ts';
@@ -26,7 +27,8 @@ import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositio
  * voucher-key namespace: every voucher is posted with the idempotency key `demo:<slug>:<voucher key>`. A same-named
  * company with vouchers outside that namespace, or with ledgers or groups the dataset does not define, is somebody's
  * own books and is never written to. A run that stopped after the company was created but before any voucher posted
- * (no vouchers, nothing foreign in the chart) is resumed. Groups and ledgers are matched by name, vouchers by key.
+ * (no vouchers, nothing foreign in the chart) is resumed. Groups, ledgers and stock masters are matched by name key,
+ * vouchers by key.
  */
 
 /** Feature names (company.json `features`) ten98-books models; anything else is listed as skipped. */
@@ -90,6 +92,11 @@ export type SeedReport = {
    * `keptWithoutCostRows` are vouchers an earlier seed posted without cost rows, kept as they were.
    */
   costs: { masters: boolean; switchedOn: boolean; categories: Counts; centres: Counts; rowsPosted: number; leftOutRows: number; leftOut: string[]; warnings: Record<string, string[]>; keptWithoutCostRows: string[] };
+  /**
+   * Stock masters from items.json. `masters` is true when the dataset has the file; `switchedOn` that this run switched
+   * inventory on; `openingValue` is the opening stock of the items created in this run, formatted in the company's currency ('' when none).
+   */
+  stock: { masters: boolean; switchedOn: boolean; units: Counts; locations: Counts; groups: Counts; items: Counts; openingValue: string };
 };
 
 type CostCategoryEntry = { key: string; name: string; allocateRevenue?: boolean; allocateNonRevenue?: boolean };
@@ -203,7 +210,9 @@ export function unmodelled(dataset: Dataset): string[] {
     if (file !== 'items.json') { lines.push(`${file}: feature file not modelled (kept as is)`); continue; }
     const items = content as ItemsFile;
     const value = formatMoney(openingStockValue(items, dataset.company.minorUnits), dataset.company.minorUnits);
-    lines.push(`items.json: stock not yet supported (${items.items?.length ?? 0} item(s), ${items.locations?.length ?? 0} location(s); opening stock worth ${value} is not a ledger balance)`);
+    lines.push(`items.json: stock is not valued yet (${items.items?.length ?? 0} item(s), ${items.locations?.length ?? 0} location(s)): the statements hold the opening stock of ${value} in every period`);
+    const withExtras = (items.items ?? []).filter(item => item.extras && typeof item.extras === 'object' && Object.keys(item.extras).length);
+    if (withExtras.length) lines.push(`items.json: extras on ${withExtras.length} item(s) (${[...new Set(withExtras.flatMap(item => Object.keys(item.extras as object)))].sort().join(', ')})`);
   }
   return lines;
 }
@@ -277,7 +286,63 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
       } catch (error) { failure(dataset, 'ledgers', at, error); }
     }
     await seedCostMasters(context, dataset, report);
+    await seedStockMasters(context, dataset, report);
   }).catch(error => { throw error instanceof DemoError ? error : failure(dataset, 'ledgers', 'masters', error); });
+}
+
+/**
+ * Switches inventory on and creates the units, locations, stock groups and items (with their opening stock) of
+ * items.json that the company lacks, matching each kind by name key, so a rerun changes nothing and a master spelled
+ * differently is found. Existing masters, and the openings of existing items, are kept as they are. An item names its
+ * unit by key or by name; locations and stock groups are created at the top level.
+ */
+async function seedStockMasters(context: LedgerContext, dataset: Dataset, report: SeedReport): Promise<void> {
+  const items = dataset.extraFiles['items.json'] as ItemsFile | undefined;
+  if (!items) return;
+  const stock = report.stock;
+  let value = 0n;
+  try {
+    if (!(await readInventorySetting(context)).enabled) { await saveInventorySetting(context, { enabled: true }); stock.switchedOn = true; }
+    const units = new Map((await listUnits(context)).map(unit => [nameMatchKey(unit.symbol), unit.id]));
+    const unitIds = new Map<string, string>();
+    for (const entry of items.units ?? []) {
+      let id = units.get(nameMatchKey(entry.name));
+      if (id) stock.units.present++;
+      else { id = (await createUnit(context, { symbol: entry.name, ...entry.decimals !== undefined ? { decimals: entry.decimals } : {} })).id; units.set(nameMatchKey(entry.name), id); stock.units.created++; }
+      unitIds.set(entry.key, id).set(entry.name, id);
+    }
+    const placed = async (kind: 'stock-locations' | 'stock-groups', entries: { key: string; name: string }[], counts: Counts) => {
+      const present = new Map((await listTree(context, kind)).map(row => [nameMatchKey(String(row.name)), row.id]));
+      const ids = new Map<string, string>();
+      for (const entry of entries) {
+        let id = present.get(nameMatchKey(entry.name));
+        if (id) counts.present++;
+        else { id = (await createTree(context, kind, { name: entry.name })).id; present.set(nameMatchKey(entry.name), id); counts.created++; }
+        ids.set(entry.key, id);
+      }
+      return ids;
+    };
+    const locationIds = await placed('stock-locations', items.locations ?? [], stock.locations);
+    const groupIds = await placed('stock-groups', items.stockGroups ?? [], stock.groups);
+    const existing = new Set((await listItems(context)).map(item => nameMatchKey(item.name)));
+    for (const entry of items.items ?? []) {
+      if (existing.has(nameMatchKey(entry.name))) { stock.items.present++; continue; }
+      if (entry.unit === undefined) throw new FoundationError(400, `item "${entry.key}" names no unit`);
+      let unitId = unitIds.get(entry.unit);
+      if (!unitId) { unitId = (await createUnit(context, { symbol: entry.unit })).id; unitIds.set(entry.unit, unitId); stock.units.created++; }
+      const created = await createItem(context, {
+        name: entry.name, unitId, groupId: entry.group === undefined ? null : groupIds.get(entry.group),
+        openings: (entry.opening ?? []).map(line => ({ locationId: locationIds.get(line.location), quantity: line.quantity, rate: line.rate })),
+      });
+      existing.add(nameMatchKey(entry.name));
+      stock.items.created++;
+      value += created.openingValue;
+    }
+    if (stock.items.created) stock.openingValue = formatMoney(value, context.company.exponent);
+  } catch (error) {
+    if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/items.json: stock: ${error.message}`);
+    throw error;
+  }
 }
 
 /**
@@ -487,6 +552,7 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
     mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {}, keptWithoutBills: [] },
     costs: { masters: costCategoryEntries(dataset).length + costCentreEntries(dataset).length > 0, switchedOn: false, categories: { created: 0, present: 0 }, centres: { created: 0, present: 0 }, rowsPosted: 0, leftOutRows: 0, leftOut: [], warnings: {}, keptWithoutCostRows: [] },
+    stock: { masters: dataset.extraFiles['items.json'] !== undefined, switchedOn: false, units: { created: 0, present: 0 }, locations: { created: 0, present: 0 }, groups: { created: 0, present: 0 }, items: { created: 0, present: 0 }, openingValue: '' },
   };
   if (!company) {
     try {
@@ -519,7 +585,9 @@ export async function selectDatasets(selection: DemoSelection, root = demoRoot):
 }
 
 export function formatSeedReport(report: SeedReport): string[] {
-  const changed = report.companyCreated || report.groups.created || report.ledgers.created || report.ledgers.openingsSet || report.vouchers.created || report.costs.switchedOn || report.costs.categories.created || report.costs.centres.created;
+  const stock = report.stock;
+  const changed = report.companyCreated || report.groups.created || report.ledgers.created || report.ledgers.openingsSet || report.vouchers.created || report.costs.switchedOn || report.costs.categories.created || report.costs.centres.created
+    || stock.switchedOn || stock.units.created || stock.locations.created || stock.groups.created || stock.items.created;
   const part = (counts: Counts) => `${counts.created} created, ${counts.present} already present`;
   const lines = [
     `${report.companyName} (${report.slug}): ${changed ? 'seeded' : 'already present, nothing changed'}`,
@@ -530,6 +598,7 @@ export function formatSeedReport(report: SeedReport): string[] {
   ];
   const costs = report.costs;
   if (costs.masters) lines.push(`  cost centres: ${costs.switchedOn ? 'switched on; ' : ''}categories ${part(costs.categories)}; centres ${part(costs.centres)}`);
+  if (stock.masters) lines.push(`  stock: ${stock.switchedOn ? 'inventory switched on; ' : ''}units ${part(stock.units)}; locations ${part(stock.locations)}; stock groups ${part(stock.groups)}; items ${part(stock.items)}${stock.items.created ? `; opening stock ${stock.openingValue} set with the items created` : ''}`);
   if (costs.rowsPosted) lines.push(`  cost rows: ${costs.rowsPosted} posted with the vouchers`);
   if (costs.leftOutRows) lines.push(`  cost rows left out: ${costs.leftOutRows} on ${costs.leftOut.length} line(s) whose ledger takes no cost centres (the ledger module dropped them, cost_ignored); e.g. ${costs.leftOut.slice(0, 4).join(', ')}`);
   if (costs.keptWithoutCostRows.length) lines.push(`  vouchers already posted before cost rows were sent, kept as they were without cost rows: ${costs.keptWithoutCostRows.length} (e.g. ${costs.keptWithoutCostRows.slice(0, 3).join(', ')}); seed into a new company to get their cost figures`);
