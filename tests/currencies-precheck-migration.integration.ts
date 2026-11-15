@@ -9,8 +9,8 @@ import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 
 /**
- * Migration 0012 on a database whose voucher lines carry another currency code (legal before 0012: the base-only check
- * tests the rate and the amounts, not the code). The migration stops and names them, and applies nothing; corrected, it
+ * Migration 0012 on a database whose voucher lines, a bill and a bill row carry another currency code (legal before 0012
+ * for lines and bill rows: the base-only checks test the rate and the amounts, not the code). The migration stops and names them, and applies nothing; corrected, it
  * applies and its keys are validated against the rows (under the all-workspace scope: without one the forced company
  * policy hides every row and a validation passes without checking anything).
  */
@@ -19,7 +19,9 @@ const earlier = migrationFiles.slice(0, migrationFiles.indexOf(thisMigration));
 let database: TestDatabase;
 let admin: pg.Client;
 const user = randomUUID(), company = randomUUID();
-let voucher = '';
+let voucher = '', bill = '', billRow = '';
+/** Rows of bills as they could not be written before 0012 either (bill_guard refuses a non-base bill): written with the triggers off, to reach the pre-check's bill branches. */
+const withoutTriggers = async (run: () => Promise<unknown>) => scoped(async () => { await admin.query('SET LOCAL session_replication_role = replica'); await run(); });
 const scoped = async (run: () => Promise<unknown>) => {
   await admin.query('BEGIN');
   await admin.query("SELECT set_config('app.company_ids', $1, true)", [company]);
@@ -47,6 +49,12 @@ before(async () => {
     await admin.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate)
       VALUES ($1, $2, 1, $3, 'Dr', 100, 'USD', 100, 1), ($1, $2, 2, $4, 'Cr', 100, 'USD', 100, 1)`, [company, voucher, cash, capital]);
   });
+  await withoutTriggers(async () => {
+    const capital = (await admin.query("SELECT id FROM ledger WHERE company_id = $1 AND name = 'Capital'", [company])).rows[0].id;
+    bill = (await admin.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, 'FX-1', 'USD') RETURNING id", [company, capital])).rows[0].id;
+    billRow = (await admin.query(`INSERT INTO bill_allocation (company_id, ledger_id, voucher_id, line_no, kind, bill_id, currency, side, amount, currency_amount, due_date)
+      VALUES ($1, $2, $3, 2, 'new_ref', $4, 'USD', 'Cr', 100, 100, '2026-01-05') RETURNING id`, [company, capital, voucher, bill])).rows[0].id;
+  });
 });
 after(async () => { await admin?.end(); await database?.drop(); });
 
@@ -58,11 +66,16 @@ test('lines in another currency code stop the migration, which names them and ap
   try {
     await migrator.query('BEGIN');
     await assert.rejects(migrator.query(readFileSync(join(process.cwd(), 'migrations', thisMigration), 'utf8')),
-      new RegExp(`carry a currency other than their company's base currency; correct them first: voucher lines in company ${company}: 2 row\\(s\\), e\\.g\\. voucher ${voucher} line 1 in USD, voucher ${voucher} line 2 in USD$`));
+      new RegExp(`carry a currency other than their company's base currency; correct them first: bill rows in company ${company}: 1 row\\(s\\), e\\.g\\. row ${billRow} in USD; `
+        + `bills in company ${company}: 1 row\\(s\\), e\\.g\\. bill ${bill} in USD; voucher lines in company ${company}: 2 row\\(s\\), e\\.g\\. voucher ${voucher} line 1 in USD, voucher ${voucher} line 2 in USD$`));
   } finally { await migrator.query('ROLLBACK').catch(() => undefined); await migrator.end(); }
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), earlier.length, '0012 was not applied');
 
-  await scoped(() => admin.query("UPDATE voucher_line SET currency = 'AED' WHERE company_id = $1 AND voucher_id = $2", [company, voucher]));
+  await withoutTriggers(async () => {
+    await admin.query("UPDATE voucher_line SET currency = 'AED' WHERE company_id = $1 AND voucher_id = $2", [company, voucher]);
+    await admin.query("UPDATE bill_allocation SET currency = 'AED' WHERE company_id = $1 AND id = $2", [company, billRow]);
+    await admin.query("UPDATE bill SET currency = 'AED' WHERE company_id = $1 AND id = $2", [company, bill]);
+  });
   await migrateDatabase({ log: () => undefined });
   assert.equal(Number((await admin.query('SELECT count(*) FROM schema_version')).rows[0].count), migrationFiles.length);
   const keys = (await admin.query(`SELECT conname, convalidated FROM pg_constraint WHERE conname = ANY($1) ORDER BY 1`, [['bill_allocation_currency_fkey', 'bill_currency_fkey', 'ledger_currency_fkey', 'voucher_line_currency_fkey']])).rows;

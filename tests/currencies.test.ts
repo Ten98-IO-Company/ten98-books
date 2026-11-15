@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { currencyAlterInput, currencyCreateInput, exchangeRatesInput, rateText, ratesQuery } from '../src/lib/currencies.ts';
 import { ledgerAlterInput, ledgerCreateInput } from '../src/lib/ledger.ts';
@@ -43,4 +45,28 @@ test('a ledger body takes an optional currency code', () => {
   assert.equal(ledgerCreateInput.parse(ledger).currency, undefined, 'the base when left out');
   assert.equal(ok(ledgerCreateInput, { ...ledger, currency: 'usd' }), false);
   assert.equal(ok(ledgerAlterInput, { ...ledger, currency: 'EUR', revision: 2 }), true);
+});
+
+/**
+ * Migration 0012 reads rows of tables under the forced company policy, which hides every row from the migrator unless
+ * the all-workspace scope is set: a key validation outside the scope marks the key valid without checking anything (the
+ * defect fixed in review). Once the pre-check exists, no database state can show where a validation sits: every row it
+ * could catch stops the migration first, and outside the scope it sees no rows and passes either way. So this reads the
+ * migration's statement order: the pre-check, the backfill, SET NOT NULL, the four keys and their validations all sit
+ * between the statement that sets the scope and the one that clears it, and nothing clears it in between.
+ */
+test('migration 0012 reads forced-policy rows only inside its all-workspace scope', () => {
+  const sql = readFileSync(join(process.cwd(), 'migrations', '0012_currencies.sql'), 'utf8');
+  const opened = sql.indexOf("PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);");
+  const cleared = sql.lastIndexOf("set_config('app.company_ids', '', true);");
+  assert.ok(opened > 0 && cleared > opened, 'the scope is set, then cleared');
+  assert.equal(sql.indexOf("set_config('app.company_ids'", sql.indexOf(';', opened)), cleared, 'nothing else sets or clears the scope in between');
+  const statements = ["these rows carry a currency other than their company''s base currency", 'UPDATE ledger l SET currency = c.base_currency',
+    'ALTER TABLE ledger ALTER COLUMN currency SET NOT NULL',
+    ...['ledger', 'voucher_line', 'bill', 'bill_allocation'].flatMap(table => [`ALTER TABLE ${table} ADD CONSTRAINT ${table}_currency_fkey`, `ALTER TABLE ${table} VALIDATE CONSTRAINT ${table}_currency_fkey`])];
+  for (const statement of statements) {
+    const at = sql.indexOf(statement);
+    assert.ok(at > opened && at < cleared, `inside the scope: ${statement}`);
+    assert.equal(sql.indexOf(statement, at + 1), -1, `once: ${statement}`);
+  }
 });

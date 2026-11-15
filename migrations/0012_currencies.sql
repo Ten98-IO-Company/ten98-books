@@ -61,8 +61,12 @@ ALTER TABLE ledger ADD COLUMN currency text;
 -- Currencies: the base row keeps its code and decimals and is not deleted; no currency changes its code; decimals change
 -- only while no ledger names the currency; a delete is refused while a ledger names the currency or a rate row
 -- lies in the locked period. A ledger insert still in flight key-shares the currency row, and any UPDATE of a currency
--- row waits for it (measured: even `revision = revision`, also as the table owner, while an explicit FOR NO KEY UPDATE
--- does not; tests/currencies-guards.integration.ts pins the outcome), so the use check after the wait sees that ledger.
+-- row waits for it: `symbol_key` is a stored generated column in a non-partial unique index and the table has a BEFORE
+-- UPDATE row trigger, so PostgreSQL recomputes the generated column, treats that key as updated and takes the stronger
+-- row lock (measured: even `revision = revision` waits, while an explicit FOR NO KEY UPDATE does not). The use check
+-- after the wait sees that ledger. Dropping this trigger, that index or the generated column silently weakens the lock;
+-- tests/currencies-guards.integration.ts pins the outcome. In REPEATABLE READ or SERIALIZABLE the check would run on a
+-- snapshot older than the ledger and pass, so a decimals change is refused outside READ COMMITTED, as group changes are.
 -- Symbols and codes: every create and symbol change takes the company's base row FOR NO KEY
 -- UPDATE (serialising currency writes, while postings, which only key-share currency rows, never wait on it) and then
 -- refuses a symbol equal under the key to another currency's symbol or code, or a code equal to another's symbol.
@@ -103,6 +107,10 @@ BEGIN
     IF NEW.decimals <> OLD.decimals THEN
       IF OLD.system_key IS NOT NULL THEN
         RAISE EXCEPTION 'the base currency keeps the company''s decimals' USING ERRCODE = '23514', CONSTRAINT = 'currency_builtin';
+      END IF;
+      -- The use check below must see a ledger committed while this update waited for it.
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'currency decimals change in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'currency_in_use';
       END IF;
       EXECUTE 'SELECT EXISTS (SELECT 1 FROM ledger WHERE currency = $1 AND company_id = $2)' INTO v_found USING NEW.code, NEW.company_id;
       IF v_found THEN

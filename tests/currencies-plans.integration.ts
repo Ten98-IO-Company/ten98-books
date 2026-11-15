@@ -12,7 +12,8 @@ import { asAdmin, chart, createCompany, setupOwner, type Member } from './helper
  * currency" lookup written as static PL/pgSQL switches, after a few runs in a session, to a cached generic plan that reads
  * the table's ledgers; the guard's lookup, run as a decimals change of a currency no ledger names, reads none. Counted
  * with the transaction's own table counters; no planner setting changed. A data distribution of its own, in its own
- * database, so other tests' rows do not move the statistics.
+ * database, so other tests' rows do not move the statistics. It depends on `plan_cache_mode = auto` (the default): with
+ * `force_custom_plan` the static lookup would plan with its values too and read no ledger.
  */
 let database: TestDatabase;
 let owner: Member & { workspaceId: string };

@@ -162,6 +162,31 @@ for (const path of ['direct SQL', 'the API'] as const) {
   });
 }
 
+for (const isolation of ['REPEATABLE READ', 'SERIALIZABLE'] as const) {
+  test(`direct SQL: a decimals change in ${isolation} is refused, so it cannot commit past a ledger it waited for`, async () => {
+    const currency = isolation === 'SERIALIZABLE' ? 'XSZ' : 'XRR';
+    await asApp(client => insertCurrency(client, { code: currency, symbol: currency.toLowerCase() }));
+    const ledger = await openApp(client => client.query('INSERT INTO ledger (company_id, group_id, name, currency) VALUES ($1, $2, $3, $4)',
+      [companyId, books.group('bank_accounts'), `Bank ${currency}`, currency]));
+    // Its snapshot is taken before the ledger commits: without the rule the change waits, then its use check reads that
+    // older snapshot, finds no ledger and commits.
+    const client = await getDatabase().pool.connect();
+    const change = (async () => {
+      try {
+        await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
+        await setCompanyScope(client, [companyId]);
+        await client.query('UPDATE currency SET decimals = 3 WHERE company_id = $1 AND code = $2', [companyId, currency]);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); throw error; } finally { client.release(); }
+    })();
+    await state(change);
+    await ledger.finish();
+    await assert.rejects(change, code('25001', 'currency_in_use'));
+    const decimals = await asAdmin(database.adminUrl, async admin => (await admin.query('SELECT decimals FROM currency WHERE company_id = $1 AND code = $2', [companyId, currency])).rows[0].decimals);
+    assert.equal(decimals, 2);
+  });
+}
+
 test('tenancy: composite keys, the company scope and the boot assertion cover both tables', async () => {
   for (const table of ['currency', 'exchange_rate']) assert.ok(accountingTables.includes(table as never), table);
   await assert.rejects(asApp(client => client.query('INSERT INTO ledger (company_id, group_id, name, currency) VALUES ($1, $2, $3, $4)',
