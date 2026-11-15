@@ -165,8 +165,10 @@ export const voucherCreateInput = z.object({
   reference: reference.nullish().transform(value => value || null),
   referenceDate: calendarDate.nullish().transform(value => value ?? null),
   lines,
+  // The fields of M2b slice b1 stay absent when not sent, so a body without them parses, and its request hash is
+  // taken, exactly as before them: a retry across the upgrade replays. Their defaults apply where they are used.
   inventory: z.array(itemLineInput).max(500).optional(),
-  itemLedgerId: id.nullish().transform(value => value ?? null),
+  itemLedgerId: id.nullish(),
 }).strict();
 /**
  * Altering replaces the whole voucher body except its number (and its type, unless `voucherTypeId` names another), so every field is stated: an omitted status or
@@ -185,7 +187,7 @@ export const voucherAlterInput = z.object({
   lines,
   /** The voucher's item lines, whole; required when it has any (an empty list removes them). */
   inventory: z.array(itemLineInput).max(500).optional(),
-  itemLedgerId: id.nullish().transform(value => value ?? null),
+  itemLedgerId: id.nullish(),
   revision,
 }).strict();
 /** A page of the voucher list: keyset cursor from the previous page's `next`. */

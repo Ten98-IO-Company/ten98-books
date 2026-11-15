@@ -9,6 +9,7 @@ import {
 import { billsCreatedBy, billWarnings, planBills, storedBillRows, writeBills, type BillLine, type BillPlan } from './bills.ts';
 import { costRowsByLine, planCost, storedCostRows, writeCost, type CostLine, type CostPlan, type StoredCostRow } from './cost-centres.ts';
 import { insertItemLines, lockItemLines, planItemLines, readItemLines, type PlannedItemLine } from './item-lines.ts';
+import { inventoryEnabled } from './stock-masters.ts';
 import { conflict, ledgerError, parseAmount, parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql, missingAs, readVoucherType } from './masters.ts';
 import { logRevision } from './revisions.ts';
@@ -118,9 +119,11 @@ type PreparedVoucher = { lines: PreparedLine[]; items: PlannedItemLine[]; derive
  * returns them) are dropped and derived again from the item lines, after the client's lines. A stock journal has item
  * lines only; every other kind goes through the posting rules (`prepareLines`) with its derived lines.
  */
-async function prepareVoucher(context: LedgerContext, kind: VoucherKind, body: { date: string; lines: LineInput[]; inventory?: ItemLineInput[]; itemLedgerId: string | null }): Promise<PreparedVoucher> {
+async function prepareVoucher(context: LedgerContext, kind: VoucherKind, body: { date: string; lines: LineInput[]; inventory?: ItemLineInput[]; itemLedgerId?: string | null }): Promise<PreparedVoucher> {
   const entered = body.lines.filter(line => line.derived !== true);
-  const plan = planItemLines(context, kind, body.inventory ?? [], body.itemLedgerId, entered.length);
+  // A stock journal needs inventory even before its lines are checked (an empty one included).
+  if (kind === 'stock_journal' && !await inventoryEnabled(context)) throw ledgerError(409, 'Inventory is switched off for this company. An owner or admin switches it on first.', 'feature_off');
+  const plan = planItemLines(context, kind, body.inventory ?? [], body.itemLedgerId ?? null, entered.length);
   let lines: PreparedLine[] = [];
   if (kind === 'stock_journal') {
     assertDateOpen(context, body.date);
@@ -251,7 +254,8 @@ async function movesPeriod(context: LedgerContext, before: Voucher, date: string
   return rows[0].moves;
 }
 
-const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');
+/** The idempotency hash of a parsed create body (without its key); fields left out are not part of it. */
+export const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');
 
 /** A posting's answer: the voucher plus what happened to its bill and cost rows that the caller may not expect. */
 export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };

@@ -7,7 +7,7 @@ import pg, { type PoolClient } from 'pg';
 import { getDatabase, migrationFiles } from '../src/server/db.ts';
 import type { LedgerContext } from '../src/server/ledger/context.ts';
 import { alterUnit, deleteItem, deleteTree, deleteUnit } from '../src/server/ledger/stock-masters.ts';
-import { cancelVoucher, createVoucher } from '../src/server/ledger/vouchers.ts';
+import { cancelVoucher, createVoucher, deleteVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { accountingTables, assertDatabaseRoles, setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
@@ -528,4 +528,38 @@ test('two sessions deleting one row each of a two-row stock journal: the second 
     await repeatable.client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2 AND entry_no = 2', [companyId, journal]);
     await assert.rejects(repeatable.client.query('SET CONSTRAINTS ALL IMMEDIATE'), code('25001', 'inventory_line_kind'));
   } finally { await repeatable.end('ROLLBACK'); }
+});
+
+test('two rows added to one invoice line cannot pass its sum check together: in READ COMMITTED the second waits and is refused; in REPEATABLE READ it is refused', async () => {
+  // Write skew: each session adds 100 to a line of 100 and runs its checks before either commits.
+  const skewed = await bareSale(100);
+  const add = (entry: number) => async (client: PoolClient) => { await addRow(skewed, '1', 100, entry)(client); await client.query('SET CONSTRAINTS ALL IMMEDIATE'); };
+  const first = await openApp();
+  let second: Promise<unknown> | undefined;
+  try {
+    await add(1)(first.client);
+    second = asApp(add(2));
+    assert.equal(await state(second), 'waiting', 'the second check waits for the first');
+    await first.end('COMMIT');
+    await assert.rejects(second, code('23514', 'inventory_line_total'), 'and then sees the first row');
+  } finally { await first.end('ROLLBACK'); await second?.catch(() => undefined); }
+  // A stale snapshot, no concurrency needed: a row committed after the snapshot would be missed.
+  const stale = await bareSale(100);
+  const repeatable = await openApp('REPEATABLE READ');
+  try {
+    await repeatable.client.query('SELECT 1 FROM company');
+    await asApp(addRow(stale, '1', 100, 1));
+    await addRow(stale, '1', 100, 2)(repeatable.client);
+    await assert.rejects(repeatable.client.query('SET CONSTRAINTS ALL IMMEDIATE'), code('25001', 'inventory_line_total'));
+  } finally { await repeatable.end('ROLLBACK'); }
+  for (const voucher of [skewed, stale]) {
+    assert.equal(Number((await one('SELECT coalesce(sum(amount), 0) AS sum FROM inventory_line WHERE company_id = $1 AND voucher_id = $2', [companyId, voucher])).sum), 100, 'the line still carries 100');
+  }
+});
+
+test('a soft-deleted voucher\'s item rows are frozen like a cancelled one\'s', async () => {
+  const posted = await write(posting(ids.bolt, ids.main, '1'));
+  await write(context => deleteVoucher(context, posted.voucher.id, { revision: posted.voucher.revision }));
+  await assert.rejects(asApp(client => client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2', [companyId, posted.voucher.id])), code('23514', 'voucher_lines_frozen'));
+  await assert.rejects(asApp(addRow(posted.voucher.id, '1', 750, 2)), code('23514', 'voucher_lines_frozen'));
 });

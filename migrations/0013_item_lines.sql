@@ -96,7 +96,10 @@ CREATE TRIGGER inventory_line_guard BEFORE INSERT OR DELETE ON inventory_line FO
 
 -- At commit, for every inserted or deleted row: an inserted row fits its voucher's kind as it is then (a type change
 -- in the same transaction included); the rows on one line add up to that line's amount (read through the line index);
--- a stock journal keeps at least one row. Rows are never updated and a line's rows go with it, so this is complete
+-- a stock journal keeps at least one row. The last two decide from other rows, so they run in READ COMMITTED only
+-- (from an older snapshot they would miss a row committed meanwhile), and the check locks the voucher row as it reads
+-- its kind (no read beyond the one it makes anyway): two sessions adding to one line, or each deleting one of a stock
+-- journal's rows, then check one after the other. Rows are never updated and a line's rows go with it, so this is complete
 -- with voucher_assert_balanced, which checks the rows again when the voucher itself changes (a type change).
 CREATE FUNCTION inventory_line_assert_line() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
@@ -107,9 +110,13 @@ BEGIN
   IF TG_OP = 'DELETE' THEN v_row := OLD; ELSE v_row := NEW; END IF;
   PERFORM ledger_assert_scope(v_row.company_id);
   SELECT t.kind INTO v_kind FROM voucher v JOIN voucher_type t ON t.company_id = v.company_id AND t.id = v.voucher_type_id
-  WHERE v.company_id = v_row.company_id AND v.id = v_row.voucher_id;
+  WHERE v.company_id = v_row.company_id AND v.id = v_row.voucher_id FOR NO KEY UPDATE OF v;
   -- Removed with its company: nothing left to check.
   IF NOT FOUND THEN RETURN NULL; END IF;
+  IF (v_row.line_no IS NOT NULL OR (TG_OP = 'DELETE' AND v_kind = 'stock_journal')) AND current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'item lines are written in READ COMMITTED transactions only' USING ERRCODE = '25001',
+      CONSTRAINT = CASE WHEN v_row.line_no IS NOT NULL THEN 'inventory_line_total' ELSE 'inventory_line_kind' END;
+  END IF;
   IF v_row.line_no IS NOT NULL THEN
     SELECT * INTO v_line FROM voucher_line WHERE company_id = v_row.company_id AND voucher_id = v_row.voucher_id AND line_no = v_row.line_no;
     -- The line is gone, and its rows with it (an alter replaced it): nothing left to check on it.
@@ -120,12 +127,6 @@ BEGIN
     RAISE EXCEPTION 'an item line of voucher % does not fit its kind %', v_row.voucher_id, v_kind USING ERRCODE = '23514', CONSTRAINT = 'inventory_line_kind';
   END IF;
   IF TG_OP = 'DELETE' AND v_kind = 'stock_journal' THEN
-    -- Two sessions deleting one row each must not both see the other's row still there (a write skew): the check locks
-    -- the voucher, so the second waits for the first to commit and then reads afresh. That needs READ COMMITTED.
-    IF current_setting('transaction_isolation') <> 'read committed' THEN
-      RAISE EXCEPTION 'stock journal rows are deleted in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'inventory_line_kind';
-    END IF;
-    PERFORM 1 FROM voucher WHERE company_id = v_row.company_id AND id = v_row.voucher_id FOR NO KEY UPDATE;
     IF NOT EXISTS (SELECT 1 FROM inventory_line WHERE voucher_id = v_row.voucher_id AND company_id = v_row.company_id) THEN
       RAISE EXCEPTION 'stock journal % keeps at least one item line', v_row.voucher_id USING ERRCODE = '23514', CONSTRAINT = 'inventory_line_kind';
     END IF;

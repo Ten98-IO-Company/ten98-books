@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseMoney } from '@ten98/runtime';
+import { voucherCreateInput } from '../src/lib/ledger.ts';
 import { lineAmount, lineFactor } from '../src/server/ledger/item-lines.ts';
+import { derivedRateFits } from '../src/server/ledger/stock-masters.ts';
+import { requestHash } from '../src/server/ledger/vouchers.ts';
 
 /** Item lines' pure checks (M2b slice b1): the migration's scoped region and the line arithmetic. */
 
@@ -49,4 +52,20 @@ test('the line factor is exact, and rounding is per line', () => {
   assert.equal(lineAmount('10.00', '1.2345', null, 2), 1235n);
   assert.equal(lineAmount('0.01', '1', '50', 2), 1n, 'half a fils rounds up');
   assert.equal(lineAmount('1.005', '1', null, 3), 1005n);
+});
+
+test('a create body without the fields of slice b1 hashes as before them (the value pinned from the code at 0012, dev db8d240)', () => {
+  const { idempotencyKey: _key, ...parsed } = voucherCreateInput.parse({ idempotencyKey: 'pin-hash-1', voucherTypeId: '01900000-0000-7000-8000-000000000001', date: '2026-02-01',
+    lines: [{ ledgerId: '01900000-0000-7000-8000-000000000002', side: 'Dr', amount: '100.00' }, { ledgerId: '01900000-0000-7000-8000-000000000003', side: 'Cr', amount: '100.00' }] });
+  assert.equal(requestHash(parsed), '6c199bc95195d442f90dcc81bcdf25973efa5c26bf7fa29e9f623320a4cf1c85');
+  assert.equal('itemLedgerId' in parsed, false);
+  assert.equal('inventory' in parsed, false);
+});
+
+test('a derived rate is checked against the quantity less its discount', () => {
+  const nearlyFree = lineFactor('1', '99.9999');
+  assert.equal(nearlyFree, '0.000001');
+  assert.equal(derivedRateFits(9_999_999_999n, nearlyFree, 2), true, '99,999,999.99 at 99.9999 %: a rate below 10^14');
+  assert.equal(derivedRateFits(10_000_000_000n, nearlyFree, 2), false, '100,000,000.00 at 99.9999 %: 10^14');
+  assert.equal(derivedRateFits(10_000_000_000n, '1', 2), true, 'without the discount it would fit');
 });

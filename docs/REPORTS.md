@@ -64,7 +64,7 @@ Not built yet, all observed: the centre summary under a category (which lists on
 
 ### Stock (M2b slice a)
 
-Item lines (slice b1, [LEDGER.md](LEDGER.md) "Item lines") move quantities only. A posted item line changes the item's quantity and, on an invoice, its derived ledger line, which posts like any ledger line; it does not change the "Opening stock" row, profit and loss opening or closing stock, the balance sheet's closing stock or the opening difference. No cost of goods is posted, and a stock journal posts nothing to the accounts. So every statement below balances as before.
+Item lines (slice b1, [LEDGER.md](LEDGER.md) "Item lines") move quantities only. A posted item line moves the item's quantity (readable from slice b2) and, on an invoice, posts its derived ledger line, which posts like any ledger line; it does not change the "Opening stock" row, profit and loss opening or closing stock, the balance sheet's closing stock or the opening difference. No cost of goods is posted, and a stock journal posts nothing to the accounts. So every statement below balances as before.
 
 A company that holds opening stock (any `stock_opening` row, [LEDGER.md](LEDGER.md) "Stock masters") gets stock lines in the statements. Until valuation arrives (slice c) the stock value at every date is the opening rows' value, so the lines below are frozen at it and no statement's profit changes.
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, chart, createCompany, setupOwner, type Chart, type Member } from './helpers/ledger.ts';
@@ -114,6 +114,8 @@ test('line arithmetic: half-up per line, an amount typed over the rate wins, the
     [{ itemId: ids.bolt, quantity: '1', rate: '1.00', discountPercent: '100' }, 'a discount of 100', /discount/],
     [{ itemId: ids.rod, quantity: '1.125', rate: '1.00' }, 'more places than the unit', /^The quantity of item line 1 has more decimal places than the unit Kg allows \(2\)\.$/],
     [{ itemId: ids.bolt, quantity: '1', rate: '1.00', direction: 'in' }, 'a sale coming in', /^On a sales every item line goes out; item line 1 says in\.$/],
+    // The discount is in the divisor: at 99.9999 % a line of one unit worth 100,000,000.00 has a rate of 10^14.
+    [{ itemId: ids.bolt, quantity: '1', amount: '100000000.00', discountPercent: '99.9999' }, 'a rate beyond the column through a discount', /^The amount of item line 1 is too large for its quantity/],
   ];
   // Balanced at the line's own amount where it has one, so each refusal is the one named.
   for (const [row, what, message] of cases) await refused('/vouchers', sale([{ locationId: ids.main, ...row }], row.quantity === '1.125' ? '1.13' : '1.00'), 400, 'validation', what, message);
@@ -220,6 +222,8 @@ test('the location may be left out only while the company has one; item lines ne
     lines: [{ ledgerId: customer, side: 'Dr', amount: '3.00' }], itemLedgerId: sales, inventory: [{ itemId: item, quantity: '1', rate: '3.00' }] }, 409, 'feature_off', 'inventory off', undefined, single);
   // Items and locations of another company are not found here.
   await refused('/vouchers', sale([{ itemId: item, locationId: ids.main, quantity: '1', rate: '1.00' }], '1.00'), 400, 'not_found', 'another company\'s item', /^The item on item line 1 was not found in this company\.$/);
+  // A stock journal needs inventory on, even an empty one.
+  await refused('/vouchers', { idempotencyKey: `off-${randomUUID()}`, voucherTypeId: theirs.type('stock_journal'), date: '2026-02-10', lines: [], inventory: [] }, 409, 'feature_off', 'an empty stock journal with inventory off', undefined, single);
 });
 
 test('cancel and delete keep a voucher\'s item lines for the record; masters with item lines are in use', async () => {
@@ -249,4 +253,36 @@ test('the day book counts a stock journal, which has no ledger lines', async () 
   await ok('/vouchers', { idempotencyKey: `db-${randomUUID()}`, voucherTypeId: theirs.type('receipt'), date: '2026-03-03', lines: [{ ledgerId: cash, side: 'Dr', amount: '5.00' }, { ledgerId: income, side: 'Cr', amount: '5.00' }] }, 201, other);
   const book = (await ok('/reports/day-book?from=2026-03-01&to=2026-03-31', undefined, 200, other)).report;
   assert.deepEqual([book.totals.vouchers, book.rows.length, book.rows[0].particulars, book.rows[0].amount], [2, 2, null, '0.00']);
+});
+
+test('a create without the new fields is stored under the request hash the code before item lines gave it, so a retry across the upgrade replays', async () => {
+  const payload = { idempotencyKey: `pin-${randomUUID()}`, voucherTypeId: accounts.type('journal'), date: '2026-02-11',
+    lines: [{ ledgerId: ids.customer, side: 'Dr', amount: '100.00' }, { ledgerId: ids.sales, side: 'Cr', amount: '100.00' }] };
+  // The body as that code parsed and hashed it: the defaults in its order, no field of M2b slice b1.
+  const before = JSON.stringify({ voucherTypeId: payload.voucherTypeId, date: payload.date, narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, lines: payload.lines });
+  const first = await call('/vouchers', payload);
+  assert.equal(first.status, 201);
+  const stored = (await asAdmin(database.adminUrl, admin => admin.query('SELECT request_hash FROM voucher WHERE company_id = $1 AND id = $2', [companyId, first.body.voucher.id]))).rows[0].request_hash;
+  assert.equal(stored, createHash('sha256').update(before).digest('hex'));
+  const again = await call('/vouchers', payload);
+  assert.deepEqual([again.status, again.body.voucher.id], [200, first.body.voucher.id], 'replayed, not refused as idempotency_mismatch');
+});
+
+test('a voucher entered cancelled with item lines is refused, not stripped; a stock journal follows the books beginning and the period lock', async () => {
+  await refused('/vouchers', sale([{ itemId: ids.bolt, locationId: ids.main, quantity: '1', rate: '1.00' }], '1.00', { status: 'cancelled', lines: [] }), 400, 'validation', 'a void with item lines', /^A voucher entered as cancelled has no lines\.$/);
+  const journal = (date: string) => body('stock_journal', [], [{ itemId: ids.bolt, locationId: ids.main, quantity: '1', rate: '1.00', direction: 'in' }], { date });
+  await refused('/vouchers', journal('2025-12-31'), 400, 'before_books_beginning', 'a stock journal before the books begin');
+  await asAdmin(database.adminUrl, admin => admin.query("UPDATE company SET locked_through = '2026-01-31' WHERE company_id = $1", [companyId]));
+  try {
+    await refused('/vouchers', journal('2026-01-15'), 409, 'locked_period', 'a stock journal in the locked period');
+    assert.equal((await call('/vouchers', journal('2026-02-15'))).status, 201, 'after the lock');
+  } finally { await asAdmin(database.adminUrl, admin => admin.query('UPDATE company SET locked_through = NULL WHERE company_id = $1', [companyId])); }
+});
+
+test('a location used only by item lines is in use', async () => {
+  const shed = (await ok('/stock-locations', { name: 'Shed' })).stockLocation;
+  assert.equal(((await ok('/stock-locations')).stockLocations as any[]).find(row => row.id === shed.id).inUse, false);
+  await posted(body('stock_journal', [], [{ itemId: ids.bolt, locationId: shed.id, quantity: '1', rate: '1.00', direction: 'in' }]));
+  assert.equal(((await ok('/stock-locations')).stockLocations as any[]).find(row => row.id === shed.id).inUse, true);
+  assert.equal((await ok(`/stock-locations/${shed.id}`)).stockLocation.inUse, true);
 });
