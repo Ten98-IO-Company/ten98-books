@@ -30,7 +30,7 @@ A company comes into being in exactly two ways: first-user setup (which creates 
 | `GET /api/companies/<id>` | member | The company's settings. 409 with code `not_set_up` before setup. |
 | `POST /api/companies/<id>/setup` | owner, admin | Saves the books settings of a company that is not set up yet and names it; 409 `already_set_up` afterwards. |
 | `POST /api/workspaces/<id>/rename` | owner, admin | Renames the company. |
-| `/api/workspaces/<id>/team`, `/invitations`, `/members/...` | owner, admin | The company's team (shared team controller). |
+| `/api/workspaces/<id>/team`, `/invitations`, `/members/...` | owner, admin | The company's team (shared team controller). The workspace, member and invitation ids are matched in any letter case and lowercased before they reach the controller, which compares ids as written. |
 | `/api/companies/<id>/...` | member | Masters, vouchers and reports ([LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md)). |
 
 A user who is not a member of the company gets the same 404 "not found" as for a company that does not exist, on every route. A member of a company that is not set up yet gets 409 with code `not_set_up` on every company and books route (settings, masters, vouchers, reports and exports) that the member's role may use: reads for every member, writes for owners, admins and editors. The role is checked first, so a viewer's write gets the same 404 "not found" as on a set-up company. The ledger and reports answer it from the one place they load the company (`ledgerContext`); the code is in `ledgerErrorCodes` (`src/lib/ledger.ts`).

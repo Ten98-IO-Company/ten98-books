@@ -56,8 +56,8 @@
     "reason": "Cost categories and centres: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/currencies.ts": {
-    "count": 18,
-    "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+    "count": 19,
+    "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. The history of a deleted currency finds its id in the revision log by the code in a JSON snapshot (revision_log has no Drizzle schema yet). Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/masters.ts": {
     "count": 28,

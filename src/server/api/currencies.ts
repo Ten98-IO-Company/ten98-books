@@ -8,6 +8,11 @@ import { queryOf } from './reports.ts';
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
 // A code in the path is three letters, matched without case and addressed in capitals.
+/**
+ * Currency and rate bodies: a rates write names at most 200 currencies (`rates`, src/lib/currencies.ts). A row at its bounds
+ * is under 128 bytes (a code and three rates of 15 characters), plus 1 KiB for the date and the envelope.
+ */
+export const currencyBodyBytes = 200 * 128 + 1024;
 const currencyRoute = new RegExp(`${company}/currencies(?:/([a-z]{3})(?:/(delete|revisions|rates))?)?$`, 'i');
 const ratesRoute = new RegExp(`${company}/exchange-rates$`, 'i');
 const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
@@ -20,7 +25,7 @@ const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405
 export const currenciesApi: SignedInArea = async ({ request, url, path, user }) => {
   const write = async (companyId: string, run: (context: LedgerContext, body: unknown) => Promise<unknown>) => {
     await limit(`masters:${user.id}`, 120);
-    const body = await readLedgerBody(request);
+    const body = await readLedgerBody(request, currencyBodyBytes);
     return runLedger(user.id, companyId, 'write', context => run(context, body));
   };
 

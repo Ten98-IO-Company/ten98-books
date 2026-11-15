@@ -7,6 +7,8 @@ import { ageingCsv, billDetailCsv, billsOutstandingCsv, csvDocument, partyBillsC
 import { json, limit, type SignedInArea } from './http.ts';
 import { csvResponse, exportsPerMinute, queryOf } from './reports.ts';
 
+/** Ageing columns: at most 20 (`buckets`, src/lib/bills.ts), each under 64 bytes, plus 1 KiB for the envelope. */
+export const bucketsBodyBytes = 20 * 64 + 1024;
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
 const listRoute = new RegExp(`${company}/reports/(bills-outstanding|ageing)(/export)?$`, 'i');
@@ -63,6 +65,6 @@ export const billsApi: SignedInArea = async ({ request, url, path, user }) => {
   if (request.method === 'GET') return json({ buckets: await runLedger(user.id, match[1], 'read', readAgeingBuckets) });
   if (request.method !== 'POST') return notAllowed('GET, POST');
   await limit(`masters:${user.id}`, 120);
-  const body = await readLedgerBody(request);
+  const body = await readLedgerBody(request, bucketsBodyBytes);
   return json({ buckets: await runLedger(user.id, match[1], 'write', context => saveAgeingBuckets(context, body)) });
 };

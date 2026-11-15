@@ -161,12 +161,19 @@ async function requireFactorProof(client: PoolClient, request: Request, userId: 
   if (details.code) await rememberCode(client, userId, details.code);
 }
 
+/** 405 with the methods the path accepts. */
+function methodNotAllowed(allow: string): Response {
+  const response = json({ error: 'Method not allowed.' }, 405);
+  response.headers.set('allow', allow);
+  return response;
+}
+
 export async function handleAccountSecurity(request: Request, limit: Limit): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname.replace(/\/$/, '');
   // Exact public routes only; the upstream callback/token and proof APIs stay private.
   if (['/api/auth/password-reset-status', '/api/auth/request-password-reset', '/api/auth/reset-password'].includes(url.pathname)) {
     const status = url.pathname === '/api/auth/password-reset-status', asking = url.pathname === '/api/auth/request-password-reset';
-    if (request.method !== (status ? 'GET' : 'POST')) return json({ error: 'Method not allowed.' }, 405);
+    if (request.method !== (status ? 'GET' : 'POST')) return methodNotAllowed(status ? 'GET' : 'POST');
     if (url.search || url.hash) throw new FoundationError(400, 'Password recovery does not accept URL parameters.');
     if (status) {
       if (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0') throw new FoundationError(400, 'Read recovery availability without a request body.');
@@ -230,7 +237,7 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   const status = path === '/api/account/security';
   const mutation = Object.hasOwn(accountInputs, path);
   if (!signIn && !challenge && !status && !mutation) return null;
-  if (request.method !== (status ? 'GET' : 'POST')) return json({ error: 'Method not allowed.' }, 405);
+  if (request.method !== (status ? 'GET' : 'POST')) return methodNotAllowed(status ? 'GET' : 'POST');
   const input = status ? undefined : await readJson(request);
 
   if (signIn) {

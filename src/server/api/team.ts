@@ -10,7 +10,14 @@ import { team } from '../workspace-team.ts';
 import { readJson } from '../validation.ts';
 import { json, limit, limitWindow, type SignedInArea } from './http.ts';
 
+const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
+
 const id = '[0-9a-f-]{36}';
+/**
+ * The route patterns match without regard to case; the shared controller compares ids as written. So every matched part (the
+ * workspace, member and invitation ids, and the route words) is lowercased once, here.
+ */
+const matchLowered = (path: string, pattern: RegExp) => path.match(pattern)?.map(part => part.toLowerCase()) ?? null;
 
 // Fixed text: company and inviter names are member-chosen, so they never reach the installation's sender (phishing surface).
 function sendInvitationEmail(to: string, role: string, inviteUrl: string) {
@@ -22,14 +29,15 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
   const config = getConfig();
   // No POST /api/workspaces: a workspace is a company (D-03), so companies come only from first-user setup and
   // POST /api/companies, never without their books settings.
-  if (path === '/api/me' && request.method === 'GET') {
+  if (path === '/api/me' && request.method !== 'GET') return notAllowed('GET');
+  if (path === '/api/me') {
     const { pool } = getDatabase();
     const { rows } = await pool.query(
       // twoFactorLocked mirrors the shared controller's gate so the shell can explain the 403 before any workspace read.
       'SELECT w.id,w.name,m.role,EXISTS(SELECT 1 FROM workspace_two_factor_requirement r JOIN "user" u ON u.id=m.user_id WHERE r.workspace_id=w.id AND NOT u."twoFactorEnabled") AS "twoFactorLocked" FROM workspace w JOIN membership m ON m.workspace_id=w.id WHERE m.user_id=$1 ORDER BY w.created_at,w.id', [user.id]);
     return json({ user: { id: user.id, name: user.name, email: user.email }, instanceOperator: await team.isInstanceOperator(pool, user.id), workspaces: rows });
   }
-  let match = path.match(new RegExp(`^/api/workspaces/(${id})/(team|rename|invitations|transfer-ownership|two-factor)$`, 'i'));
+  let match = matchLowered(path, new RegExp(`^/api/workspaces/(${id})/(team|rename|invitations|transfer-ownership|two-factor)$`, 'i'));
   if (match) {
     if (request.method === 'GET' && match[2] === 'team') {
       // Lets managers see whether resend email can work; it never exposes the transport or its settings.
@@ -51,9 +59,11 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
         return json({ invitation: result.invitation, inviteUrl, email }, 201);
       }
     }
+    return notAllowed(match[2] === 'team' ? 'GET' : 'POST');
   }
-  match = path.match(new RegExp(`^/api/workspaces/(${id})/(members|invitations)/(${id})/(role|remove|revoke|resend|new-link)$`, 'i'));
-  if (match && request.method === 'POST') {
+  match = matchLowered(path, new RegExp(`^/api/workspaces/(${id})/(members|invitations)/(${id})/(role|remove|revoke|resend|new-link)$`, 'i'));
+  if (match && request.method !== 'POST') return notAllowed('POST');
+  if (match) {
     await limit(`team:${user.id}`, 60);
     const input = await readJson(request);
     if (match[2] === 'members' && match[4] === 'role') { await changeRole(match[1], user.id, match[3], input); return json({ ok: true }); }

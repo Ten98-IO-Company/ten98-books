@@ -125,9 +125,17 @@ export async function deleteCurrency(context: LedgerContext, code: string, value
   await logRevision(context, 'currency', before.id, 'delete', snapshot(before), null);
 }
 
+/**
+ * A currency's history by its code: the current currency's, or, once it is deleted, that of the last currency the company
+ * had under the code, so a deleted currency's history stays readable; 404 when the company never had the code.
+ */
 export async function currencyRevisions(context: LedgerContext, code: string): Promise<Revision[]> {
-  const currency = await readCurrency(context, code);
-  return listRevisions(context, 'currency', currency.id);
+  const current = await readCurrency(context, code).catch(error => { if (error === notFound) return null; throw error; });
+  const id = current?.id ?? (await context.client.query<{ id: string }>(
+    `SELECT entity_id AS id FROM revision_log WHERE company_id = $1 AND entity = 'currency' AND coalesce(before, after)->>'code' = $2 ORDER BY id DESC LIMIT 1`,
+    [context.company.companyId, code])).rows[0]?.id;
+  if (!id) throw notFound;
+  return listRevisions(context, 'currency', id);
 }
 
 /** Every rate row of one currency, by kind and date. */

@@ -18,6 +18,10 @@ function authRequest(request: Request, body?: string) {
 /** Session state, first-user setup, sign-out and the public invitation routes; reachable signed out. */
 export const sessionApi: ApiArea = async ({ request, path }) => {
   const config = getConfig();
+  // Known public paths answer a wrong method with 405 and the methods they accept, signed in or out.
+  const accepts = path === '/api/session' || path === '/api/status' ? 'GET'
+    : ['/api/auth/setup', '/api/auth/sign-out', '/api/invitations/inspect', '/api/invitations/accept'].includes(path) ? 'POST' : null;
+  if (accepts && request.method !== accepts) return json({ error: 'Method not allowed.' }, 405, { allow: accepts });
   // Neither route reveals a user when signed out; /api/status is the configured-only probe.
   if ((path === '/api/session' || path === '/api/status') && request.method === 'GET') {
     const { rows } = await getDatabase().pool.query("SELECT claimed FROM installation WHERE id='instance'");

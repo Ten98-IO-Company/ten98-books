@@ -34,11 +34,13 @@ export async function handleApi(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, '');
-    if (path === '/api/health/live' && request.method === 'GET') return json({ status: 'alive' });
+    // The health probes are public: a wrong method answers 405 with the one it accepts, before any other check.
+    if ((path === '/api/health/live' || path === '/api/health/ready') && request.method !== 'GET') return json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
+    if (path === '/api/health/live') return json({ status: 'alive' });
     await assertSchema();
     // D-03: never serve as a role that would make row-level security inert.
     await assertRoles();
-    if (path === '/api/health/ready' && request.method === 'GET') return json({ status: 'ready' });
+    if (path === '/api/health/ready') return json({ status: 'ready' });
     // Discover's central request-forgery gate: every state-changing request must come from the application's own origin
     // (a missing Origin is refused too). Discover applies it to POST; here it covers every non-reading method, which
     // includes PUT /api/account/keymap.

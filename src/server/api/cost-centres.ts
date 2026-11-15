@@ -5,7 +5,7 @@ import {
   alterCostCategory, alterCostCentre, costDefault, createCostCategory, createCostCentre, deleteCostCategory, deleteCostCentre,
   getCostCategory, getCostCentre, listCostCategories, listCostCentres, readCostCentresSetting, saveCostCentresSetting,
 } from '../ledger/cost-centres.ts';
-import { listRevisions } from '../ledger/revisions.ts';
+import { masterHistory } from '../ledger/revisions.ts';
 import { costCategorySummary, costCentreBreakup } from '../reports/cost-centres.ts';
 import { costCategorySummaryCsv, costCentreBreakupCsv, csvDocument } from '../reports/csv.ts';
 import { json, limit, type SignedInArea } from './http.ts';
@@ -58,7 +58,7 @@ export const costCentresApi: SignedInArea = async ({ request, url, path, user })
     }
     if (action === 'revisions') {
       if (request.method !== 'GET') return notAllowed('GET');
-      return json({ revisions: await runLedger(user.id, companyId, 'read', context => listRevisions(context, handler.entity, itemId)) });
+      return json({ revisions: await runLedger(user.id, companyId, 'read', context => masterHistory(context, handler.entity, itemId, handler.read)) });
     }
     if (action === 'delete') {
       if (request.method !== 'POST') return notAllowed('POST');

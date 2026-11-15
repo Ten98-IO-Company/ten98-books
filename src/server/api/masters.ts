@@ -4,10 +4,16 @@ import {
   alterGroup, alterLedger, alterVoucherType, createGroup, createLedger, deleteGroup, deleteLedger,
   getGroup, getLedger, listGroups, listLedgers, listVoucherTypes, readVoucherType,
 } from '../ledger/masters.ts';
-import { listRevisions } from '../ledger/revisions.ts';
+import { masterHistory } from '../ledger/revisions.ts';
 import { json, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/**
+ * Master bodies: a ledger carries at most 500 opening bills (`opening.bills`, src/lib/ledger.ts). A bill row at its bounds
+ * is under 450 bytes (a 100-character name at 3 bytes a character, a date, a credit period and a 40-character amount),
+ * plus 4 KiB for the ledger's own fields.
+ */
+export const masterBodyBytes = 500 * 450 + 4096;
 const route = new RegExp(`^/api/companies/(${uuid})/(groups|ledgers|voucher-types)(?:/(${uuid})(?:/(delete|revisions))?)?$`, 'i');
 const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
@@ -41,7 +47,7 @@ export const mastersApi: SignedInArea = async ({ request, path, user }) => {
   const itemId = rawId?.toLowerCase();
   const write = async (run: (context: LedgerContext, body: unknown) => Promise<unknown>) => {
     await limit(`masters:${user.id}`, 120);
-    const body = await readLedgerBody(request);
+    const body = await readLedgerBody(request, masterBodyBytes);
     return runLedger(user.id, companyId, 'write', context => run(context, body));
   };
 
@@ -54,7 +60,7 @@ export const mastersApi: SignedInArea = async ({ request, path, user }) => {
   if (action === 'revisions') {
     if (request.method !== 'GET') return notAllowed('GET');
     // History outlives the master: a deleted group or ledger keeps its log, so this does not require the row to exist.
-    return json({ revisions: await runLedger(user.id, companyId, 'read', context => listRevisions(context, handler.entity, itemId)) });
+    return json({ revisions: await runLedger(user.id, companyId, 'read', context => masterHistory(context, handler.entity, itemId, handler.read)) });
   }
   if (action === 'delete') {
     const remove = handler.remove;
