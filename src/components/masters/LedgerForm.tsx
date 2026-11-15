@@ -1,4 +1,5 @@
-import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
@@ -73,7 +74,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
   const refocus = useRef(false)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const openings = useOpeningTotals(company.id, company.booksBeginning)
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
   // A name another master already has is an error on the Name field, found by the server's code.

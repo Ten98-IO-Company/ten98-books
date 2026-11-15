@@ -31,8 +31,8 @@ export interface CommandDefinition {
 export const commands = {
   'help.keyboard': { title: 'Show keyboard shortcuts', context: 'global' },
   'nav.back': { title: 'Go back one level', context: 'global' },
-  // Ctrl+Q in classic. A separate command from nav.back so that it still works from a text field, where the shell turns
-  // nav.back off to leave Escape to the field (keepsEscape).
+  // Ctrl+Q in classic. A separate command from nav.back so that it still works from a text field, which keeps Escape for
+  // itself (nav.back does not opt in to text input).
   'nav.quit': { title: 'Leave this screen', context: 'global' },
   'company.switch': { title: 'Change company', context: 'global' },
   // Two ways to open a screen from one list (the shell's dialog; a report registers its own, so the period carries over).
@@ -208,27 +208,3 @@ export function backSource(at: { path: string; index: number; step: number | nul
 /** The `aria-keyshortcuts` value for registry chords: space-separated, with Ctrl written Control as ARIA requires. */
 export const ariaKeyShortcuts = (keys: readonly string[]): string | undefined =>
   keys.length ? keys.map(chord => chord.split('+').map(part => part === 'Ctrl' ? 'Control' : part).join('+')).join(' ') : undefined
-
-/** The parts of a focused element the Escape guard reads, so tests can pass plain objects. */
-export interface FocusedElementLike {
-  readonly tagName: string
-  readonly isContentEditable?: boolean
-  readonly type?: string
-  getAttribute(name: string): string | null
-}
-
-const nonTextInputs = new Set(['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file', 'image'])
-const editableRoles = new Set(['combobox', 'textbox', 'searchbox', 'spinbutton'])
-
-/**
- * True when the focused element uses Escape itself (a text field, select, editable region or combobox), so `nav.back`
- * must leave the key alone. App-side guard: the `@ten98/ui` 0.37.0 resolver lets Escape run a command in a text field.
- * Delete it, and its use in KeyboardShell.tsx, once the engine keeps Escape with editable targets.
- */
-export function keepsEscape(element: FocusedElementLike | null | undefined): boolean {
-  if (!element) return false
-  const tag = element.tagName.toLowerCase()
-  if (tag === 'textarea' || tag === 'select' || element.isContentEditable === true) return true
-  if (tag === 'input') return !nonTextInputs.has((element.type || 'text').toLowerCase())
-  return editableRoles.has(element.getAttribute('role') ?? '')
-}

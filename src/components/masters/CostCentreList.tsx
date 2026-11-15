@@ -1,4 +1,5 @@
-import { Alert, Badge, Button, Inline, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Badge, Button, Inline, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAppCommand } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
@@ -65,7 +66,7 @@ function ListBody() {
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const rows = useMemo(() => categories && centres ? buildCostRows(categories, centres) : [], [categories, centres])
   const entries = useMemo(() => rows.map(row => entryOf(row, centres ?? [])), [rows, centres])
   // After a refused delete the row can be gone on reload: the cursor then goes to the neighbour it would have gone to.
