@@ -178,19 +178,8 @@ export async function insertItemLines(context: LedgerContext, voucherId: string,
     .catch(error => refusal(error, itemLineRefusals));
 }
 
-/**
- * Whether the item lines' table exists. Migration tests post vouchers through this code on a schema before 0013, then
- * migrate; once the table is seen it stays, so a running server asks once.
- */
-let itemLinesTable = false;
-async function hasItemLinesTable(context: LedgerContext): Promise<boolean> {
-  if (!itemLinesTable) itemLinesTable = (await context.client.query<{ present: boolean }>("SELECT to_regclass('inventory_line') IS NOT NULL AS present")).rows[0].present;
-  return itemLinesTable;
-}
-
 /** A voucher's item lines as stored, in entry order: the quantity in its unit's places, the rate with at least the currency's. */
 export async function readItemLines(context: LedgerContext, voucherId: string): Promise<InventoryLine[]> {
-  if (!await hasItemLinesTable(context)) return [];
   const { rows } = await context.client.query<InventoryLine>(
     `SELECT l.entry_no AS "entryNo", l.item_id AS "itemId", i.name AS "itemName", l.location_id AS "locationId", s.name AS "locationName", l.direction,
        round(l.quantity, u.decimals)::text AS quantity,

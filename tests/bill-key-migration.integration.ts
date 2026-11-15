@@ -5,9 +5,9 @@ import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import pg from 'pg';
 import { migrationFiles } from '../src/server/db.ts';
-import { createVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
+import { earlierVoucher } from './helpers/earlier-voucher.ts';
 import { inCompany } from './helpers/ledger.ts';
 
 /**
@@ -32,21 +32,21 @@ before(async () => {
     VALUES ($1, 'AED', 2, 1, 1, '2026-01-01', 'Asia/Dubai')`, [company]);
   await admin.query('SELECT ledger_seed_company($1)', [company]);
   await admin.query('COMMIT');
-  const posted = await inCompany(user, company, async context => {
+  const masters = await inCompany(user, company, async context => {
     const group = async (key: string) => (await context.client.query('SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2', [company, key])).rows[0].id;
     const sales = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, cost_centres) VALUES ($1, $2, $3, true) RETURNING id', [company, await group('sales'), 'Sales'])).rows[0].id;
     const party = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, bill_wise) VALUES ($1, $2, $3, true) RETURNING id', [company, await group('receivables'), 'Party'])).rows[0].id;
-    const type = (await context.client.query("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'sales'", [company])).rows[0].id;
-    return (await createVoucher(context, { idempotencyKey: `earlier-${randomUUID()}`, voucherTypeId: type, date: '2026-02-01',
-      lines: [{ ledgerId: party, side: 'Dr', amount: '100' }, { ledgerId: sales, side: 'Cr', amount: '100' }] })).voucher;
+    return { sales, party };
   }, 'write');
+  // A sales voucher written as the earlier release stored it (the current posting code reads later tables).
+  const posted = { id: await earlierVoucher(admin, company, user, 'sales', '2026-02-01', [{ ledgerId: masters.party, side: 'Dr', amount: 10000 }, { ledgerId: masters.sales, side: 'Cr', amount: 10000 }]) };
   // The earlier release kept these apart (it compared names by case only).
   await admin.query('BEGIN');
   await admin.query("SELECT set_config('app.company_ids', $1, true)", [company]);
   for (const name of ['AB1', 'A-B1']) {
-    const bill = (await admin.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, 'AED') RETURNING id", [company, posted.lines[0].ledgerId, name])).rows[0].id;
+    const bill = (await admin.query("INSERT INTO bill (company_id, ledger_id, name, currency) VALUES ($1, $2, $3, 'AED') RETURNING id", [company, masters.party, name])).rows[0].id;
     await admin.query(`INSERT INTO bill_allocation (company_id, ledger_id, voucher_id, line_no, kind, bill_id, currency, side, amount, currency_amount, due_date)
-      VALUES ($1, $2, $3, 1, 'new_ref', $4, 'AED', 'Dr', 5000, 5000, '2026-02-01')`, [company, posted.lines[0].ledgerId, posted.id, bill]);
+      VALUES ($1, $2, $3, 1, 'new_ref', $4, 'AED', 'Dr', 5000, 5000, '2026-02-01')`, [company, masters.party, posted.id, bill]);
   }
   await admin.query('COMMIT');
 });

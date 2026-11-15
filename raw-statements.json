@@ -60,8 +60,8 @@
     "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/item-lines.ts": {
-    "count": 7,
-    "reason": "Item lines: the share locks on items and units and the key share on locations in id order, the location default, the insert with the rate derived in the database, the voucher read of its item lines and the table check. Item-line posting and guards: explicit row locks in id order and measured plans; written before D-12; converts after the cost-centre pilot."
+    "count": 6,
+    "reason": "Item lines: the share locks on items and units and the key share on locations in id order, the location default, the insert with the rate derived in the database and the voucher read of its item lines. Item-line posting and guards: explicit row locks in id order and measured plans; written before D-12; converts after the cost-centre pilot."
   },
   "src/server/ledger/masters.ts": {
     "count": 28,
