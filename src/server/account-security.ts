@@ -4,7 +4,7 @@ import { verifyPassword } from 'better-auth/crypto';
 import { ten98AuthPolicy } from '@ten98/runtime/auth';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
-import { FoundationError, getAuth } from './auth.ts';
+import { authCookiePrefix, FoundationError, getAuth } from './auth.ts';
 import { getConfig } from './config.ts';
 import { clientRateKey, clientRateLimit, emailLimitKey } from './client-rate-limit.ts';
 import { getDatabase } from './db.ts';
@@ -224,7 +224,12 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     const details = parsed(totp ? codeInput : backupInput, input);
     const perClient = clientRateLimit(request, 'two-factor');
     await limit(perClient.key, perClient.maximum);
-    const cookie = getSessionCookie(request, { cookieName: 'two_factor' }) ?? '';
+    // The sign-in challenge cookie, under the prefix the auth instance uses. Without one, or for a challenge that is not
+    // pending, the request is refused before the library runs, in the same words either way: nothing tells whether a
+    // challenge existed. Past this point every request has its own challenge (its own limiter key) and a user.
+    const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
+    const cookie = getSessionCookie(request, { cookiePrefix: authCookiePrefix(), cookieName: 'two_factor' });
+    if (!cookie) return refused();
     await limit(`two-factor:${createHash('sha256').update(cookie).digest('hex')}`, limits.twoFactorPerChallenge);
     return transaction(async (client, auth) => {
       if (await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } })) {
@@ -235,11 +240,12 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       const identifier = cookie.split('.')[0];
       const pending = await client.query<{ value: string }>('SELECT value FROM verification WHERE identifier=$1 AND "expiresAt">clock_timestamp()', [identifier]);
       const userId = pending.rows[0]?.value;
-      if (userId) await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
-      if (totp && userId && await isRepeatedCode(client, userId, details.code)) return json({ error: 'Wait for the next authenticator code, then try again.' }, 409);
+      if (!userId) return refused();
+      await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
+      if (totp && await isRepeatedCode(client, userId, details.code)) return json({ error: 'Wait for the next authenticator code, then try again.' }, 409);
       const response = await invoke(auth, request, totp ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', details);
       if (!response.ok) return rejected(response, 'The code was not accepted. Try another code or sign in again.');
-      if (totp && userId) await rememberCode(client, userId, details.code);
+      if (totp) await rememberCode(client, userId, details.code);
       return json({ ok: true }, 200, response);
     });
   }

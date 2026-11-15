@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { appOrigin } from '@ten98/runtime'
 import { createTen98Auth, type ResetPasswordMessage } from '@ten98/runtime/auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { hashPassword } from 'better-auth/crypto'
@@ -12,8 +13,18 @@ import { team } from './workspace-team.ts'
 
 export type { ResetPasswordMessage }
 
+/**
+ * The prefix of every auth cookie (`<prefix>.session_token`, `<prefix>.two_factor`, ...). It is computed exactly as the
+ * shared preset's default (`createTen98Auth`, which does not export it) and passed to the preset, so this is the one place
+ * the prefix comes from; code that reads an auth cookie by name uses it. tests/two-factor-sign-in.integration.ts checks the
+ * cookies the preset sets carry it.
+ */
+export function authCookiePrefix(appUrl = getConfig().appUrl): string {
+  return `ten98-${createHash('sha256').update(appOrigin(appUrl)).digest('hex').slice(0, 16)}`
+}
+
 // The shared Ten98 identity preset (passwords, sessions, two-factor, reset cleanup, error redaction, telemetry off).
-// The app keeps its routes, transactions, replay ledger and rate limiters. Cookie names use the origin-derived default.
+// The app keeps its routes, transactions, replay ledger and rate limiters.
 function createAuth(client?: PoolClient, captureReset?: (message: ResetPasswordMessage) => void) {
   const config = getConfig()
   return createTen98Auth({
@@ -21,6 +32,7 @@ function createAuth(client?: PoolClient, captureReset?: (message: ResetPasswordM
     appUrl: config.appUrl,
     secret: config.authSecret,
     appName: 'Books',
+    cookiePrefix: authCookiePrefix(config.appUrl),
     // Capture only; the security boundary sends after the outer transaction commits.
     ...(captureReset ? { sendResetPassword: captureReset } : {}),
   })
