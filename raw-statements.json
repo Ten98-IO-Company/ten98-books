@@ -59,6 +59,10 @@
     "count": 18,
     "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
+  "src/server/ledger/item-lines.ts": {
+    "count": 7,
+    "reason": "Item lines: the share locks on items and units and the key share on locations in id order, the location default, the insert with the rate derived in the database, the voucher read of its item lines and the table check. Item-line posting and guards: explicit row locks in id order and measured plans; written before D-12; converts after the cost-centre pilot."
+  },
   "src/server/ledger/masters.ts": {
     "count": 28,
     "reason": "Groups, ledgers and voucher types: writes with RETURNING under FOR UPDATE and key-share row locks, and a database function call. Not converted yet; conversion follows the cost-centre pilot (D-12)."
@@ -84,8 +88,8 @@
     "reason": "Voucher entry reads: the next number, ledger checks, the balance preview and the counter ledger (one CTE). Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/vouchers.ts": {
-    "count": 19,
-    "reason": "Voucher posting, alter, cancel and delete: row locks (FOR UPDATE, key share), an advisory lock, the numbering counter with ON CONFLICT, a row-value keyset read and bigint sums. Not converted yet; conversion follows the cost-centre pilot (D-12)."
+    "count": 20,
+    "reason": "Voucher posting, alter, cancel and delete: row locks (FOR UPDATE, key share), an advisory lock, the numbering counter with ON CONFLICT, a row-value keyset read and bigint sums. Not converted yet; conversion follows the cost-centre pilot (D-12). Raised from 19 to 20 in M2b slice b1 for the delete of a voucher's item lines on alter (item-line posting and guards: explicit row locks in id order and measured plans; written before D-12; converts after the cost-centre pilot)."
   },
   "src/server/reports/bills.ts": {
     "count": 16,
