@@ -35,6 +35,13 @@ async function send(member: Member | null, method: string, path: string, body?: 
 const code = (answer: { status: number; text: string }) => [answer.status, answer.text ? JSON.parse(answer.text).code ?? null : null];
 /** A body over `limit` bytes that would otherwise be valid JSON. */
 const oversized = (limit: number) => JSON.stringify({ name: 'Padded' }) + ' '.repeat(limit);
+/**
+ * The widest text a name field takes: `length` characters of one that is 3 bytes in UTF-8 and one UTF-16 unit (the schema
+ * counts units), after `lead`. The limits assume UTF-8 sent unescaped, as JSON.stringify writes it.
+ */
+const widest = (length: number, lead = '') => (lead + '€'.repeat(length)).slice(0, length);
+/** The longest amount a 2-decimal currency takes: 20 digits before the point (leading zeros allowed) and 2 after. */
+const longestAmount = (value: number) => `${value}.00`.padStart(23, '0');
 
 /**
  * Each route: the largest valid body (every row at its schema's list bound) is accepted and fits the limit; one row more is
@@ -44,10 +51,12 @@ test('ledger bodies: 500 opening bills are accepted, 501 refused by the schema, 
   const companyId = await createCompany(owner.browser, { name: 'Body Ledgers' });
   const writer = await invite(owner.browser, companyId, 'editor');
   const books = await chart(owner.browser, companyId);
+  const longestPeriod = { count: 3650, unit: 'month' };
   const body = (rows: number, name: string) => JSON.stringify({
-    name: `${name} ${'L'.repeat(100)}`.slice(0, 120), groupId: books.group('receivables'),
-    opening: { amount: `${rows}.00`, side: 'Dr', bills: Array.from({ length: rows }, (_, index) => ({
-      name: `${String(index).padStart(4, '0')}${'B'.repeat(96)}`, creditPeriod: { count: 3650, unit: 'month' }, amount: '1.00' })) },
+    name: widest(120, `${name} `), secondLanguageName: widest(120), groupId: books.group('receivables'),
+    opening: { amount: longestAmount(rows), side: 'Dr', bills: Array.from({ length: rows }, (_, index) => ({
+      kind: 'new_ref', name: widest(100, String(index).padStart(4, '0')), billDate: '2000-01-01', creditPeriod: longestPeriod, amount: longestAmount(1) })) },
+    billWise: true, creditPeriod: longestPeriod, creditDaysCheck: true, costCentres: false,
   });
   const largest = body(500, 'Largest');
   assert.ok(Buffer.byteLength(largest) <= masterBodyBytes, `${Buffer.byteLength(largest)} bytes, limit ${masterBodyBytes}`);
@@ -70,9 +79,12 @@ test('stock item bodies: 500 opening rows are accepted, 501 refused by the schem
     await admin.query('COMMIT');
     return rows.map(row => row.id as string);
   });
+  const group = (await call('/stock-groups', { name: 'Body Group' })).body.stockGroup.id;
+  const category = (await call('/stock-categories', { name: 'Body Category' })).body.stockCategory.id;
+  // Each row at its widest: the longest quantity (16 digits, 4 decimals) with the longest value (a 23-character amount).
   const body = (rows: number, name: string) => JSON.stringify({
-    name, unitId: unit, standardSellingRate: '99999999999999.99',
-    openings: locations.slice(0, rows).map(locationId => ({ locationId, quantity: '1.0000', rate: '99999.99' })),
+    name: widest(120, `${name} `), secondLanguageName: widest(120), groupId: group, categoryId: category, unitId: unit, standardSellingRate: '99999999999999.999999',
+    openings: locations.slice(0, rows).map(locationId => ({ locationId, quantity: '0000000000000001.0000', value: longestAmount(1) })),
   });
   const largest = body(500, 'Largest Item');
   assert.ok(Buffer.byteLength(largest) <= stockBodyBytes, `${Buffer.byteLength(largest)} bytes, limit ${stockBodyBytes}`);
@@ -106,7 +118,7 @@ test('ageing column bodies: 20 columns are accepted, 21 refused by the schema, m
   const companyId = await createCompany(owner.browser, { name: 'Body Buckets' });
   const writer = await invite(owner.browser, companyId, 'editor');
   const body = (rows: number) => JSON.stringify({ buckets: Array.from({ length: rows }, (_, index) => ({
-    fromDays: index === 0 ? 0 : 1700 + index, toDays: index === rows - 1 ? null : 1701 + index })) });
+    fromDays: index === 0 ? 0 : 36400 + index, toDays: index === rows - 1 ? null : 36401 + index })) });
   const largest = body(20);
   assert.ok(Buffer.byteLength(largest) <= bucketsBodyBytes, `${Buffer.byteLength(largest)} bytes, limit ${bucketsBodyBytes}`);
   const accepted = await send(writer, 'POST', `/api/companies/${companyId}/ageing-buckets`, largest);
@@ -136,6 +148,33 @@ test('team routes: an id in capitals is the same id for the owner, and an outsid
   }
 });
 
+test('every write route: an outsider with a body the route refuses gets the answer for a company that does not exist', async () => {
+  const companyId = await createCompany(owner.browser, { name: 'Outsider Writes' });
+  const outsider = { browser: browser(), userId: '' } as Member;
+  await setupOutsider(outsider);
+  const someone = randomUUID();
+  const writes = (id: string) => [
+    `/api/companies/${id}/setup`,
+    ...['rename', 'invitations', 'transfer-ownership', 'two-factor'].map(action => `/api/workspaces/${id}/${action}`),
+    ...['role', 'remove'].map(action => `/api/workspaces/${id}/members/${someone}/${action}`),
+    ...['revoke', 'resend', 'new-link'].map(action => `/api/workspaces/${id}/invitations/${someone}/${action}`),
+    ...['groups', 'ledgers', 'voucher-types', 'vouchers', 'cost-categories', 'cost-centres', 'stock-units', 'stock-groups', 'stock-categories', 'stock-locations', 'stock-items']
+      .flatMap(kind => [`/api/companies/${id}/${kind}`, `/api/companies/${id}/${kind}/${someone}`, `/api/companies/${id}/${kind}/${someone}/delete`]),
+    `/api/companies/${id}/vouchers/${someone}/cancel`, `/api/companies/${id}/vouchers/balance-preview`,
+    `/api/companies/${id}/currencies`, `/api/companies/${id}/currencies/xyz`, `/api/companies/${id}/currencies/xyz/delete`, `/api/companies/${id}/exchange-rates`,
+    `/api/companies/${id}/ageing-buckets`, `/api/companies/${id}/cost-centres-setting`, `/api/companies/${id}/inventory-setting`,
+  ];
+  const missing = writes(randomUUID());
+  for (const [index, path] of writes(companyId).entries()) {
+    // A body no route accepts (an unknown field), and one that is not JSON at all.
+    for (const body of [JSON.stringify({ unknownField: true }), '{not json']) {
+      const theirs = await send(outsider, 'POST', path, body), nowhere = await send(outsider, 'POST', missing[index], body);
+      assert.deepEqual(theirs, nowhere, `${path} ${body}`);
+      if (body.startsWith('{"')) assert.notEqual(theirs.status, 400, `${path}: ${theirs.text}`);
+    }
+  }
+});
+
 /** Signs a second person up through an invitation to a company of their own, so they are a member elsewhere only. */
 async function setupOutsider(person: Member): Promise<void> {
   const theirs = await createCompany(owner.browser, { name: 'Outsider Books' });
@@ -151,13 +190,14 @@ test('a known path with a wrong method answers 405 with Allow, signed in; public
   const ledger = (await owner.browser.call(`/api/companies/${companyId}/ledgers`, { name: 'Methods Ledger', groupId: books.group('capital') })).body.ledger.id;
   const company = `/api/companies/${companyId}`, workspace = `/api/workspaces/${companyId}`;
   const signedIn: [string, string, string][] = [
-    ['POST', '/api/health/live', 'GET'], ['POST', '/api/health/ready', 'GET'], ['POST', '/api/status', 'GET'], ['POST', '/api/session', 'GET'],
+    ['POST', '/api/health/live', 'GET, HEAD'], ['POST', '/api/health/ready', 'GET, HEAD'], ['POST', '/api/status', 'GET'], ['POST', '/api/session', 'GET'],
     ['DELETE', '/api/me', 'GET'], ['PUT', '/api/account/security', 'GET'], ['GET', '/api/auth/sign-out', 'POST'], ['GET', '/api/invitations/inspect', 'POST'],
     ['DELETE', '/api/companies', 'GET, POST'], ['PUT', `${workspace}/team`, 'GET'], ['GET', `${workspace}/rename`, 'POST'], ['GET', `${workspace}/members/${owner.userId}/role`, 'POST'],
     ['DELETE', `${company}/ledgers`, 'GET, POST'], ['PUT', `${company}/ledgers/${ledger}`, 'GET, POST'], ['GET', `${company}/ledgers/${ledger}/delete`, 'POST'],
     ['POST', `${company}/ledgers/${ledger}/revisions`, 'GET'], ['DELETE', `${company}/vouchers`, 'GET, POST'], ['PUT', `${company}/cost-categories`, 'GET, POST'],
     ['DELETE', `${company}/stock-units`, 'GET, POST'], ['PUT', `${company}/currencies`, 'GET, POST'], ['DELETE', `${company}/exchange-rates`, 'GET, POST'],
     ['PUT', `${company}/ageing-buckets`, 'GET, POST'], ['DELETE', '/api/account/keymap', 'GET, PUT'], ['DELETE', '/api/account/preferences', 'GET, POST'],
+    ['GET', '/api/account/password', 'POST'], ['GET', '/api/account/two-factor/disable', 'POST'],
   ];
   for (const [method, path, allow] of signedIn) {
     const answer = await send(owner, method, path, method === 'GET' ? undefined : '{}');
@@ -167,8 +207,20 @@ test('a known path with a wrong method answers 405 with Allow, signed in; public
     const answer = await send(null, method, path, method === 'GET' ? undefined : '{}');
     assert.deepEqual([answer.status, answer.allow], [405, allow], `signed out ${method} ${path}`);
   }
-  for (const [method, path] of signedIn.filter(([, path]) => path.startsWith(company) || path.startsWith(workspace) || path === '/api/me')) {
+  // Account status and changes check the session before the method: signed out, a wrong method is 401 there too.
+  for (const [method, path] of signedIn.filter(([, path]) => path.startsWith(company) || path.startsWith(workspace) || path.startsWith('/api/account/') || path === '/api/me')) {
     assert.equal((await send(null, method, path, method === 'GET' ? undefined : '{}')).status, 401, `signed out ${method} ${path} shows no route map`);
+  }
+});
+
+test('the health probes answer HEAD as GET without a body, and a cross-origin write is refused there as on every path', async () => {
+  for (const path of ['/api/health/live', '/api/health/ready']) {
+    const get = await handleApi(new Request(new URL(path, getConfig().appUrl)));
+    const head = await handleApi(new Request(new URL(path, getConfig().appUrl), { method: 'HEAD' }));
+    assert.equal(get.status, 200, path);
+    assert.deepEqual([head.status, head.headers.get('content-type'), await head.text()], [200, get.headers.get('content-type'), ''], `HEAD ${path}`);
+    const foreign = await handleApi(new Request(new URL(path, getConfig().appUrl), { method: 'POST', headers: { origin: 'https://elsewhere.test' } }));
+    assert.equal(foreign.status, 403, `cross-origin POST ${path}`);
   }
 });
 
@@ -210,4 +262,10 @@ test('history reads: an id the company never had (or another company\'s) answers
   assert.equal((await call('/currencies/USD/delete', { revision: 1 })).status, 200);
   const usd = await call('/currencies/USD/revisions');
   assert.deepEqual([usd.status, usd.body.revisions.map((row: { action: string }) => row.action)], [200, ['create', 'delete']], 'a deleted currency\'s history');
+  // The code taken again and deleted again: its history is the last currency the company had under it.
+  assert.equal((await call('/currencies', { code: 'USD', symbol: 'U$', formalName: 'US Dollar Again', decimals: 2 })).status, 201);
+  assert.equal((await call('/currencies/USD/delete', { revision: 1 })).status, 200);
+  const again = await call('/currencies/USD/revisions');
+  assert.deepEqual([again.status, again.body.revisions.map((row: { action: string; before?: { symbol?: string }; after?: { symbol?: string } }) => [row.action, (row.after ?? row.before)?.symbol])],
+    [200, [['create', 'U$'], ['delete', 'U$']]], 'the history of the currency deleted last');
 });

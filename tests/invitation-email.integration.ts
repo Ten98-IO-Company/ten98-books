@@ -56,3 +56,24 @@ test('the screen tells a limited send from a failed one, without numbers', () =>
   assert.match(limited, /share this link yourself, or send it again later/i);
   assert.doesNotMatch(limited, /\d/);
 });
+
+test('an email admit that fails for a reason other than a limit answers failed, not limited', async t => {
+  const address = `admit-${randomUUID()}@books.test`;
+  const key = emailLimitKey('invitation-email', address).replaceAll("'", "''");
+  // The limit store refuses this address's count with an error that is not a limit's 429.
+  await asAdmin(database.adminUrl, async admin => {
+    await admin.query("CREATE FUNCTION test_limit_store_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'limit store unavailable'; END $$");
+    await admin.query(`CREATE TRIGGER test_limit_store_down BEFORE INSERT ON request_limit FOR EACH ROW WHEN (NEW.key = '${key}') EXECUTE FUNCTION test_limit_store_down()`);
+  });
+  // The send's own failure answers failed too: the installation-wide count shows the admit stopped before it, unspent.
+  const globalCount = () => asAdmin(database.adminUrl, async admin => Number((await admin.query("SELECT COALESCE(sum(count), 0) AS total FROM request_limit WHERE key = 'invitation-email:global'")).rows[0].total));
+  try {
+    const before = await globalCount();
+    const { answer, lines } = await inviteLogged(t, address);
+    assert.deepEqual([answer.status, answer.body.email], [201, 'failed']);
+    assert.equal(await globalCount(), before, 'the admit stopped at the address count');
+    assert.deepEqual(lines, [`Invitation email not sent: failed (invitation ${answer.body.invitation.id}).`]);
+  } finally {
+    await asAdmin(database.adminUrl, admin => admin.query('DROP TRIGGER test_limit_store_down ON request_limit; DROP FUNCTION test_limit_store_down()'));
+  }
+});

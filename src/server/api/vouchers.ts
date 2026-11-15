@@ -3,14 +3,13 @@ import { parseInput, readLedgerBody, runLedger, type LedgerContext } from '../le
 import { ledgerBalance, trialBalance } from '../ledger/reports.ts';
 import { listRevisions } from '../ledger/revisions.ts';
 import { alterVoucher, cancelVoucher, createVoucher, deleteVoucher, listVouchers, readVoucher } from '../ledger/vouchers.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
 const vouchersRoute = new RegExp(`${company}/vouchers(?:/(${uuid})(?:/(cancel|delete|revisions))?)?$`, 'i');
 const trialBalanceRoute = new RegExp(`${company}/trial-balance$`, 'i');
 const ledgerBalanceRoute = new RegExp(`${company}/ledgers/(${uuid})/balance$`, 'i');
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 /** Voucher bodies carry up to 500 lines. */
 const voucherBodyBytes = 256 * 1024;
 
@@ -25,13 +24,13 @@ const period = (url: URL) => parseInput(periodQuery, { from: url.searchParams.ge
 export const vouchersApi: SignedInArea = async ({ request, url, path, user }) => {
   let match = path.match(trialBalanceRoute);
   if (match) {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     const { from, to } = period(url);
     return json({ trialBalance: await runLedger(user.id, match[1], 'read', context => trialBalance(context, from, to)) });
   }
   match = path.match(ledgerBalanceRoute);
   if (match) {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     const { from, to } = period(url);
     const ledgerId = match[2].toLowerCase();
     return json({ balance: await runLedger(user.id, match[1], 'read', context => ledgerBalance(context, ledgerId, from, to)) });
@@ -55,22 +54,22 @@ export const vouchersApi: SignedInArea = async ({ request, url, path, user }) =>
       const result = await write(createVoucher);
       return json(result, result.replayed ? 200 : 201);
     }
-    return notAllowed('GET, POST');
+    return methodNotAllowed('GET, POST');
   }
   if (action === 'revisions') {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     return json({ revisions: await runLedger(user.id, companyId, 'read', context => listRevisions(context, 'voucher', voucherId)) });
   }
   if (action === 'cancel') {
-    if (request.method !== 'POST') return notAllowed('POST');
+    if (request.method !== 'POST') return methodNotAllowed('POST');
     return json(await write((context, body) => cancelVoucher(context, voucherId, body)));
   }
   if (action === 'delete') {
-    if (request.method !== 'POST') return notAllowed('POST');
+    if (request.method !== 'POST') return methodNotAllowed('POST');
     const { warnings } = await write((context, body) => deleteVoucher(context, voucherId, body));
     return json({ deleted: true, warnings });
   }
   if (request.method === 'GET') return json({ voucher: await runLedger(user.id, companyId, 'read', context => readVoucher(context, voucherId)) });
   if (request.method === 'POST') return json(await write((context, body) => alterVoucher(context, voucherId, body)));
-  return notAllowed('GET, POST');
+  return methodNotAllowed('GET, POST');
 };

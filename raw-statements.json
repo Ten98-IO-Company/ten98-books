@@ -27,6 +27,10 @@
     "count": 2,
     "reason": "Operator health check: a connection probe and a read of the worker heartbeat. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
+  "src/server/teams.ts": {
+    "count": 1,
+    "reason": "One membership read before a team write reads its body (the shared controller validates the body before its own membership check). The membership table belongs to the shared team controller's SQL and is not declared in the Drizzle schema, so there is no builder form without declaring it."
+  },
   "src/server/companies.ts": {
     "count": 10,
     "reason": "Company creation and books settings: row locks, an advisory lock, the idempotency row and the settings rows, in the same transaction as the shared team controller call. Not converted yet; conversion follows the cost-centre pilot (D-12)."

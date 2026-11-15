@@ -5,7 +5,7 @@ import {
   getGroup, getLedger, listGroups, listLedgers, listVoucherTypes, readVoucherType,
 } from '../ledger/masters.ts';
 import { masterHistory } from '../ledger/revisions.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 /**
@@ -15,7 +15,6 @@ const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
  */
 export const masterBodyBytes = 500 * 450 + 4096;
 const route = new RegExp(`^/api/companies/(${uuid})/(groups|ledgers|voucher-types)(?:/(${uuid})(?:/(delete|revisions))?)?$`, 'i');
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
 type Kind = 'groups' | 'ledgers' | 'voucher-types';
 type Handler = {
@@ -55,21 +54,21 @@ export const mastersApi: SignedInArea = async ({ request, path, user }) => {
     if (request.method === 'GET') return json({ [kind === 'voucher-types' ? 'voucherTypes' : kind]: await runLedger(user.id, companyId, 'read', handler.list) });
     const create = handler.create;
     if (request.method === 'POST' && create) return json({ [handler.key]: await write(create) }, 201);
-    return notAllowed(create ? 'GET, POST' : 'GET');
+    return methodNotAllowed(create ? 'GET, POST' : 'GET');
   }
   if (action === 'revisions') {
-    if (request.method !== 'GET') return notAllowed('GET');
+    if (request.method !== 'GET') return methodNotAllowed('GET');
     // History outlives the master: a deleted group or ledger keeps its log, so this does not require the row to exist.
     return json({ revisions: await runLedger(user.id, companyId, 'read', context => masterHistory(context, handler.entity, itemId, handler.read)) });
   }
   if (action === 'delete') {
     const remove = handler.remove;
     if (!remove) return null;
-    if (request.method !== 'POST') return notAllowed('POST');
+    if (request.method !== 'POST') return methodNotAllowed('POST');
     await write((context, body) => remove(context, itemId, body));
     return json({ deleted: true });
   }
   if (request.method === 'GET') return json({ [handler.key]: await runLedger(user.id, companyId, 'read', context => handler.read(context, itemId)) });
   if (request.method === 'POST') return json({ [handler.key]: await write((context, body) => handler.alter(context, itemId, body)) });
-  return notAllowed('GET, POST');
+  return methodNotAllowed('GET, POST');
 };

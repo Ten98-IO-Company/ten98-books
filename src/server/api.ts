@@ -7,7 +7,7 @@ import { handleAccountSecurity } from './account-security.ts';
 import { requireWorkspaceFactor } from './teams.ts';
 import { assertDatabaseRoles, DatabaseRoleError } from './tenancy.ts';
 import { InputError } from './validation.ts';
-import { json, limit, signedIn, type ApiArea, type SignedInArea } from './api/http.ts';
+import { json, limit, methodNotAllowed, signedIn, type ApiArea, type SignedInArea } from './api/http.ts';
 import { sessionApi } from './api/session.ts';
 import { teamApi } from './api/team.ts';
 import { companiesApi } from './api/companies.ts';
@@ -29,22 +29,53 @@ const accountApi: ApiArea = ({ request }) => handleAccountSecurity(request, limi
 
 /** Bound of each step of the readiness probe: connecting, and each statement. A probe answers within about twice this. */
 export const readinessStepMs = 2000;
+/** How long one readiness result is shared by the probes that follow it. */
+const readinessShareMs = 1000;
+let lastCheck: { url: string; at: number; pending: boolean; result: Promise<boolean> } | undefined;
+/** The probe's one connection, kept between checks while it works; never more than one for the whole process. */
+let probeClient: { url: string; client: pg.Client } | undefined;
+
+/** Drops the probe's connection, closing its socket at once (a database that never answers would hold a graceful end). */
+function dropProbeClient(): void {
+  const stream = (probeClient?.client as unknown as { connection?: { stream?: { destroy(): void } } } | undefined)?.connection?.stream;
+  stream?.destroy();
+  probeClient = undefined;
+}
+
 /**
- * Readiness on its own connection (not the request pool): connected, migrated and served by the application role. Any
- * failure to reach or use the database (refused, reset, timed out, shutting down or starting up, too many connections, the
- * role refused) answers false, never an error, within the bound above.
+ * One check, on the probe's own connection (apart from the request pool, so nothing a signed-out caller does to the probe
+ * can take a connection the application needs): connected, migrated and served by the application role. Any failure to
+ * reach or use the database (refused, reset, timed out, shutting down or starting up, too many connections, the role
+ * refused) answers false, never an error, and destroys that connection.
  */
-async function databaseReady(): Promise<boolean> {
-  const probe = new pg.Pool({ connectionString: getConfig().databaseUrl, max: 1, connectionTimeoutMillis: readinessStepMs, statement_timeout: readinessStepMs, query_timeout: readinessStepMs });
-  probe.on('error', () => undefined);
+async function checkDatabase(url: string): Promise<boolean> {
   try {
-    const client = await probe.connect();
-    try {
-      await migrationLedger.assertCurrent(client);
-      await assertDatabaseRoles(client);
-      return true;
-    } finally { client.release(); }
-  } catch { return false; } finally { await probe.end().catch(() => undefined); }
+    if (probeClient?.url !== url) {
+      dropProbeClient();
+      const client = new pg.Client({ connectionString: url, application_name: 'books-readiness', connectionTimeoutMillis: readinessStepMs, statement_timeout: readinessStepMs, query_timeout: readinessStepMs });
+      client.on('error', () => undefined);
+      probeClient = { url, client };
+      await client.connect();
+    }
+    const client = probeClient!.client;
+    await migrationLedger.assertCurrent(client);
+    // The role check reads through `query` only; a single client stands in for the pool client it is typed for.
+    await assertDatabaseRoles(client as unknown as pg.PoolClient);
+    return true;
+  } catch {
+    dropProbeClient();
+    return false;
+  }
+}
+
+/** Readiness: concurrent probes share one check in flight, and its result for `readinessShareMs` after it ends. */
+function databaseReady(): Promise<boolean> {
+  const url = getConfig().databaseUrl;
+  if (lastCheck?.url === url && (lastCheck.pending || Date.now() - lastCheck.at < readinessShareMs)) return lastCheck.result;
+  const check = { url, at: Date.now(), pending: true, result: checkDatabase(url) };
+  void check.result.then(() => { check.pending = false; check.at = Date.now(); });
+  lastCheck = check;
+  return check.result;
 }
 
 // The route table: public areas first, then areas that require a signed-in user. Each area answers only its own paths.
@@ -55,19 +86,24 @@ export async function handleApi(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, '');
-    // The health probes are public: a wrong method answers 405 with the one it accepts, before any other check.
-    if ((path === '/api/health/live' || path === '/api/health/ready') && request.method !== 'GET') return json({ error: 'Method not allowed.' }, 405, { allow: 'GET' });
-    if (path === '/api/health/live') return json({ status: 'alive' });
-    if (path === '/api/health/ready') return await databaseReady() ? json({ status: 'ready' }) : json({ error: 'The installation is not ready. Check configuration and database migrations.' }, 503);
-    await assertSchema();
-    // D-03: never serve as a role that would make row-level security inert.
-    await assertRoles();
     // Discover's central request-forgery gate: every state-changing request must come from the application's own origin
     // (a missing Origin is refused too). Discover applies it to POST; here it covers every non-reading method, which
-    // includes PUT /api/account/keymap.
+    // includes PUT /api/account/keymap. It runs first on every path, the health probes included.
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && request.headers.get('origin') !== getConfig().appUrl) {
       throw new FoundationError(403, 'This action must originate from the application.');
     }
+    // The health probes then check the method as the other public paths do, but answer before the schema and role checks
+    // below: liveness must not depend on the database, and readiness is that check itself (503, never an error). HEAD
+    // answers as GET does, without the body.
+    if (path === '/api/health/live' || path === '/api/health/ready') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
+      const answer = path === '/api/health/live' ? json({ status: 'alive' })
+        : await databaseReady() ? json({ status: 'ready' }) : json({ error: 'The installation is not ready. Check configuration and database migrations.' }, 503);
+      return request.method === 'HEAD' ? new Response(null, { status: answer.status, headers: answer.headers }) : answer;
+    }
+    await assertSchema();
+    // D-03: never serve as a role that would make row-level security inert.
+    await assertRoles();
     const context = { request, url, path };
     for (const area of publicAreas) {
       const response = await area(context);

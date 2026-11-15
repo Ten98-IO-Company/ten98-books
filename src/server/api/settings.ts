@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { defaultKeymap, keymapNames, type KeymapName } from '../../lib/keymaps.ts';
 import { getDatabase } from '../db.ts';
 import { readJson } from '../validation.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, limit, methodNotAllowed, type SignedInArea } from './http.ts';
 
 const keymapInput = z.object({ keymap: z.enum(keymapNames) }).strict();
 
@@ -27,5 +27,5 @@ export const settingsApi: SignedInArea = async ({ request, path, user }) => {
       ON CONFLICT (user_id) DO UPDATE SET keymap=excluded.keymap, updated_at=now()`, [user.id, keymap]);
     return json({ keymap, chosen: true } satisfies KeymapSetting);
   }
-  return json({ error: 'Method not allowed.' }, 405, { allow: 'GET, PUT' });
+  return methodNotAllowed('GET, PUT');
 };

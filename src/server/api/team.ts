@@ -5,12 +5,11 @@ import { getConfig } from '../config.ts';
 import { emailLimitKey } from '../client-rate-limit.ts';
 import { getDatabase } from '../db.ts';
 import { getEmailStatus, sendTransactionalEmail } from '../email.ts';
-import { changeRole, getTeam, inviteMember, removeMember, renameWorkspace, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
+import { changeRole, getTeam, inviteMember, removeMember, renameWorkspace, requireMembership, revokeInvitation, rotateInvitation, setTwoFactorRequirement, transferOwnership } from '../teams.ts';
 import { team } from '../workspace-team.ts';
 import { readJson } from '../validation.ts';
-import { json, limit, limitWindow, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, limitWindow, type SignedInArea } from './http.ts';
 
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
 const id = '[0-9a-f-]{36}';
 /**
@@ -40,7 +39,7 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
   const config = getConfig();
   // No POST /api/workspaces: a workspace is a company (D-03), so companies come only from first-user setup and
   // POST /api/companies, never without their books settings.
-  if (path === '/api/me' && request.method !== 'GET') return notAllowed('GET');
+  if (path === '/api/me' && request.method !== 'GET') return methodNotAllowed('GET');
   if (path === '/api/me') {
     const { pool } = getDatabase();
     const { rows } = await pool.query(
@@ -56,6 +55,7 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
     }
     if (request.method === 'POST') {
       await limit(`team:${user.id}`, 60);
+      await requireMembership(match[1], user.id);
       if (match[2] === 'transfer-ownership') return json(await transferOwnership(match[1], user.id, await readJson(request)));
       if (match[2] === 'two-factor') return json(await setTwoFactorRequirement(match[1], user.id, await readJson(request)));
       if (match[2] === 'rename') return json(await renameWorkspace(match[1], user.id, await readJson(request)));
@@ -68,12 +68,13 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
         return json({ invitation: result.invitation, inviteUrl, email }, 201);
       }
     }
-    return notAllowed(match[2] === 'team' ? 'GET' : 'POST');
+    return methodNotAllowed(match[2] === 'team' ? 'GET' : 'POST');
   }
   match = matchLowered(path, new RegExp(`^/api/workspaces/(${id})/(members|invitations)/(${id})/(role|remove|revoke|resend|new-link)$`, 'i'));
-  if (match && request.method !== 'POST') return notAllowed('POST');
+  if (match && request.method !== 'POST') return methodNotAllowed('POST');
   if (match) {
     await limit(`team:${user.id}`, 60);
+    await requireMembership(match[1], user.id);
     const input = await readJson(request);
     if (match[2] === 'members' && match[4] === 'role') { await changeRole(match[1], user.id, match[3], input); return json({ ok: true }); }
     if (match[2] === 'members' && match[4] === 'remove') { z.object({}).strict().parse(input); await removeMember(match[1], user.id, match[3]); return json({ ok: true }); }
@@ -82,7 +83,7 @@ export const teamApi: SignedInArea = async ({ request, path, user }) => {
       z.object({}).strict().parse(input);
       // Resend spends its budgets inside the rotation transaction after authorization and the pending check, so any refusal
       // rolls back every count it spent and leaves the current link working.
-      const [workspaceKey, invitationKey] = [match[1].toLowerCase(), match[3].toLowerCase()];
+      const [workspaceKey, invitationKey] = [match[1], match[3]];
       const admit = match[4] !== 'resend' ? undefined : async (client: PoolClient, invitation: { email: string }) => {
         if (!getEmailStatus().configured) throw new FoundationError(409, 'Email is not set up on this installation, so nothing was sent and the current link still works. Use New link to get a link you can copy and share yourself.');
         await limitWindow(`invitation-resend:${invitationKey}`, 3, 60, client);

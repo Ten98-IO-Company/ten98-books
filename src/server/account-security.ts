@@ -11,7 +11,7 @@ import { clientRateKey, clientRateLimit, emailLimitKey } from './client-rate-lim
 import { getDatabase } from './db.ts';
 import { getEmailStatus, sendTransactionalEmail } from './email.ts';
 import { readJson } from './validation.ts';
-import { toJson } from './api/http.ts';
+import { methodNotAllowed, toJson } from './api/http.ts';
 import { accountPreferencesDefaults, accountPreferencesDtoSchema, accountPreferencesInputSchema, accountPreferencesMaxRevision, type AccountPreferencesDto } from '../lib/account-preferences.ts';
 
 // Per-minute counts shared with the other Ten98 apps; `limit` counts in one-minute windows (windowSeconds).
@@ -165,13 +165,6 @@ async function requireFactorProof(client: PoolClient, request: Request, userId: 
   if (details.code) await rememberCode(client, userId, details.code);
 }
 
-/** 405 with the methods the path accepts. */
-function methodNotAllowed(allow: string): Response {
-  const response = json({ error: 'Method not allowed.' }, 405);
-  response.headers.set('allow', allow);
-  return response;
-}
-
 export async function handleAccountSecurity(request: Request, limit: Limit): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname.replace(/\/$/, '');
   // Exact public routes only; the upstream callback/token and proof APIs stay private.
@@ -241,6 +234,9 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   const status = path === '/api/account/security';
   const mutation = Object.hasOwn(accountInputs, path);
   if (!signIn && !challenge && !status && !mutation) return null;
+  // Account status and changes check the session before the method, the body or anything else, as every signed-in route
+  // does: signed out, each answers 401. Sign-in and the challenge routes are for callers without a session.
+  const identity = signIn || challenge ? null : await sessionOrRefuse(request);
   if (request.method !== (status ? 'GET' : 'POST')) return methodNotAllowed(status ? 'GET' : 'POST');
   const input = status ? undefined : await readJson(request);
 
@@ -301,7 +297,6 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
   }
 
   if (mutation) parsed(accountInputs[path as keyof typeof accountInputs], input);
-  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
   if (!identity) throw new FoundationError(401, 'Sign in to continue.');
   await limit(`account-security:${status ? 'read' : 'write'}:${identity.user.id}`, status ? limits.accountSecurityReadsPerUser : limits.accountSecurityWritesPerUser);
   return transaction(async (client, auth) => {
@@ -393,14 +388,20 @@ async function preferencesDto(client: PoolClient, userId: string): Promise<Accou
   return result.data;
 }
 
+/** The caller's session; without one, 401 before any other check. */
+async function sessionOrRefuse(request: Request) {
+  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
+  if (!identity) throw new FoundationError(401, 'Sign in to continue.');
+  return identity;
+}
+
 async function handleAccountPreferences(request: Request, limit: Limit): Promise<Response> {
-  if (!['GET', 'POST'].includes(request.method)) { const response = json({ error: 'Method not allowed.' }, 405); response.headers.set('allow', 'GET, POST'); return response; }
+  const identity = await sessionOrRefuse(request);
+  if (!['GET', 'POST'].includes(request.method)) return methodNotAllowed('GET, POST');
   if (new URL(request.url).search) throw new FoundationError(400, 'Account preferences do not accept query parameters.');
   const writing = request.method === 'POST';
   if (!writing && (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length')?.trim() !== '0')) throw new FoundationError(400, 'Read account preferences without a request body.');
   const input = writing ? parsed(accountPreferencesInputSchema, await readJson(request)) : null;
-  const identity = await getAuth().api.getSession({ headers: request.headers, query: { disableRefresh: true } });
-  if (!identity) throw new FoundationError(401, 'Sign in to continue.');
   await limit(`account-preferences:${writing ? 'write' : 'read'}:${identity.user.id}`, writing ? 30 : 120);
   return transaction(async (client, auth) => {
     await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [identity.user.id]);

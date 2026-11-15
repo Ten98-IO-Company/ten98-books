@@ -2,6 +2,7 @@ import type { Invitation } from '@ten98/runtime';
 import type { PoolClient } from 'pg';
 import { FoundationError } from './auth.ts';
 import { getDatabase } from './db.ts';
+import { companyNotFound } from './tenancy.ts';
 import { team, teamFailure, transaction } from './workspace-team.ts';
 
 // Thin adapters over the shared controller (@ten98/runtime createWorkspaceTeam): the app keeps its routes, transactions
@@ -27,6 +28,18 @@ export const inspectInvitation = (input: unknown) => team.inspectInvitation(getD
  */
 export const rotateInvitation = (workspaceId: string, userId: string, invitationId: string, admit?: (client: PoolClient, invitation: Invitation) => Promise<void>) =>
   transaction(client => team.rotateInvitation(client, workspaceId, userId, invitationId, admit && ((_, invitation) => admit(client, invitation))));
+
+/**
+ * Refuses a caller who is not a member of the workspace, as a missing company is refused, before a team write reads its
+ * body. The shared controller validates the body before it checks membership, so without this an outsider would get 400
+ * for a body the route refuses where a company that does not exist answers 404. Point in time: the controller checks
+ * membership again inside its transaction.
+ */
+export async function requireMembership(workspaceId: string, userId: string): Promise<void> {
+  const member = uuid.test(workspaceId) && uuid.test(userId)
+    && !!(await getDatabase().pool.query('SELECT 1 FROM membership WHERE workspace_id = $1 AND user_id = $2', [workspaceId.toLowerCase(), userId])).rowCount;
+  if (!member) throw new FoundationError(404, companyNotFound);
+}
 
 const factorGatedPath = /^\/api\/(?:workspaces|companies)\/([0-9a-f-]{36})(?:\/|$)/i;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

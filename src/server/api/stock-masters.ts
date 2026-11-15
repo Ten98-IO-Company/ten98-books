@@ -5,7 +5,7 @@ import {
   alterItem, alterTree, alterUnit, createItem, createTree, createUnit, deleteItem, deleteTree, deleteUnit, getTree, getUnit,
   listItems, listTree, listUnits, readInventorySetting, readItem, saveInventorySetting, treeKinds, type TreeKindName,
 } from '../ledger/stock-masters.ts';
-import { json, limit, type SignedInArea } from './http.ts';
+import { json, methodNotAllowed, limit, type SignedInArea } from './http.ts';
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const company = `^/api/companies/(${uuid})`;
@@ -16,7 +16,6 @@ const company = `^/api/companies/(${uuid})`;
 export const stockBodyBytes = 500 * 256 + 4096;
 const mastersRoute = new RegExp(`${company}/(stock-units|stock-groups|stock-categories|stock-locations|stock-items)(?:/(${uuid})(?:/(delete|revisions))?)?$`, 'i');
 const settingRoute = new RegExp(`${company}/inventory-setting$`, 'i');
-const notAllowed = (allow: string) => json({ error: 'Method not allowed.' }, 405, { allow });
 
 type Handler = {
   list: (context: LedgerContext) => Promise<unknown>;
@@ -59,24 +58,24 @@ export const stockMastersApi: SignedInArea = async ({ request, path, user }) => 
     if (!itemId) {
       if (request.method === 'GET') return json({ [handler.plural]: await runLedger(user.id, companyId, 'read', handler.list) });
       if (request.method === 'POST') return json({ [handler.key]: await write(companyId, handler.create) }, 201);
-      return notAllowed('GET, POST');
+      return methodNotAllowed('GET, POST');
     }
     if (action === 'revisions') {
-      if (request.method !== 'GET') return notAllowed('GET');
+      if (request.method !== 'GET') return methodNotAllowed('GET');
       return json({ revisions: await runLedger(user.id, companyId, 'read', context => masterHistory(context, handler.entity, itemId, handler.read)) });
     }
     if (action === 'delete') {
-      if (request.method !== 'POST') return notAllowed('POST');
+      if (request.method !== 'POST') return methodNotAllowed('POST');
       await write(companyId, (context, body) => handler.remove(context, itemId, body));
       return json({ deleted: true });
     }
     if (request.method === 'GET') return json({ [handler.key]: await runLedger(user.id, companyId, 'read', context => handler.read(context, itemId)) });
     if (request.method === 'POST') return json({ [handler.key]: await write(companyId, (context, body) => handler.alter(context, itemId, body)) });
-    return notAllowed('GET, POST');
+    return methodNotAllowed('GET, POST');
   }
   const setting = path.match(settingRoute);
   if (!setting) return null;
   if (request.method === 'GET') return json({ inventory: await runLedger(user.id, setting[1], 'read', readInventorySetting) });
   if (request.method === 'POST') return json({ inventory: await write(setting[1], saveInventorySetting) });
-  return notAllowed('GET, POST');
+  return methodNotAllowed('GET, POST');
 };
