@@ -127,7 +127,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (!latest.current.lines.some(line => line.key === row)) { if (attempt === 0) window.setTimeout(() => focus(firstField(), 1), 0); return }
     const done = grid.current?.focusCell(row, column, { open, edit }) ?? false
     // A line the screen has just added renders on the next frame.
-    if (!done && attempt < 5) window.requestAnimationFrame(() => focus(target, attempt + 1))
+    // (A timer, not an animation frame: frames do not run in a hidden or background tab.)
+    if (!done && attempt < 5) window.setTimeout(() => focus(target, attempt + 1), 16)
   }, [])
   const focusSoon = (target: EntryFocus) => window.setTimeout(() => focus(target), 0)
   const firstField = (from = latest.current): EntryFocus => from.layout === 'single' ? { field: 'account' } : { cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } }
@@ -302,7 +303,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     writeStored(sessionStore, lastTypeKey(userId, company.id), kind)
     // The cursor goes to line 1's ledger with its list open (observed); single entry starts on the Account.
     // After the grid has re-rendered and settled its own focus, so the first field keeps it.
-    window.setTimeout(() => window.requestAnimationFrame(() => focus(firstField())), 0)
+    window.setTimeout(() => focus(firstField()), 16)
     return true
   }
   const switchType = (kind: EntryKind) => switchTo(kind, readLayout(kind, sessionStore, userId, company.id))
