@@ -254,8 +254,16 @@ async function movesPeriod(context: LedgerContext, before: Voucher, date: string
   return rows[0].moves;
 }
 
-/** The idempotency hash of a parsed create body (without its key); fields left out are not part of it. */
-export const requestHash = (body: unknown) => createHash('sha256').update(JSON.stringify(body)).digest('hex');
+/**
+ * The idempotency hash of a parsed create body (without its key). Fields left out are not part of it, and neither are
+ * an empty `inventory` or a null `itemLedgerId`, which mean the same as leaving them out: a body without item lines
+ * hashes exactly as it did before them, however a retry spells it.
+ */
+export function requestHash(body: { inventory?: unknown[]; itemLedgerId?: string | null }): string {
+  const { inventory, itemLedgerId, ...rest } = body;
+  const meant = { ...rest, ...inventory?.length ? { inventory } : {}, ...itemLedgerId != null ? { itemLedgerId } : {} };
+  return createHash('sha256').update(JSON.stringify(meant)).digest('hex');
+}
 
 /** A posting's answer: the voucher plus what happened to its bill and cost rows that the caller may not expect. */
 export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };

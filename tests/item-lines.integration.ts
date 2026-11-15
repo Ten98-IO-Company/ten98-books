@@ -266,6 +266,11 @@ test('a create without the new fields is stored under the request hash the code 
   assert.equal(stored, createHash('sha256').update(before).digest('hex'));
   const again = await call('/vouchers', payload);
   assert.deepEqual([again.status, again.body.voucher.id], [200, first.body.voucher.id], 'replayed, not refused as idempotency_mismatch');
+  // A retry that spells out "no item lines" means the same and replays too.
+  for (const extra of [{ itemLedgerId: null }, { inventory: [] }]) {
+    const spelled = await call('/vouchers', { ...payload, ...extra });
+    assert.deepEqual([spelled.status, spelled.body.voucher?.id], [200, first.body.voucher.id], `replayed with ${JSON.stringify(extra)}`);
+  }
 });
 
 test('a voucher entered cancelled with item lines is refused, not stripped; a stock journal follows the books beginning and the period lock', async () => {

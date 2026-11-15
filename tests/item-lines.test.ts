@@ -60,6 +60,15 @@ test('a create body without the fields of slice b1 hashes as before them (the va
   assert.equal(requestHash(parsed), '6c199bc95195d442f90dcc81bcdf25973efa5c26bf7fa29e9f623320a4cf1c85');
   assert.equal('itemLedgerId' in parsed, false);
   assert.equal('inventory' in parsed, false);
+  // The same body spelling out "no item lines" means the same thing and hashes the same.
+  const spelled = (extra: Record<string, unknown>) => {
+    const { idempotencyKey: _key, ...rest } = voucherCreateInput.parse({ idempotencyKey: 'pin-hash-1', voucherTypeId: '01900000-0000-7000-8000-000000000001', date: '2026-02-01',
+      lines: [{ ledgerId: '01900000-0000-7000-8000-000000000002', side: 'Dr', amount: '100.00' }, { ledgerId: '01900000-0000-7000-8000-000000000003', side: 'Cr', amount: '100.00' }], ...extra });
+    return requestHash(rest);
+  };
+  assert.equal(spelled({ itemLedgerId: null }), '6c199bc95195d442f90dcc81bcdf25973efa5c26bf7fa29e9f623320a4cf1c85', 'a null item ledger');
+  assert.equal(spelled({ inventory: [] }), '6c199bc95195d442f90dcc81bcdf25973efa5c26bf7fa29e9f623320a4cf1c85', 'an empty inventory');
+  assert.notEqual(spelled({ itemLedgerId: '01900000-0000-7000-8000-000000000004' }), '6c199bc95195d442f90dcc81bcdf25973efa5c26bf7fa29e9f623320a4cf1c85', 'a named item ledger is a different body');
 });
 
 test('a derived rate is checked against the quantity less its discount', () => {
