@@ -182,15 +182,9 @@ export const addressDate = (value: unknown): string | undefined => typeof value 
 export const balanceSheetDates = (search: Record<string, unknown>): { from: string | undefined; to: string | undefined } =>
   ({ from: addressDate(search.from), to: addressDate(search.to) });
 
-/**
- * What a `to` in an address that is no calendar date reads as, for a notice (kept short): the text itself, or a number,
- * list or object written out. Undefined when it is a date or says nothing (absent, empty).
- */
-export function unreadableDate(value: unknown): string | undefined {
-  if (value === undefined || value === null || addressDate(value) !== undefined) return undefined;
-  const text = typeof value === 'string' ? value : typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return text === '' || text === '[]' ? undefined : text.slice(0, 40);
-}
+/** A value of an address that was written but is no date: not absent or empty, and not a calendar date. */
+export const isUnreadableDate = (value: unknown): boolean =>
+  value !== undefined && value !== null && value !== '' && !(Array.isArray(value) && value.length === 0) && addressDate(value) === undefined;
 
 const idText = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const lineKeyText = /^[a-z]:[0-9a-f-]{36}$|^[a-z]:[a-z-]+$|^[0-9a-f-]{36}$|^\d{4}-\d{2}$/i;
@@ -214,13 +208,14 @@ export function readReportSearch(search: Record<string, unknown>) {
 }
 
 /**
- * The text of a `to` that was no date, for the notice. The server validates the address before the screen exists and
- * writes the validated address back, so the raw `to` is gone by then: the route carries the text as `badTo` for one
- * render, and the screen takes it into its state and removes it from the address. `badTo` counts only while `to` is no
- * date, so a link cannot attach a notice to a date that was read.
+ * Whether the balance sheet's address held a `to` that was no date, as a marker without content. The server validates the
+ * address before the screen exists and writes the validated address back, so the raw `to` is gone by then: the route
+ * carries `badTo: true` for one render, the screen keeps it as its state and removes it from the address. The notice never
+ * quotes the address (a link must not put words of its own into the product's notice); `badTo` counts only while `to` is
+ * no date, so a link cannot attach the notice to a date that was read.
  */
-export const unreadableTo = (search: Record<string, unknown>): string | undefined =>
-  balanceSheetDates(search).to === undefined ? unreadableDate(search.to) ?? unreadableDate(search.badTo) : undefined;
+export const unreadableTo = (search: Record<string, unknown>): true | undefined =>
+  balanceSheetDates(search).to === undefined && (isUnreadableDate(search.to) || search.badTo === true) ? true : undefined;
 
 /**
  * The period of a balance sheet address. The balance sheet is an "as at" report, so `to` alone is the date, and its
@@ -235,9 +230,9 @@ export function asAtPeriod(address: { from?: unknown; to?: unknown }, financialY
   return { from: from && from <= to ? from : financialYearOf(financialYearStart, to).from, to };
 }
 
-/** The notice for a balance sheet address whose `to` is no date: what was asked for, and the date shown instead (null while none is). */
-export const unreadableDateNotice = (badTo: string, shown: string | null): string =>
-  `“${badTo}” is not a date. Write a date as 2026-01-31, in the years 1900 to 2199. ${shown ? `The balance sheet shows ${longDate(shown)} instead; ` : 'The default date is being chosen; '}use Change date to choose another.`;
+/** The notice for a balance sheet address whose `to` is no date: a fixed sentence, and the date shown instead (null while none is). */
+export const unreadableDateNotice = (shown: string | null): string =>
+  `The date in the address could not be read. Write a date as 2026-01-31, in the years 1900 to 2199. ${shown ? `The balance sheet shows ${longDate(shown)} instead; ` : 'The default date is being chosen; '}use Change date to choose another.`;
 
 /** What a failed report can offer, in order. */
 export type FailureAction = 'first-page' | 'change-period' | 'retry';

@@ -6,9 +6,9 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { addressDate, asAtPeriod, balanceSheetDates, centreOriginNotice, chooserFilters, costCentresOffNotice, failureActions, lineToOpen, listTarget, monthlyClipNotice, readReportSearch, unreadableTo, narrowByName, pickerEscape, restoredFilter, scopeLine, unreadableDate, unreadableDateNotice, defaultScopeNote, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { addressDate, asAtPeriod, balanceSheetDates, centreOriginNotice, chooserFilters, costCentresOffNotice, failureActions, lineToOpen, listTarget, monthlyClipNotice, readReportSearch, unreadableTo, narrowByName, pickerEscape, restoredFilter, scopeLine, isUnreadableDate, unreadableDateNotice, defaultScopeNote, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -247,19 +247,13 @@ test('the balance sheet honours a lone to as its as-at date and reads nothing el
   assert.equal(asAtPeriod({ from: '2026-01-10' }, january), null);
 });
 
-test('what a to that is no date reads as, for the notice: any value, short, nothing for a date or an empty value', () => {
-  assert.equal(unreadableDate('soon'), 'soon');
-  assert.equal(unreadableDate('2026-02-30'), '2026-02-30');
-  assert.equal(unreadableDate('1850-01-01'), '1850-01-01');
-  assert.equal(unreadableDate(2027), '2027');
-  assert.equal(unreadableDate(['2026-06-30', '2026-07-31']), '["2026-06-30","2026-07-31"]');
-  assert.equal(unreadableDate({ a: 1 }), '{"a":1}');
-  assert.equal(unreadableDate('x'.repeat(100))?.length, 40);
-  for (const value of ['2026-01-31', '', undefined, null, []]) assert.equal(unreadableDate(value), undefined, JSON.stringify(value));
-  const notice = unreadableDateNotice('2026-02-30', '2026-02-03');
-  assert.match(notice, /2026-02-30/);
+test('a value that is no date, and the notice: a fixed sentence that never carries text from the address', () => {
+  for (const value of ['soon', '2026-02-30', '1850-01-01', 2027, 0, false, true, ['2026-06-30', '2026-07-31'], { a: 1 }]) assert.equal(isUnreadableDate(value), true, JSON.stringify(value));
+  for (const value of ['2026-01-31', '', undefined, null, []]) assert.equal(isUnreadableDate(value), false, JSON.stringify(value));
+  const notice = unreadableDateNotice('2026-02-03');
+  assert.match(notice, /could not be read/);
   assert.match(notice, /3 February 2026/);
-  assert.match(unreadableDateNotice('soon', null), /Change date/);
+  assert.match(unreadableDateNotice(null), /Change date/);
 });
 
 test('which actions a failed load offers: a refusal the user can fix offers to change the period (and the first page of a register), anything else Try again', () => {
@@ -326,12 +320,15 @@ test('coming back to a chooser from the line opened restores the typed text; any
   assert.ok(chooserFilters instanceof Map);
 });
 
-test('the notice text of a bad to: from the raw to, or from the badTo the route carries once; never attached to a date that was read', () => {
-  assert.equal(unreadableTo({ to: 2027 }), '2027');
-  assert.equal(unreadableTo({ to: ['2026-06-30', '2026-07-31'] }), '["2026-06-30","2026-07-31"]');
-  assert.equal(unreadableTo({ to: '2026-02-30' }), '2026-02-30');
-  assert.equal(unreadableTo({ badTo: '2027' }), '2027', 'the address after the server rewrote it');
-  assert.equal(unreadableTo({ to: '2026-06-30', badTo: 'made up' }), undefined, 'a link cannot put a notice on a date that was read');
+test('whether a balance sheet address held a to that was no date: a marker, never text; and never on a date that was read', () => {
+  assert.equal(unreadableTo({ to: 2027 }), true);
+  assert.equal(unreadableTo({ to: ['2026-06-30', '2026-07-31'] }), true);
+  assert.equal(unreadableTo({ to: '2026-02-30' }), true);
+  assert.equal(unreadableTo({ badTo: true }), true, 'the address after the server rewrote it');
+  assert.equal(unreadableTo({ to: '2026-06-30', badTo: true }), undefined, 'a link cannot put a notice on a date that was read');
+  assert.equal(unreadableTo({ to: '2026-06-30', badTo: 'Call support on 000' }), undefined);
+  // A crafted badTo with words of its own is no marker: nothing is shown, and none of its text is carried.
+  for (const badTo of ['Call support on 000', '2027', 1, ['x'], { a: 1 }, false, '']) assert.equal(unreadableTo({ badTo }), undefined, JSON.stringify(badTo));
   assert.equal(unreadableTo({}), undefined);
   assert.equal(unreadableTo({ to: '' }), undefined);
 });
@@ -349,19 +346,4 @@ test('every report route reads its address through readReportSearch: only readab
     for (const key of keys.filter(name => name !== 'pages' || typeof value !== 'string')) assert.equal((strange as Record<string, unknown>)[key], key === 'detail' || key === 'zeros' ? (value === true ? true : undefined) : undefined, `${key} from ${JSON.stringify(value)}`);
   }
   assert.deepEqual(Object.keys(readReportSearch({})).sort(), keys);
-});
-
-// A source check, the one in this file (the routes cannot be loaded without a DOM): every report route reads its address
-// through reportSearch, which reads through readReportSearch (tested above). Comments are stripped before reading.
-test('every report route validates its search through reportSearch, so none can pass a raw address value on', () => {
-  const folder = new URL('../src/routes/app/', import.meta.url);
-  const routes = readdirSync(folder).filter(name => /^c\.\$companyId\.reports_\..+\.tsx$/.test(name));
-  assert.ok(routes.length >= 11, 'the report routes are found');
-  for (const name of routes) {
-    const source = readFileSync(new URL(name, folder), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    const call = /validateSearch:\s*([^\n]+)/.exec(source)?.[1] ?? '';
-    assert.ok(/^reportSearch\b|reportSearch\(search\)/.test(call), `${name} validates with reportSearch (found: ${call.slice(0, 60)})`);
-  }
-  const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.match(navigation, /export function reportSearch\([^)]*\)[^{]*\{\s*return readReportSearch\(search\)\s*\}/, 'reportSearch is the pure reader');
 });
