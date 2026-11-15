@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { after, before, test } from 'node:test';
+import { handleApi } from '../src/server/api.ts';
 import { authCookiePrefix } from '../src/server/auth.ts';
+import { getConfig } from '../src/server/config.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, browser, invite, password, setupOwner, type Member } from './helpers/ledger.ts';
 
@@ -14,6 +16,7 @@ let database: TestDatabase;
 let owner: Member & { workspaceId: string };
 let second: Member;
 const secrets = new Map<string, string>();
+const backupCodes = new Map<string, string[]>();
 
 before(async () => {
   database = await freshDatabase('two_factor_sign_in');
@@ -43,6 +46,7 @@ async function enableFactor(member: Member): Promise<string> {
   const enabled = await member.browser.call('/api/account/two-factor/enable', { password });
   assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
   const secret = new URL(enabled.body.totpURI).searchParams.get('secret')!;
+  backupCodes.set(member.userId, enabled.body.backupCodes);
   const confirmed = await member.browser.call('/api/account/two-factor/verify', { code: totp(secret, step() - 1) });
   assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
   return secret;
@@ -91,6 +95,9 @@ test('a verify without a challenge, or with one that is not pending, is refused 
   assert.deepEqual([none.status, none.body], [401, { error: 'The code was not accepted. Try another code or sign in again.' }]);
   assert.deepEqual([unknown.status, unknown.body], [none.status, none.body], 'a missing and an unknown challenge answer alike');
   assert.equal((await forged.call('/api/me')).status, 401);
+  // The old handler sent these on to the library (which also refused) and counted them under one shared key, sha256('').
+  const shared = await asAdmin(database.adminUrl, async admin => (await admin.query('SELECT count(*)::int AS n FROM request_limit WHERE key = $1', [`two-factor:${createHash('sha256').update('').digest('hex')}`])).rows[0].n);
+  assert.equal(shared, 0, 'no request is counted under the empty key');
 });
 
 test('each challenge has its own limiter key: exhausting one user\'s does not limit another user\'s', async () => {
@@ -110,4 +117,88 @@ test('each challenge has its own limiter key: exhausting one user\'s does not li
   const keys = await asAdmin(database.adminUrl, async admin => (await admin.query("SELECT DISTINCT key FROM request_limit WHERE key LIKE 'two-factor:%' AND key <> 'two-factor:unresolved'")).rows.map(row => row.key as string));
   assert.ok(keys.length >= 2, keys.join(', '));
   assert.ok(!keys.includes(`two-factor:${createHash('sha256').update('').digest('hex')}`), 'no challenge is keyed by an empty cookie');
+});
+
+// ---- The cookie the handler checks is the cookie the library verifies ----
+
+const challengeName = () => `${authCookiePrefix()}.two_factor`;
+/** The challenge cookie value of a client at the second step. */
+const challengeOf = (client: Member) => client.browser.cookies.get(challengeName())!;
+const identifierOf = (value: string) => decodeURIComponent(value).split('.')[0];
+/** A verify with a Cookie header written by hand. */
+async function verifyWith(cookie: string, code: string, path = '/api/auth/two-factor/verify-totp') {
+  const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method: 'POST',
+    headers: { cookie, origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code }) }));
+  return { status: response.status, body: await response.json() as { error?: string }, signedIn: response.headers.getSetCookie().some(line => line.startsWith(`${authCookiePrefix()}.session_token=`)) };
+}
+const refusal = { error: 'The code was not accepted. Try another code or sign in again.' };
+/** A code the owner has just used to sign in, and a fresh challenge of the owner's. */
+async function usedCodeAndChallenge(): Promise<{ code: string; challenge: string }> {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const code = totp(secrets.get(owner.userId)!, step());
+  const first = await challenged(owner);
+  assert.equal((await first.browser.call('/api/auth/two-factor/verify-totp', { code })).status, 200);
+  return { code, challenge: challengeOf(await challenged(owner)) };
+}
+
+test('a second challenge cookie of the same name is refused in either order: the used code signs nobody in', async () => {
+  const { code, challenge } = await usedCodeAndChallenge();
+  const decoy = `2fa-attempts-${identifierOf(challenge)}.anything`;
+  for (const cookie of [`${challengeName()}=${challenge}; ${challengeName()}=${decoy}`, `${challengeName()}=${decoy}; ${challengeName()}=${challenge}`]) {
+    const answer = await verifyWith(cookie, code);
+    assert.deepEqual([answer.status, answer.body, answer.signedIn], [401, refusal, false], cookie.slice(0, 40));
+  }
+});
+
+test('a __Secure- challenge cookie beside the plain one on http is refused', async () => {
+  const { code, challenge } = await usedCodeAndChallenge();
+  const answer = await verifyWith(`__Secure-${challengeName()}=2fa-attempts-${identifierOf(challenge)}.x; ${challengeName()}=${challenge}`, code);
+  assert.deepEqual([answer.status, answer.body, answer.signedIn], [401, refusal, false]);
+});
+
+test('another user\'s pending challenge beside the real one is refused', async () => {
+  const { code, challenge } = await usedCodeAndChallenge();
+  const theirs = challengeOf(await challenged(second));
+  const answer = await verifyWith(`${challengeName()}=${challenge}; ${challengeName()}=${theirs}`, code);
+  assert.deepEqual([answer.status, answer.body, answer.signedIn], [401, refusal, false]);
+});
+
+test('thirty races of two challenges with one code, one of them carrying a decoy: exactly one signs in each time', async () => {
+  for (let run = 0; run < 30; run += 1) {
+    await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+    const code = totp(secrets.get(owner.userId)!, step());
+    const [plain, decoyed] = [challengeOf(await challenged(owner)), challengeOf(await challenged(owner))];
+    const answers = await Promise.all([verifyWith(`${challengeName()}=${plain}`, code),
+      verifyWith(`${challengeName()}=${decoyed}; ${challengeName()}=2fa-attempts-${identifierOf(decoyed)}.x`, code)]);
+    assert.equal(answers.filter(answer => answer.status === 200).length, 1, `run ${run + 1}: ${answers.map(answer => answer.status)}`);
+  }
+});
+
+test('two challenges racing with one code (no decoy): the user row lock lets exactly one sign in, ten times', async () => {
+  for (let run = 0; run < 10; run += 1) {
+    await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+    const code = totp(secrets.get(owner.userId)!, step());
+    const [one, two] = [challengeOf(await challenged(owner)), challengeOf(await challenged(owner))];
+    const answers = await Promise.all([verifyWith(`${challengeName()}=${one}`, code), verifyWith(`${challengeName()}=${two}`, code)]);
+    assert.deepEqual(answers.map(answer => answer.status).sort(), [200, 409], `run ${run + 1}`);
+  }
+});
+
+test('the limiter key cannot be chosen: fifteen decoy suffixes on one challenge make no bucket of their own', async () => {
+  const { code, challenge } = await usedCodeAndChallenge();
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  for (let index = 0; index < 15; index += 1) await verifyWith(`${challengeName()}=${challenge}; ${challengeName()}=2fa-attempts-${identifierOf(challenge)}.s${index}`, code);
+  const buckets = await asAdmin(database.adminUrl, async admin => (await admin.query("SELECT count(DISTINCT key)::int AS n FROM request_limit WHERE key LIKE 'two-factor:%' AND key <> 'two-factor:unresolved'")).rows[0].n);
+  assert.ok(buckets <= 1, `${buckets} per-challenge buckets`);
+});
+
+test('a recovery code signs in once, under the cookie the server reads', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  const [code] = backupCodes.get(second.userId)!;
+  const first = await challenged(second);
+  const accepted = await first.browser.call('/api/auth/two-factor/verify-backup-code', { code });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.equal((await first.browser.call('/api/me')).status, 200);
+  const again = await challenged(second);
+  assert.deepEqual([(await again.browser.call('/api/auth/two-factor/verify-backup-code', { code })).status, (await again.browser.call('/api/me')).status], [401, 401]);
 });

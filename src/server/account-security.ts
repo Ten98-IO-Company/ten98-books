@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { getSessionCookie, parseCookies } from 'better-auth/cookies';
+import { appOrigin } from '@ten98/runtime';
+import { parseCookies } from 'better-auth/cookies';
 import { verifyPassword } from 'better-auth/crypto';
 import { ten98AuthPolicy } from '@ten98/runtime/auth';
 import type { PoolClient } from 'pg';
@@ -111,6 +112,26 @@ async function keepResponseSession(client: PoolClient, auth: Auth, request: Requ
   await revokeOtherSessions(client, userId, current.session.id);
 }
 
+/**
+ * The sign-in challenge cookie exactly as the library verifies it: one exact name (the auth prefix, with `__Secure-`
+ * when the app URL is https, as Better Auth decides from the base URL the preset passes it). The raw Cookie header is
+ * parsed here, not by either library parser (they disagree on duplicate names and prefixes): exactly one pair whose name
+ * ends in `two_factor` (any prefix, either separator), with that exact name, and an identifier of the library's shape
+ * (`2fa-` and 20 random characters); anything else answers null.
+ */
+function challengeCookie(request: Request): { value: string; identifier: string } | null {
+  const name = `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${authCookiePrefix()}.two_factor`;
+  const pairs = (request.headers.get('cookie') ?? '').split(';').map(pair => pair.trim()).filter(Boolean)
+    .map(pair => { const at = pair.indexOf('='); return at < 0 ? [pair, ''] : [pair.slice(0, at).trim(), pair.slice(at + 1).trim()]; })
+    .filter(([pairName]) => pairName.endsWith('two_factor'));
+  if (pairs.length !== 1 || pairs[0][0] !== name || !pairs[0][1]) return null;
+  let decoded: string;
+  try { decoded = decodeURIComponent(pairs[0][1]); } catch { return null; }
+  const identifier = decoded.split('.')[0];
+  return /^2fa-[A-Za-z0-9_-]{20}$/.test(identifier) ? { value: pairs[0][1], identifier } : null;
+}
+
+// Single use of an authenticator code, interim: removed when the shared preset's own single-use guard is adopted.
 async function isRepeatedCode(client: PoolClient, userId: string, code: string): Promise<boolean> {
   const key = `totp-used:${userId}:${createHash('sha256').update(code).digest('hex')}`;
   const found = await client.query('SELECT 1 FROM verification WHERE identifier=$1 AND "expiresAt">clock_timestamp()', [key]);
@@ -224,27 +245,30 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     const details = parsed(totp ? codeInput : backupInput, input);
     const perClient = clientRateLimit(request, 'two-factor');
     await limit(perClient.key, perClient.maximum);
-    // The sign-in challenge cookie, under the prefix the auth instance uses. Without one, or for a challenge that is not
-    // pending, the request is refused before the library runs, in the same words either way: nothing tells whether a
-    // challenge existed. Past this point every request has its own challenge (its own limiter key) and a user.
+    // The handler keys, locks and checks exactly the cookie the library verifies (challengeCookie): anything missing or
+    // ambiguous is refused before the library runs, in the same words, so nothing tells whether a challenge existed.
     const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
-    const cookie = getSessionCookie(request, { cookiePrefix: authCookiePrefix(), cookieName: 'two_factor' });
+    const cookie = challengeCookie(request);
     if (!cookie) return refused();
-    await limit(`two-factor:${createHash('sha256').update(cookie).digest('hex')}`, limits.twoFactorPerChallenge);
+    await limit(`two-factor:${createHash('sha256').update(cookie.value).digest('hex')}`, limits.twoFactorPerChallenge);
     return transaction(async (client, auth) => {
       if (await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } })) {
         return json({ error: 'This sign-in is already complete.' }, 409);
       }
-      // An untrusted cookie prefix is only a lock hint, never authentication.
-      // Better Auth validates the signed cookie and consumes the challenge below.
-      const identifier = cookie.split('.')[0];
-      const pending = await client.query<{ value: string }>('SELECT value FROM verification WHERE identifier=$1 AND "expiresAt">clock_timestamp()', [identifier]);
-      const userId = pending.rows[0]?.value;
+      // The identifier is only a lock and lookup hint, never authentication: Better Auth validates the signed cookie and
+      // consumes the challenge below. The row must be the challenge itself (its value an existing user), never its attempts
+      // counter or any other verification row.
+      const pending = await client.query<{ id: string }>(
+        'SELECT u.id FROM verification v JOIN "user" u ON u.id=v.value WHERE v.identifier=$1 AND v."expiresAt">clock_timestamp()', [cookie.identifier]);
+      const userId = pending.rows[0]?.id;
       if (!userId) return refused();
       await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
       if (totp && await isRepeatedCode(client, userId, details.code)) return json({ error: 'Wait for the next authenticator code, then try again.' }, 409);
       const response = await invoke(auth, request, totp ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', details);
       if (!response.ok) return rejected(response, 'The code was not accepted. Try another code or sign in again.');
+      // The session the library created must be that user's; otherwise the transaction rolls back and nothing is signed in.
+      const verified = await response.clone().json().catch(() => null) as { user?: { id?: unknown } } | null;
+      if (verified?.user?.id !== userId) throw new FoundationError(401, 'The code was not accepted. Try another code or sign in again.');
       if (totp) await rememberCode(client, userId, details.code);
       return json({ ok: true }, 200, response);
     });
