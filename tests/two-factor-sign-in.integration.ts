@@ -202,3 +202,24 @@ test('a recovery code signs in once, under the cookie the server reads', async (
   const again = await challenged(second);
   assert.deepEqual([(await again.browser.call('/api/auth/two-factor/verify-backup-code', { code })).status, (await again.browser.call('/api/me')).status], [401, 401]);
 });
+
+test('new recovery codes need the second factor as well as the password; the code used as proof is spent', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const [, oldCode] = backupCodes.get(second.userId)!;
+  // The password alone is refused, and the recovery codes in hand still work.
+  const alone = await second.browser.call('/api/account/two-factor/recovery-codes', { password });
+  assert.deepEqual([alone.status, alone.body.error], [400, 'Enter an authenticator code or a recovery code to verify this action.']);
+  const signIn = await challenged(second);
+  assert.equal((await signIn.browser.call('/api/auth/two-factor/verify-backup-code', { code: oldCode })).status, 200, 'an old recovery code still signs in');
+  // With an authenticator code it works once; the code is then spent, also for signing in.
+  const code = totp(secrets.get(second.userId)!, step());
+  const replaced = await second.browser.call('/api/account/two-factor/recovery-codes', { password, code });
+  assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+  assert.deepEqual([(await second.browser.call('/api/account/two-factor/recovery-codes', { password, code })).status], [409]);
+  const reused = await (await challenged(second)).browser.call('/api/auth/two-factor/verify-totp', { code });
+  assert.deepEqual([reused.status, reused.body.error], [409, 'Wait for the next authenticator code, then try again.'], 'the proof code cannot sign in');
+  // A recovery code used as the proof is spent.
+  const [proof] = replaced.body.backupCodes as string[];
+  assert.equal((await second.browser.call('/api/account/two-factor/recovery-codes', { password, backupCode: proof })).status, 200);
+  assert.equal((await second.browser.call('/api/account/two-factor/recovery-codes', { password, backupCode: proof })).status, 400, 'the same recovery code again');
+});

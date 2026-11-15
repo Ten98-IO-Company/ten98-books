@@ -34,7 +34,7 @@ const accountInputs = {
   '/api/account/two-factor/enable': passwordInput,
   '/api/account/two-factor/verify': codeInput,
   '/api/account/two-factor/disable': disableInput,
-  '/api/account/two-factor/recovery-codes': passwordInput,
+  '/api/account/two-factor/recovery-codes': disableInput,
 } as const;
 
 function parsed<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
@@ -328,19 +328,20 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       await keepResponseSession(client, auth, request, response, userId);
       return json({ ok: true, twoFactorEnabled: true }, 200, response);
     }
+    // Turning two-factor off and replacing the recovery codes each need the second factor as well as the password: new
+    // recovery codes would otherwise satisfy the factor proof that turning it off asks for. The password is checked first,
+    // so a refused password never consumes a recovery code or an authenticator window.
+    const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
+    const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
+    if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, 'The current password was not accepted.');
+    if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
     if (path === '/api/account/two-factor/disable') {
-      const details = parsed(accountInputs[path], input);
-      const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
-      // The password is checked before the factor so a refused password never consumes a recovery code or authenticator window.
-      if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, 'The current password was not accepted.');
-      // Turning off two-factor needs the second factor as well as the password.
-      if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
       const response = await invoke(auth, request, '/two-factor/disable', { password: details.password });
       if (!response.ok) return rejected(response, 'The current password was not accepted.');
       await keepResponseSession(client, auth, request, response, userId);
       return json({ ok: true, twoFactorEnabled: false }, 200, response);
     }
-    const response = await invoke(auth, request, '/two-factor/generate-backup-codes', parsed(passwordInput, input));
+    const response = await invoke(auth, request, '/two-factor/generate-backup-codes', { password: details.password });
     if (!response.ok) return rejected(response, 'Check your password and enable two-factor authentication before replacing recovery codes.');
     const data = await response.json();
     await revokeOtherSessions(client, userId, current.session.id);
