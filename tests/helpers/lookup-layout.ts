@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import type { TestContext } from 'node:test';
 import pg from 'pg';
 import type { TestDatabase } from './database.ts';
-import { asAdmin, chart, createCompany, setupOwner } from './ledger.ts';
+import { readItemLines } from '../../src/server/ledger/item-lines.ts';
+import { asAdmin, chart, createCompany, inCompany, setupOwner } from './ledger.ts';
 
 /**
  * The measured layout of migration 0014: two companies of 100,000 vouchers each beside each other, with every table the
@@ -14,7 +15,7 @@ import { asAdmin, chart, createCompany, setupOwner } from './ledger.ts';
  * The filler rows are written by admin SQL with the guards off (session_replication_role): they are rows to look past,
  * not postings. Autovacuum is off on every table, so statistics come only from the measurement itself.
  */
-export type Layout = { companyA: string; companyB: string };
+export type Layout = { companyA: string; companyB: string; userId: string };
 
 const filled = ['voucher', 'voucher_line', 'inventory_line', 'bill', 'bill_allocation', 'cost_allocation', 'cost_category', 'cost_centre',
   'ledger', 'stock_item', 'stock_unit', 'stock_location', 'stock_opening', 'voucher_type', 'account_group'];
@@ -87,7 +88,7 @@ export async function buildLayout(database: TestDatabase, busy: boolean): Promis
       await admin.query('COMMIT');
     });
   }
-  return { companyA: companies[0], companyB: companies[1] };
+  return { companyA: companies[0], companyB: companies[1], userId: owner.userId };
 }
 
 /** The planner states measured: without statistics and analysed, each with custom and with generic plans. */
@@ -232,6 +233,45 @@ export async function proveLookups(t: TestContext, database: TestDatabase, layou
       }
     }
     for (const lookup of open) note(t, `${state.label} (open item)`, lookup.name, await measure(layout.companyA, state.generic, lookup.sql, lookup.params));
+  }
+  assert.deepEqual(failures, []);
+}
+
+/**
+ * The voucher read's item lines (readItemLines, called by every posting to answer it): one of the busy item's 500-line
+ * journals, whose item has 3,000 lines at that location, fetches its own 500 item rows and no other, in every planner
+ * state: the voucher's lines are taken first, and only then their item, unit and location by id.
+ */
+export async function proveVoucherRead(t: TestContext, database: TestDatabase, layout: Layout): Promise<void> {
+  const voucherId = await asAdmin(database.adminUrl, async admin => {
+    await admin.query('BEGIN');
+    await admin.query("SELECT set_config('app.company_ids', $1, true)", [layout.companyA]);
+    const { rows: [row] } = await admin.query("SELECT id FROM voucher WHERE idempotency_key LIKE 'layout-A-%' ORDER BY idempotency_key LIMIT 1");
+    await admin.query('ROLLBACK');
+    return row.id as string;
+  });
+  const failures: string[] = [];
+  for (const state of plannerStates) {
+    await setStatistics(database, state.analysed);
+    await inCompany(layout.userId, layout.companyA, async context => {
+      if (state.generic) await context.client.query('SET LOCAL plan_cache_mode = force_generic_plan');
+      const counters = async () => new Map((await context.client.query<{ relname: string; seq: string; fetch: string }>(
+        'SELECT relname, seq_tup_read AS seq, coalesce(idx_tup_fetch, 0) AS fetch FROM pg_stat_xact_user_tables')).rows.map(row => [row.relname, row]));
+      const before = await counters();
+      const lines = await readItemLines(context, voucherId);
+      const after = await counters();
+      const fetched: Fetched = {};
+      for (const [table, row] of after) {
+        const was = before.get(table);
+        const rows = Number(row.fetch) - Number(was?.fetch ?? 0), sequential = Number(row.seq) - Number(was?.seq ?? 0);
+        if (rows || sequential) fetched[table] = { fetched: rows, sequential };
+      }
+      note(t, state.label, 'readItemLines (a 500-line journal)', fetched);
+      if (lines.length !== 500) failures.push(`${state.label}: ${lines.length} lines read back`);
+      const items = fetched.inventory_line ?? { fetched: 0, sequential: 0 };
+      if (items.fetched + items.sequential > 500) failures.push(`${state.label}: ${items.fetched + items.sequential} item rows read for the voucher's 500`);
+      if (fetched.voucher) failures.push(`${state.label}: vouchers read`);
+    });
   }
   assert.deepEqual(failures, []);
 }

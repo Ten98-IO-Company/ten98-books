@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { buildLayout, proveLookups, type Layout } from './helpers/lookup-layout.ts';
+import { buildLayout, proveLookups, proveVoucherRead, type Layout } from './helpers/lookup-layout.ts';
 
 /**
  * Migration 0014 measured: every lookup of the posting path and of the guards (0004 to 0013) by id or by voucher costs
@@ -19,4 +19,8 @@ after(async () => { await database?.drop(); });
 
 test('every lookup by id or by voucher costs its own rows in all four planner states: optional fillers beside other items', async t => {
   await proveLookups(t, database, layout);
+});
+
+test("reading a voucher's item lines fetches its own rows only, in all four planner states", async t => {
+  await proveVoucherRead(t, database, layout);
 });

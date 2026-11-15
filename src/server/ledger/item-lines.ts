@@ -174,17 +174,25 @@ export async function insertItemLines(context: LedgerContext, voucherId: string,
     .catch(error => refusal(error, itemLineRefusals));
 }
 
-/** A voucher's item lines as stored, in entry order: the quantity in its unit's places, the rate with at least the currency's. */
+/**
+ * A voucher's item lines as stored, in entry order: the quantity in its unit's places, the rate with at least the
+ * currency's. The voucher's own lines are taken first (MATERIALIZED, by voucher through inventory_line_line_idx), and
+ * only then their item, unit and location by id. As a plain join, without statistics, the planner started from the
+ * company's locations and items and probed each item's lines through inventory_line_item_idx, which since migration
+ * 0014 does not lead with company_id and so always looks cheap: every line of each item read to find this voucher's
+ * (22,000 for a 500-line voucher beside one item's history, measured). The shape must not be flattened.
+ */
 export async function readItemLines(context: LedgerContext, voucherId: string): Promise<InventoryLine[]> {
   const { rows } = await context.client.query<InventoryLine>(
-    `SELECT l.entry_no AS "entryNo", l.item_id AS "itemId", i.name AS "itemName", l.location_id AS "locationId", s.name AS "locationName", l.direction,
+    `WITH own AS MATERIALIZED (SELECT * FROM inventory_line WHERE voucher_id = $2 AND company_id = $1)
+     SELECT l.entry_no AS "entryNo", l.item_id AS "itemId", i.name AS "itemName", l.location_id AS "locationId", s.name AS "locationName", l.direction,
        round(l.quantity, u.decimals)::text AS quantity,
        CASE WHEN l.rate = round(l.rate, $3::integer) THEN round(l.rate, $3::integer)::text ELSE trim_scale(l.rate)::text END AS rate,
        trim_scale(l.discount_percent)::text AS "discountPercent", l.amount, l.ledger_id AS "ledgerId", l.line_no AS "lineNo"
-     FROM inventory_line l JOIN stock_item i ON i.company_id = l.company_id AND i.id = l.item_id
+     FROM own l JOIN stock_item i ON i.company_id = l.company_id AND i.id = l.item_id
        JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id
        JOIN stock_location s ON s.company_id = l.company_id AND s.id = l.location_id
-     WHERE l.company_id = $1 AND l.voucher_id = $2 ORDER BY l.entry_no`, [context.company.companyId, voucherId, context.company.exponent]);
+     ORDER BY l.entry_no`, [context.company.companyId, voucherId, context.company.exponent]);
   return rows;
 }
 
