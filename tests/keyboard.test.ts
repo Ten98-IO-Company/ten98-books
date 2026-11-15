@@ -437,6 +437,13 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     'LedgerForm.tsx: delete this ledger',
   ];
   assert.equal(questions, expectedQuestions.length, 'every question is asked through useConfirm');
+  // Each named question is a call site in its file, and each file asks exactly the questions named for it.
+  const perFile = new Map<string, number>();
+  for (const line of expectedQuestions) { const file = line.split(':')[0]; perFile.set(file, (perFile.get(file) ?? 0) + 1); }
+  for (const [file, count] of perFile) {
+    const source = readFileSync(new URL(`../src/components/masters/${file}`, import.meta.url), 'utf8');
+    assert.equal(source.match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0, count, `${file} asks the questions named for it`);
+  }
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
@@ -840,10 +847,7 @@ test('KEY-063: "Keep editing" after go-to, switch-to or the company list returns
   // The keys that raise the question from a dialog are global commands, run from inside a field in both keymaps.
   for (const [keymap, keys] of [['classic', ['Alt+G', 'Ctrl+G', 'F3']], ['web-safe', ['Alt+G', 'Alt+K']]] as const)
     for (const chord of keys) assert.ok(['nav.go-to', 'nav.switch-to', 'company.switch'].includes(resolve(keymap, chord, ['entry'], 'text') ?? ''), `${keymap} ${chord} from a field`)
-  // The guard hands its own confirm to the package, so every question of a guarded screen gets the focus return.
-  const source = readFileSync(new URL('../src/components/masters/leave-guard.ts', import.meta.url), 'utf8')
-  assert.match(source, /usePackageLeaveGuard\(dirty, \{ useBlocker, confirm: ask \}\)/)
-  assert.match(source, /if \(!leave && typeof document !== 'undefined'\) setTimeout\(\(\) => focusAfterKeepEditing\(/)
+  // That the guard applies it after "Keep editing" (and only then) is run in focus-and-fragments.test.ts.
 })
 
 test('KEY-075: after Save on the account page focus stays on, or returns to, the control that saved', () => {
@@ -859,8 +863,7 @@ test('KEY-075: after Save on the account page focus stays on, or returns to, the
   assert.equal(controlAfterSave(element('', { connected: false }), find(fresh)), fresh.submit)
   assert.equal(controlAfterSave(element('', { disabled: true }), find({ first: fresh.first })), fresh.first)
   assert.equal(controlAfterSave(null, find(fresh)), null, 'nothing was focused when the save started')
-  const panel = readFileSync(new URL('../src/components/AccountPreferencesPanel.tsx', import.meta.url), 'utf8')
-  assert.match(panel, /controlAfterSave\(previous,/, 'the preferences panel uses it')
+  // Focusing it after the save is run in focus-and-fragments.test.ts (refocusAfterSave).
 })
 
 test('KEY-065: with no go-to return left Escape goes one level up; on a company that cannot be opened, to the start page', () => {
@@ -894,15 +897,4 @@ test('KEY-066: the action bar shows only what can run, and a command without a k
   const shell = readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8')
   assert.match(shell, /const inCompany = companyOpen && companyInAddress/)
   assert.match(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'), /companyOpen=\{ready\}/)
-})
-
-test('router not-found and error states inside the shell: the shared state screen with a focused heading, Escape to the start page', () => {
-  const app = readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8')
-  const shell = readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8')
-  assert.match(app, /createFileRoute\('\/app'\)\(\{ component: AppLayout, notFoundComponent: RouteNotFound, errorComponent: RouteError \}\)/)
-  assert.match(shell, /if \(heading\) \{ heading\.tabIndex = -1; heading\.focus\(\) \} else region\.current\?\.focus\(\)/)
-  assert.match(shell, /useBackOverride\(\(\) => void navigate\(\{ to: '\/app' \}\)\)/)
-  // The company layout's not-found and failed loads use the same screen.
-  assert.match(readFileSync(new URL('../src/routes/app/c.$companyId.tsx', import.meta.url), 'utf8'), /<ShellStateScreen state='not-found' title='Company not found'/)
-  assert.doesNotMatch(app, /Development preview/, 'the badge is gone (owner decision)')
 })

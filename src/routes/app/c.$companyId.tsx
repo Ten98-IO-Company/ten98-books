@@ -2,7 +2,7 @@ import { Button, EmptyState, StatusLine } from '@ten98/ui'
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { CompanySetupForm } from '../../components/CompanySetupForm'
-import { ShellStateScreen } from '../../components/KeyboardShell'
+import { StateScreen } from '../../components/KeyboardShell'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { CompanyContext, useApp } from '../../lib/app-context'
 import type { Company } from '../../lib/company'
@@ -13,6 +13,12 @@ import type { Company } from '../../lib/company'
  */
 export const Route = createFileRoute('/app/c/$companyId')({ component: CompanyLayout })
 
+/**
+ * What the layout shows while it reads a company: the same company stays (a rename, a role change) so the page below is
+ * not unmounted and keeps its own state; another company in the address starts from the loading state.
+ */
+export const keptWhileReading = <T extends { id: string }>(shown: T | null, companyId: string): T | null => shown?.id === companyId ? shown : null
+
 type LoadError = { kind: 'missing' | 'not-set-up' | 'failed'; message: string }
 
 function CompanyLayout() {
@@ -22,12 +28,14 @@ function CompanyLayout() {
   const [company, setCompany] = useState<Company | null>(null)
   const [error, setError] = useState<LoadError | null>(null)
   const [attempt, setAttempt] = useState(0)
-  // A rename changes the name in the company list; reading the company again keeps every section's copy in step.
+  // A rename changes the name in the company list; reading the company again keeps every section's copy in step. The
+  // company shown so far stays while the same company is read again, so the page below is not unmounted (a rename keeps
+  // its notice and focus); only another company in the address starts from the loading state.
   const listedName = companies?.find(item => item.id === companyId)?.name
 
   useEffect(() => {
     const controller = new AbortController()
-    setCompany(null); setError(null)
+    setCompany(shown => keptWhileReading(shown, companyId)); setError(null)
     api<{ company: Company }>(`/api/companies/${companyId}`, { signal: controller.signal })
       .then(result => setCompany(result.company))
       .catch(cause => {
@@ -53,10 +61,17 @@ function CompanyLayout() {
         setError(null); setCompany(result.company)
       }} />
   }
-  // Not found and failed loads use the shell's state screen. Its text is the title and the server's message only: the
-  // server answers one identical 404 for a company the person is not a member of and for an id that does not exist.
-  if (error) return error.kind === 'missing' ? <ShellStateScreen state='not-found' title='Company not found' message={error.message} />
-    : <ShellStateScreen state='error' title='The company could not be loaded' message={error.message} onRetry={() => setAttempt(value => value + 1)} />
+  if (error) return <CompanyUnavailable kind={error.kind} message={error.message} onRetry={() => setAttempt(value => value + 1)} />
   if (!company || company.id !== companyId) return <StatusLine busy>Loading the company…</StatusLine>
   return <CompanyContext value={company}><Outlet /></CompanyContext>
+}
+
+/**
+ * A company that cannot be opened (not found) or could not be loaded, on the shared state screen. Its text is a fixed
+ * title and the server's message only: the server answers one identical 404 for a company the person is not a member of
+ * and for an id that does not exist, so the two pages cannot be told apart.
+ */
+export function CompanyUnavailable({ kind, message, onRetry }: { kind: 'missing' | 'failed'; message: string; onRetry: () => void }) {
+  return kind === 'missing' ? <StateScreen state='not-found' title='Company not found' message={message} />
+    : <StateScreen state='error' title='The company could not be loaded' message={message} onRetry={onRetry} />
 }

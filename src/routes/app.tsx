@@ -1,23 +1,28 @@
 import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, WorkspaceProjectSwitcher } from '@ten98/ui'
-import type { NavLinkComponent, SidebarNavGroup } from '@ten98/ui'
+import type { SidebarNavGroup } from '@ten98/ui'
 import { AppBrand } from '@ten98/ui/app'
-import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState, type ErrorComponentProps } from '@tanstack/react-router'
+import { createFileRoute, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { version } from '../../package.json'
 import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
-import { KeyboardShell, ShellStateScreen } from '../components/KeyboardShell'
+import { KeyboardShell, NotFoundScreen, RouterLink } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
 import { sectionPath, workspaceOptions } from '../lib/company'
 import { shellBackTarget } from '../lib/commands'
+import { focusHeadingAfterLoad } from '../lib/page-focus'
+import { shellPageTitle } from '../lib/shell-title'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
-/** An address under /app that no route matches, and a page that fails, show a state screen inside the shell (ShellStateScreen). */
-export const Route = createFileRoute('/app')({ component: AppLayout, notFoundComponent: RouteNotFound, errorComponent: RouteError })
+/**
+ * An address under /app that no route matches shows the not-found state screen inside the shell. A page that fails is
+ * caught by its own route (the router's default error component, src/router.tsx), so the shell stays around it.
+ */
+export const Route = createFileRoute('/app')({ component: AppLayout, notFoundComponent: NotFoundScreen })
 
-const ShellLink: NavLinkComponent = ({ href, ...props }) => <Link to={href} {...props} />
+const ShellLink = RouterLink
 
 /** The company sections; each is its own child route of /app/c/$companyId. */
 const sections = [
@@ -51,6 +56,10 @@ function AppLayout() {
     catch (error) { if (error instanceof ApiError && error.status === 401) unauthorized(); else setLoadError(errMsg(error)) }
   }, [unauthorized])
   useEffect(() => { void loadMe() }, [loadMe])
+  // After a full load, once the shell is there: the page's heading takes focus unless the page puts it somewhere itself
+  // (src/lib/page-focus.ts), so focus is never left on the page body.
+  const shellShown = me !== null
+  useEffect(() => { if (shellShown) return focusHeadingAfterLoad(document) }, [shellShown])
 
   const reloadCompanies = useCallback(async () => {
     const request = ++companiesRequest.current
@@ -100,8 +109,7 @@ function AppLayout() {
   // The Team page and the switcher follow the company in the address, else the current one.
   const shown = company ?? (pathname.startsWith('/app/team') ? current : undefined)
   const manager = current?.role === 'owner' || current?.role === 'admin'
-  const pageTitle = (ready ? currentSection?.label : undefined) ?? (pathname.startsWith('/app/account') ? 'Your account' : pathname.startsWith('/app/team') ? 'Team'
-    : pathname.startsWith('/app/companies/new') ? 'Create company' : company ? 'Set up the company' : 'Companies')
+  const pageTitle = shellPageTitle({ section: ready ? currentSection?.label : undefined, path: pathname, company })
   // Escape goes back one level, from a company page to the company menu (shellBackTarget). The menu is the top level: /app
   // only reopens a company. A company in the address that the list does not hold cannot be opened: Escape goes to /app.
   const backTo = shellBackTarget({ companyInAddress: companyId !== undefined, listed: companies === null ? null : company !== undefined, ready, atMenu: pathname.toLowerCase().replace(/\/$/, '') === base })
@@ -150,10 +158,3 @@ function PresentationProvider({ userId, onUnauthorized, children }: { userId: st
   return <AccountPresentationContext value={useAccountPresentationState(userId, onUnauthorized)}>{children}</AccountPresentationContext>
 }
 
-function RouteNotFound() {
-  return <ShellStateScreen state='not-found' title='Page not found' message='This address does not open a page of the application.' />
-}
-
-function RouteError({ reset }: ErrorComponentProps) {
-  return <ShellStateScreen state='error' title='This page could not be shown' message='Something went wrong while showing this page.' onRetry={reset} />
-}

@@ -1,5 +1,5 @@
-import { AppStateScreen, Dialog, ShortcutProvider, ShortcutScope, Stack, useCommand, useCommandKeys } from '@ten98/ui'
-import { useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
+import { Alert, AuthLayout, Button, Dialog, ShortcutProvider, ShortcutScope, Stack, Text, useCommand, useCommandKeys, type NavLinkComponent } from '@ten98/ui'
+import { Link, useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
@@ -7,6 +7,7 @@ import { reportLevel } from '../lib/reports'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
+import { FocusMemoryContext, rememberFocusOutsideDialogs, type FocusMemory } from './masters/leave-guard'
 import { useCanWrite } from './masters/useCanWrite'
 import { reportMenuGroups } from './reports/ReportScreen'
 import { reportRoutes, trailMark, trailStepOf } from './reports/navigation'
@@ -198,7 +199,11 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
   const keymap = setting?.keymap ?? defaultKeymap
   const state = useMemo<KeyboardState>(() => ({ keymap, chosen: setting?.chosen ?? null, saving, error, choose, openHelp }), [keymap, setting, saving, error, choose, openHelp])
 
-  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}>
+  // The last element focused outside a dialog, for "Keep editing" to return to (leave-guard.ts).
+  const focusMemory = useRef<FocusMemory['current']>(null)
+  useEffect(() => rememberFocusOutsideDialogs(document, focusMemory), [])
+
+  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}><FocusMemoryContext value={focusMemory}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
       <GlobalCommands back={backNow} companyOpen={companyOpen} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
       <ReservedKeys context='global' />
@@ -206,7 +211,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
       <GoToDialog mode={goToMode} onClose={() => setGoToMode(null)} />
     </ShortcutProvider>
-  </OpenScreenContext></BackOverrideContext></KeyboardContext>
+  </FocusMemoryContext></OpenScreenContext></BackOverrideContext></KeyboardContext>
 }
 
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
@@ -304,23 +309,53 @@ function GoToDialog({ mode, onClose }: { mode: ScreenMode | null; onClose: () =>
   </DialogKeys>
 }
 
+/** A design-system link (`href`) that navigates through the router instead of loading the page again. */
+export const RouterLink: NavLinkComponent = ({ href, ...props }) => <Link to={href} {...props} />
+
+/** The fixed text of the state screens: the same whatever the address, the session or the error. */
+export const stateCopy = {
+  notFound: { title: 'Page not found', message: 'This address does not open a page of the application.' },
+  error: { title: 'This page could not be shown', message: 'Something went wrong while showing this page.' },
+} as const
+
 /**
- * A state screen inside the signed-in shell: an address no route matches, a company that cannot be opened, a page that
- * failed. The shared AppStateScreen, whose heading takes focus when it appears so that focus is never left on the page
- * body, and Escape (and Ctrl+Q in classic) goes to the start page (/app), which opens the last company used. What it
- * shows depends only on its props: the company layout gives "Company not found" with the server's one message for a
- * company the person is not a member of and for an id that does not exist, so the two pages cannot be told apart.
+ * A state screen (an address no route matches, a company that cannot be opened, a page that failed), inside the signed-in
+ * shell or outside it. Its heading takes focus when it appears, so focus is never left on the page body. Inside the shell
+ * it sits in the shell's main area (an unlabelled layout, so the page keeps one main landmark), and Escape (Ctrl+Q in
+ * classic) and "Go to the start page" go to /app, which opens the last company used. Outside the shell it is the page's
+ * main landmark and the start page is /. What it shows depends only on its props: an error's own text never reaches it.
  */
-export function ShellStateScreen({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
+export function StateScreen({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
+  const inShell = useContext(KeyboardContext) !== null
+  const start = inShell ? '/app' : '/'
   const navigate = useNavigate()
-  const region = useRef<HTMLElement>(null)
+  const holder = useRef<HTMLElement>(null)
   useEffect(() => {
-    const heading = region.current?.querySelector<HTMLElement>('h1, h2')
-    if (heading) { heading.tabIndex = -1; heading.focus() } else region.current?.focus()
+    const heading = holder.current?.querySelector<HTMLElement>('h1')
+    if (heading) { heading.tabIndex = -1; heading.focus() }
   }, [])
-  useBackOverride(() => void navigate({ to: '/app' }))
-  return <Stack ref={region} tabIndex={-1} role='region' aria-label={title}>
-    <AppStateScreen state={state} surface='plain' brand={false} aside={null} title={title} message={message} onRetry={onRetry}
-      homeHref={state === 'not-found' ? '/app' : undefined} retryLabel={state === 'not-found' ? 'Go to the start page' : undefined} />
+  useBackOverride(() => void navigate({ to: start }))
+  return <Stack ref={holder}>
+    <AuthLayout label={inShell ? undefined : title} title={title} surface={inShell ? 'plain' : undefined} brand={inShell ? false : undefined} aside={inShell ? null : undefined}>
+      <Stack gap={4}>
+        {state === 'not-found' ? <Text role='status'>{message}</Text> : <Alert tone='danger' role='alert' title={message} />}
+        {state === 'not-found' ? <Button href={start} component={RouterLink}>Go to the start page</Button>
+          : onRetry && <Button onClick={onRetry}>Try again</Button>}
+      </Stack>
+    </AuthLayout>
   </Stack>
+}
+
+/** The router's not-found screen (an address no route matches), in or out of the shell. */
+export function NotFoundScreen() {
+  return <StateScreen state='not-found' {...stateCopy.notFound} />
+}
+
+/**
+ * The router's error screen: a fixed message and "Try again" only; the error object is never read. Try again resets
+ * the boundary (when the router gives one) and loads the page's data again.
+ */
+export function ErrorScreen({ reset }: { reset?: () => void }) {
+  const router = useRouter()
+  return <StateScreen state='error' {...stateCopy.error} onRetry={() => { reset?.(); void router.invalidate() }} />
 }

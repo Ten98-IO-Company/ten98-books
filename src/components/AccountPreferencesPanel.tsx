@@ -2,7 +2,8 @@ import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,ty
 import {useConfirm} from './useConfirm';
 import {useCallback,useEffect,useId,useRef,useState} from 'react';
 import {useLeaveGuard} from './masters/entry';
-import {controlAfterSave} from './masters/leave-guard';
+import {refocusAfterSave} from './masters/leave-guard';
+import {preferencesChanged} from '../lib/preferences-draft';
 import {ApiError,errMsg} from '../lib/api';
 import {accountLocaleInventory,accountLocaleMapping,accountLocales,accountPreferencesDefaults,accountPreferencesWireInputSchema,canonicalAccountTimeZone,type AccountLocale,type AccountPreferencesInput,type AccountPreferencesDto} from '../lib/account-preferences';
 import {requestAccountPreferences,useAccountPresentation} from '../lib/account-presentation';
@@ -12,7 +13,6 @@ const localeOptions:SelectOption[]=accountLocaleInventory.map(([code,label,dir])
 const isLocale=(value:string|undefined):value is AccountLocale=>accountLocales.includes(value as AccountLocale);
 const asDraft=(values:AccountProfileValues):Draft=>({name:values.name,timeZone:values.timeZone??'',locale:(isLocale(values.locale)?values.locale:accountPreferencesDefaults.locale),theme:values.theme});
 const savedDraft=(data:AccountPreferencesDto):Draft=>({name:data.user.name,timeZone:data.preferences.timeZone,locale:data.preferences.locale,theme:data.preferences.theme});
-const sameDraft=(a:Draft,b:Draft)=>a.name===b.name&&a.timeZone===b.timeZone&&a.locale===b.locale&&a.theme===b.theme;
 const detectTimeZone=()=>canonicalAccountTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
 
 /** Request/authorization adapter around the canonical AccountProfileFlow: it owns the revision CAS, reload recovery and the leave guard. */
@@ -26,7 +26,7 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
   useEffect(()=>{operation.current++;request.current?.abort();locked.current=false;setBusy(false);setError('');if(!data||data!==acknowledged.current){acknowledged.current=null;setNotice(undefined);}setReloadRequired(false);setStaged(null);setDraft(data?savedDraft(data):null);setGeneration(value=>value+1);},[data]);
   const blocked=!data||!draft||!!account?.loading||!!account?.error||busy;
   const saved=data?savedDraft(data):null;
-  const changed=!!saved&&!!draft&&!sameDraft(draft,saved);
+  const changed=preferencesChanged(draft,saved);
   const [confirm,dialog]=useConfirm();
   // The leave guard of the master forms: the same question, opened on "Keep editing", for a route change or a reload
   // while the draft differs from what is saved. After a save the draft equals the saved values, so nothing is asked.
@@ -36,7 +36,7 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
   // refused save that keeps its form, as soon as the fields are enabled again.
   useEffect(()=>{const previous=saver.current;if(busy||!previous||(remountPending.current&&previous.isConnected))return;
     saver.current=null;remountPending.current=false;
-    if(!document.activeElement||document.activeElement===document.body)controlAfterSave(previous,selector=>root.current?.querySelector<HTMLElement>(selector)??null)?.focus();},[busy,generation]);
+    refocusAfterSave(previous,document.activeElement,document.body,selector=>root.current?.querySelector<HTMLElement>(selector)??null);},[busy,generation]);
   const zones=Array.from(new Set(['UTC',...(data?[data.preferences.timeZone]:[]),...Intl.supportedValuesOf('timeZone')])).sort();
   const onValuesChange=useCallback((values:AccountProfileValues)=>setDraft(asDraft(values)),[]);
   const fallback={name:'',...accountPreferencesDefaults};

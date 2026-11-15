@@ -7,9 +7,7 @@ import appStyles from '@ten98/ui/app.css?url';
 import productStyles from '@ten98/ui/product.css?url';
 import { authStory } from '../components/AuthLayout';
 import { getConfig } from '../server/config.ts';
-import { AppStateScreen, Stack } from '@ten98/ui';
-import type { ErrorComponentProps } from '@tanstack/react-router';
-import { useEffect, useRef } from 'react';
+import { ErrorScreen, NotFoundScreen } from '../components/KeyboardShell';
 
 export const Route = createRootRoute({
   head: () => ({
@@ -33,31 +31,8 @@ export const Route = createRootRoute({
   } : {},
   // suppressHydrationWarning: the theme script sets data-theme on <html> before React hydrates, which the server markup lacks.
   component: () => <html lang='en' suppressHydrationWarning><head><HeadContent /></head><body><ToastProvider><AuthFrameProvider brand={<AppBrand product='Books' />} aside={authStory}><Outlet /></AuthFrameProvider></ToastProvider><Scripts /></body></html>,
-  notFoundComponent: RootNotFound,
-  errorComponent: RootError,
+  // Outside the signed-in shell: one not-found screen for every visitor and address, a fixed error text (KeyboardShell.tsx).
+  notFoundComponent: NotFoundScreen,
+  errorComponent: ErrorScreen,
 });
 
-/**
- * An address no route matches, outside the signed-in shell (inside it the /app route's own screen applies): the same
- * screen for every visitor, signed in or not, whatever the address, with a link to the start page. Its heading takes
- * focus, so focus is not left on the page body.
- */
-function RootNotFound() {
-  return <RootState state='not-found' title='Page not found' message='This address does not open a page of the application.' />;
-}
-
-/** A failure outside the shell: a fixed message and "Try again" only. The error itself (its message, stack or request) is never shown. */
-function RootError({ reset }: ErrorComponentProps) {
-  return <RootState state='error' title='This page could not be shown' message='Something went wrong while showing this page.' onRetry={reset} />;
-}
-
-function RootState({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
-  const region = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const heading = region.current?.querySelector<HTMLElement>('h1, h2');
-    if (heading) { heading.tabIndex = -1; heading.focus(); } else region.current?.focus();
-  }, []);
-  return <Stack ref={region} tabIndex={-1} role='region' aria-label={title}>
-    <AppStateScreen state={state} title={title} message={message} onRetry={onRetry} homeHref={state === 'not-found' ? '/' : undefined} retryLabel={state === 'not-found' ? 'Go to the start page' : 'Try again'} />
-  </Stack>;
-}
