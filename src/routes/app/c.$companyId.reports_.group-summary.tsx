@@ -34,7 +34,7 @@ function GroupSummaryScreen() {
     : group.parentId ? { report: 'group-summary', search: { from: search.from, to: search.to, group: group.parentId } }
     : { report: group.nature === 'asset' || group.nature === 'liability' ? 'balance-sheet' : 'profit-and-loss', search: { from: search.from, to: search.to } }
   return <ReportScreen title={group ? `Group summary: ${group.name}` : 'Group summary: primary groups'} search={search} status={screen.status} error={screen.error}
-    onRetry={screen.report.reload} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} zeros={screen.zeros}
+    onRetry={screen.report.reload} failure={screen.failure} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} zeros={screen.zeros}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/group-summary${search.group ? `/${search.group}` : ''}/export?${query(screen.period)}` : null}
     back={() => screen.back(parent)}>
     {data && <ReportTable caption={group ? `Sub-groups and ledgers of ${group.name}` : 'Primary groups'} columns={columns} rows={rows} rowKey={row => row.key}

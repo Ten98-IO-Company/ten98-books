@@ -29,7 +29,7 @@ export function useReportScreen<T>(search: ReportSearch, kind: PeriodKind, path:
     [navigation, search, highlight])
   return {
     company, period, report, highlight, setHighlight, open, back: navigation.back, hrefOf: navigation.hrefOf,
-    status: periodError ? 'error' as const : report.status, error: periodError || report.error,
+    status: periodError ? 'error' as const : report.status, error: periodError || report.error, failure: periodError ? null : report.failure,
     setPeriod: (next: ReportPeriod) => update(previous => ({ ...previous, ...next, hl: undefined, pages: undefined })),
     detail: { on: search.detail === true, toggle: () => update(previous => ({ ...previous, detail: previous.detail ? undefined : true })) },
     zeros: { shown: search.zeros === true, toggle: () => update(previous => ({ ...previous, zeros: previous.zeros ? undefined : true })) },

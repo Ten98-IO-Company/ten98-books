@@ -370,14 +370,6 @@ export function costBreakupSummary(report: Pick<Wire<CostCentreBreakup>, 'centre
   return `Category: ${report.centre.categoryName}.${ledgers ? ' A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers for the period, for every centre.' : ''}`;
 }
 
-/**
- * What Enter does on a report's chooser (the ledger list, the cost centre list). The first line is highlighted on
- * screen from the start, but it was not chosen: Enter opens a line only once the user narrowed the list by typing or
- * moved the highlight (arrows, a click, or coming back from the line), and otherwise asks for a choice.
- */
-export const pickerEnter = ({ filter, highlight }: { filter: string; highlight: string | undefined }): 'open' | 'nothing-chosen' =>
-  filter.trim() !== '' || highlight !== undefined ? 'open' : 'nothing-chosen';
-
 /** The centres the break-up's chooser lists for the typed text: a part of the name or the second-language name, any case. */
 export function matchingCentres<T extends { name: string; secondLanguageName: string | null }>(centres: readonly T[], text: string): T[] {
   const words = text.trim().toLowerCase();

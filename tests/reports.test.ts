@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { asAtPeriod, centreOriginNotice, costCentresOffNotice, defaultScopeNote, monthlyClipNotice, pickerEnter, reportFailureAction, unreadableDate, unreadableDateNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { asAtPeriod, centreOriginNotice, costCentresOffNotice, defaultScopeNote, monthlyClipNotice, reportFailureAction, unreadableDate, unreadableDateNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -248,12 +248,4 @@ test('the scope line names why a report opened on the period it did, only when i
   assert.equal(defaultScopeNote(defaults.period, 'none', false, defaults), null);
   const empty = { lastVoucherDate: null, period: { from: '2026-01-01', to: '2026-01-01' }, dayBookDate: '2026-01-01' };
   assert.equal(defaultScopeNote(empty.period, 'statement', false, empty), 'the financial year to the date the books begin');
-});
-
-test('Enter on a chooser opens a line only after the user narrowed the list or moved the highlight', () => {
-  assert.equal(pickerEnter({ filter: '', highlight: undefined }), 'nothing-chosen', 'the first line is shown highlighted but was not chosen');
-  assert.equal(pickerEnter({ filter: '   ', highlight: undefined }), 'nothing-chosen', 'spaces do not narrow the list');
-  assert.equal(pickerEnter({ filter: 'north', highlight: undefined }), 'open', 'narrowed by typing');
-  assert.equal(pickerEnter({ filter: '', highlight: 'c:1' }), 'open', 'moved with the arrows or a click, or came back from the line');
-  assert.equal(pickerEnter({ filter: 'north', highlight: 'c:2' }), 'open');
 });

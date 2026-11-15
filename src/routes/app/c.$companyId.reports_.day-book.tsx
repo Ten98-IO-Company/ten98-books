@@ -32,7 +32,7 @@ function DayBookScreen() {
   const screen = useReportScreen<Wire<DayBookReport>>(search, 'day', (period, companyId) => `/api/companies/${companyId}/reports/day-book?${query({ ...period, after: pages.after })}`)
   const data = screen.report.data
   const range = data ? registerRange(pages.before, data.rows.length, data.next !== null) : null
-  return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/day-book/export?${query(screen.period)}` : null}
     back={() => screen.back(null)}

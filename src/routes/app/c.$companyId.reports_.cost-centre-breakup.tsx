@@ -1,10 +1,10 @@
 import type { DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
-import { useMemo, useRef } from 'react'
+import { useMemo, useState } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
 import { CostCentresOff } from '../../components/reports/CostCentresOff'
 import { query, reportSearch, useReport, type ReportSearch } from '../../components/reports/navigation'
-import { PickerFind, usePickerFind } from '../../components/reports/PickerFind'
+import { PickerFind } from '../../components/reports/PickerFind'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
@@ -42,7 +42,7 @@ function Breakup({ search, centreId }: { search: ReportSearch; centreId: string 
   const rows = data?.rows ?? []
   const centre = data?.centre
   return <ReportScreen title={centre ? `Cost centre break-up: ${centre.name}` : 'Cost centre break-up'} search={search} status={screen.status} error={screen.error}
-    onRetry={screen.report.reload} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
+    onRetry={screen.report.reload} failure={screen.failure} period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/cost-centre-breakup/${centreId}/export?${query(screen.period)}` : null}
     back={() => screen.back({ report: 'cost-category-summary', search: { from: search.from, to: search.to } })}
     summary={data ? costBreakupSummary(data) : undefined}>
@@ -61,20 +61,19 @@ const centreColumns: DataColumn<Centre>[] = [
   { key: 'category', header: 'Category', wrap: true, render: row => row.categoryName },
 ]
 
-/** Choose a centre, as the ledger chooser does: the find field has focus on arrival, typing narrows the list, and Enter opens the highlighted centre's break-up once the list was narrowed or the highlight moved. */
+/** Choose a centre, as the ledger chooser does: the find field has focus on arrival, typing narrows the list, and Enter opens the highlighted centre's break-up (the first of the narrowed list, shown highlighted from the start). */
 function CentreChooser({ search }: { search: ReportSearch }) {
   const screen = useReportScreen<never>(search, 'statement', () => null)
   const centres = useReport<Centre[]>(`/api/companies/${screen.company.id}/cost-centres`, 'costCentres')
-  const find = usePickerFind(screen.highlight, screen.setHighlight)
-  const focusRows = useRef<(() => void) | null>(null)
-  const rows = useMemo(() => matchingCentres(centres.data ?? [], find.filter), [centres.data, find.filter])
+  const [filter, setFilter] = useState('')
+  const rows = useMemo(() => matchingCentres(centres.data ?? [], filter), [centres.data, filter])
   return <ReportScreen title='Cost centre break-up' search={search} status={centres.status} error={centres.error} onRetry={centres.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} back={() => screen.back(null)}
     summary={centres.data && !centres.data.length ? 'This company has no cost centres yet.' : undefined}>
     <CostCentresOff companyId={screen.company.id} />
-    <PickerFind label='Find a cost centre' description='Type to narrow the list, then Enter opens the highlighted centre.' filter={find.filter} onFilter={find.onFilter} prompt={find.prompt} focusRows={focusRows} />
-    <ReportTable caption='Cost centres' columns={centreColumns} rows={rows} rowKey={row => row.id} focusOnLoad={false} focusRows={focusRows}
-      highlight={screen.highlight} onHighlight={find.onMove}
-      onOpen={row => find.choose(() => screen.open({ report: 'cost-centre-breakup', search: { centre: row.id } }))} />
+    <PickerFind label='Find a cost centre' noun='cost centre' filter={filter} onFilter={text => { setFilter(text); screen.setHighlight(undefined) }} matches={rows.length} />
+    <ReportTable caption='Cost centres' columns={centreColumns} rows={rows} rowKey={row => row.id} focusOnLoad={false}
+      highlight={screen.highlight} onHighlight={screen.setHighlight}
+      onOpen={row => screen.open({ report: 'cost-centre-breakup', search: { centre: row.id } })} />
   </ReportScreen>
 }

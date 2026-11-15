@@ -36,7 +36,7 @@ function BalanceSheetScreen() {
     const from = screen.period && screen.period.from <= next ? screen.period.from : next
     void navigate({ to: '.', search: (previous: BalanceSheetSearch) => ({ ...previous, from, to: next, badTo: undefined, hl: undefined, pages: undefined }) as never, replace: true })
   }
-  return <ReportScreen title='Balance sheet' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload}
+  return <ReportScreen title='Balance sheet' search={search} status={screen.status} error={screen.error} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'date', date, onChange: change }}
     detail={screen.detail} zeros={screen.zeros}
     exportPath={date ? `/api/companies/${screen.company.id}/reports/balance-sheet/export?${query({ date })}` : null}

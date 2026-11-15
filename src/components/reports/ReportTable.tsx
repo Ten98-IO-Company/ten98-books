@@ -1,5 +1,5 @@
 import { DataTable, Stack, type DataColumn, type DataTableApi, type TableCursorPage } from '@ten98/ui'
-import { useEffect, useRef, type MutableRefObject, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useAppCommand } from '../KeyboardShell'
 
 /** Lines one PageDown or PageUp moves. */
@@ -14,7 +14,7 @@ const pageLines = 10
  * Focus on a row lets screen readers read the line moved to; the row header names it.
  * Must be rendered inside the report's ShortcutScope. Each row needs a stable key; the highlight is that key.
  */
-export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, pageBusy = false, focusOnLoad = true, focusRows }: {
+export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHighlight, onOpen, canOpen, footerCells, page, onPage, pageBusy = false, focusOnLoad = true }: {
   caption: string
   columns: readonly DataColumn<T>[]
   rows: readonly T[]
@@ -32,8 +32,6 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   pageBusy?: boolean
   /** Moves focus to the highlighted line once the rows arrive, so the keys work at once. */
   focusOnLoad?: boolean
-  /** Filled with a function that moves focus to the highlighted line (the table frame while there are none), for a find field above the table. */
-  focusRows?: MutableRefObject<(() => void) | null>
 }) {
   const frame = useRef<HTMLElement>(null)
   const table = useRef<DataTableApi>(null)
@@ -70,12 +68,6 @@ export function ReportTable<T>({ caption, columns, rows, rowKey, highlight, onHi
   useAppCommand('report.last', () => move(rows.length - 1))
   const openable = current !== undefined && (canOpen?.(current) ?? true)
   useAppCommand('report.drill', () => { if (current) onOpen(current) }, { enabled: openable })
-
-  useEffect(() => {
-    if (!focusRows) return
-    focusRows.current = () => { if (rows.length) table.current?.focusRow(keys[position.current]); else frame.current?.focus() }
-    return () => { focusRows.current = null }
-  })
 
   // Once rows arrive (and after each page), the highlighted row takes focus unless the user is typing somewhere. With no
   // rows the table frame takes it, so focus is inside the report rather than on the page body.

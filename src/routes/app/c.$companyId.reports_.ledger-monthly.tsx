@@ -31,7 +31,7 @@ function LedgerMonthlyScreen() {
   ] : [], [data])
   const ledger = data?.ledger
   return <ReportScreen title={ledger ? `Monthly summary: ${ledger.name}` : 'Monthly summary'} search={search} status={search.ledger ? screen.status : 'error'}
-    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload}
+    error={search.ledger ? screen.error : 'Choose a ledger first.'} onRetry={screen.report.reload} failure={screen.failure}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }} shown={data ? { from: data.from, to: data.to } : null}
     exportPath={screen.period && search.ledger ? `/api/companies/${screen.company.id}/reports/ledger-monthly/${search.ledger}/export?${query(screen.period)}` : null}
     back={() => screen.back(ledger?.groupId ? { report: 'group-summary', search: { from: search.from, to: search.to, group: ledger.groupId } } : { report: 'ledger', search: { from: search.from, to: search.to } })}

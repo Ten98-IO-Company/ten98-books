@@ -76,7 +76,7 @@ export function useReportPeriod(companyId: string, search: ReportSearch, kind: P
   return { period, error }
 }
 
-export type Loaded<T> = { status: 'loading' | 'ready' | 'error'; data: T | null; error: string; reload: () => void }
+export type Loaded<T> = { status: 'loading' | 'ready' | 'error'; data: T | null; error: string; /** The failed request's status and code (status 0: no answer from the server); null unless `status` is 'error'. */ failure: { status: number; code?: string } | null; reload: () => void }
 
 /**
  * GETs a report (null `path` waits) and reads `field` of the response. Keeps the last result while the next one loads,
@@ -85,7 +85,7 @@ export type Loaded<T> = { status: 'loading' | 'ready' | 'error'; data: T | null;
  */
 export function useReport<T>(path: string | null, field = 'report', subject?: string): Loaded<T> {
   const { unauthorized } = useApp()
-  const [state, setState] = useState<{ path: string | null; subject: string | undefined; data: T | null; error: string }>({ path: null, subject: undefined, data: null, error: '' })
+  const [state, setState] = useState<{ path: string | null; subject: string | undefined; data: T | null; error: string; failure?: { status: number; code?: string } }>({ path: null, subject: undefined, data: null, error: '' })
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (!path) return
@@ -95,13 +95,13 @@ export function useReport<T>(path: string | null, field = 'report', subject?: st
       .catch(cause => {
         if (controller.signal.aborted) return
         if (cause instanceof ApiError && cause.status === 401) unauthorized()
-        else setState(previous => ({ path, subject: previous.subject, data: previous.data, error: errMsg(cause) }))
+        else setState(previous => ({ path, subject: previous.subject, data: previous.data, error: errMsg(cause), failure: { status: cause instanceof ApiError ? cause.status : 0, code: cause instanceof ApiError ? cause.code : undefined } }))
       })
     return () => controller.abort()
   }, [path, subject, attempt])
   const reload = useCallback(() => setAttempt(value => value + 1), [])
   const settled = state.path === path
-  return { status: !settled ? 'loading' : state.error ? 'error' : 'ready', data: dataForSubject(state, subject), error: settled ? state.error : '', reload }
+  return { status: !settled ? 'loading' : state.error ? 'error' : 'ready', data: dataForSubject(state, subject), error: settled ? state.error : '', failure: settled && state.error ? state.failure ?? null : null, reload }
 }
 
 /** A query string from defined values only. */
