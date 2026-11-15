@@ -113,6 +113,22 @@ test('opening stock by rate or by value: rounding, a derived rate, zero cost, ro
     [{ locationId: main.id, quantity: '1', rate: '1.00', value: '1.00' }, 'both a rate and a value'],
     [{ locationId: main.id, quantity: '1' }, 'neither a rate nor a value'],
   ] as const) await refused(call('/stock-items', { name: `Refused ${what}`, unitId: nos.id, openings: [row] }), 400, 'validation', what);
+  // A value whose derived rate would not fit the rate column (below 10^14), with a large value or a tiny quantity.
+  const fine = await made('/stock-units', { symbol: 'Mg', decimals: 4 }, 'stockUnit');
+  for (const [row, what] of [
+    [{ locationId: main.id, quantity: '1', value: '100000000000000.00' }, 'a value of 10^14 for one unit'],
+    [{ locationId: main.id, quantity: '0.0001', value: '10000000000.00' }, 'a value of 10^10 for a ten-thousandth'],
+  ] as const) {
+    const answer = await call('/stock-items', { name: `Refused ${what}`, unitId: fine.id, openings: [row] });
+    assert.deepEqual([answer.status, answer.body.code], [400, 'validation'], `${what}: ${JSON.stringify(answer.body)}`);
+    assert.match(answer.body.error, /^The value of opening row 1 is too large for its quantity/, what);
+  }
+  const largest = await call('/stock-items', { name: 'Largest rate', unitId: nos.id, openings: [{ locationId: main.id, quantity: '1', value: '99999999999999.99' }] });
+  assert.equal(largest.body.stockItem?.openings[0].rate, '99999999999999.99', 'the largest rate that fits is kept');
+  await call(`/stock-items/${largest.body.stockItem.id}/delete`, { revision: largest.body.stockItem.revision });
+  // The API names the row and the unit; the database's own refusal of the same quantity (stock-masters-guards) cannot.
+  const places = await call('/stock-items', { name: 'Too fine', unitId: kg.id, openings: [{ locationId: yard.id, quantity: '1', rate: '1.00' }, { locationId: main.id, quantity: '1.25', rate: '1.00' }] });
+  assert.deepEqual([places.status, places.body.code, places.body.error], [400, 'validation', 'The quantity of opening row 2 has more decimal places than the unit Kg allows (1).']);
   await refused(call('/stock-items', { name: 'Twice', unitId: nos.id, openings: [{ locationId: main.id, quantity: '1', rate: '1.00' }, { locationId: main.id, quantity: '1', rate: '1.00' }] }), 400, 'validation', 'one location twice');
   await refused(call('/stock-items', { name: 'Elsewhere', unitId: nos.id, openings: [{ locationId: (await mainLocation(other)).id, quantity: '1', rate: '1.00' }] }), 400, 'not_found', 'another company\'s location');
 
@@ -178,8 +194,26 @@ test('every create, alter and delete of a stock master writes one revision entry
 });
 
 test('viewers read and cannot write; every route of another company answers not found', async () => {
-  assert.equal((await call('/stock-units', undefined, companyId, viewer)).status, 200);
-  await refused(call('/stock-units', { symbol: 'Viewer unit' }, companyId, viewer), 404, 'not_found', 'a viewer writing');
+  const unit = await made('/stock-units', { symbol: 'Seen' }, 'stockUnit');
+  const mine: Record<string, { id: string; revision: number }> = {
+    '/stock-units': unit,
+    '/stock-groups': await made('/stock-groups', { name: 'Seen' }, 'stockGroup'),
+    '/stock-categories': await made('/stock-categories', { name: 'Seen' }, 'stockCategory'),
+    '/stock-locations': await made('/stock-locations', { name: 'Seen' }, 'stockLocation'),
+    '/stock-items': await made('/stock-items', { name: 'Seen', unitId: unit.id }, 'stockItem'),
+  };
+  const writes: [string, unknown][] = [['/inventory-setting', { enabled: false }]];
+  for (const [path, row] of Object.entries(mine)) {
+    const body = { name: 'Viewer', symbol: 'Viewer', unitId: unit.id, revision: row.revision };
+    writes.push([path, body], [`${path}/${row.id}`, body], [`${path}/${row.id}/delete`, { revision: row.revision }]);
+  }
+  for (const [path] of Object.entries(mine)) assert.equal((await call(path, undefined, companyId, viewer)).status, 200, `a viewer reads ${path}`);
+  for (const [path, body] of writes) await refused(call(path, body, companyId, viewer), 404, 'not_found', `a viewer writing ${path}`);
+  for (const [path, row] of Object.entries(mine)) {
+    const now = Object.values((await call(`${path}/${row.id}`)).body)[0] as { revision: number; name?: string; symbol?: string };
+    assert.deepEqual([now.revision, now.name ?? now.symbol], [row.revision, 'Seen'], `${path} unchanged`);
+  }
+  assert.equal((await call('/inventory-setting')).body.inventory.enabled, true, 'the switch unchanged');
   assert.equal((await call('/stock-units', { symbol: 'Editor unit' }, companyId, editor)).status, 201, 'editors write masters');
 
   const stranger = await setupStranger();

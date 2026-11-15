@@ -16,9 +16,11 @@ import { logRevision } from './revisions.ts';
  * unique indexes; kinds are separate name spaces. Deletes of used rows are refused by the database's foreign keys, and
  * the database repeats the unit, opening and main-location rules (migration 0011).
  *
- * Locks: an alter or delete of a unit, item or location takes the row's FOR UPDATE lock; an opening write key-shares,
- * in this order, its item (already locked by the item's own write), its unit and its locations in id order. So lowering
- * a unit's decimals waits for an opening write in flight and then sees its rows.
+ * Locks, in this order: items, units, locations. An alter or delete of a unit, item or location takes the row's FOR
+ * UPDATE lock (a unit delete first looks for its items, so it never holds the unit while waiting for an item); an
+ * opening write holds its item (locked by the item's own write), share-locks its unit, then key-shares its locations in
+ * id order. The database's opening guard takes the item and unit locks again for every row and checks against them, so
+ * a unit alter or an item's unit change in flight is waited for, whichever path writes the rows.
  */
 
 const notFound = (what: string) => ledgerError(404, `${what} not found.`, 'not_found');
@@ -177,7 +179,7 @@ export async function getUnit(context: LedgerContext, unitId: string): Promise<S
   return rows[0];
 }
 
-async function readUnit(context: LedgerContext, unitId: string, lock: '' | 'FOR UPDATE' | 'FOR KEY SHARE' = ''): Promise<StockUnit> {
+async function readUnit(context: LedgerContext, unitId: string, lock: '' | 'FOR UPDATE' | 'FOR SHARE' = ''): Promise<StockUnit> {
   const { rows } = await context.client.query<StockUnit>(`SELECT ${unitColumns} FROM stock_unit u WHERE u.company_id = $1 AND u.id = $2 ${lock}`, [context.company.companyId, unitId]);
   if (!rows[0]) throw notFound('Unit');
   return rows[0];
@@ -194,7 +196,7 @@ export async function createUnit(context: LedgerContext, value: unknown): Promis
 }
 
 /**
- * Renames a unit or changes its decimals. The row lock waits for opening writes in flight (they key-share the unit), so
+ * Renames a unit or changes its decimals. The row lock waits for opening writes in flight (they share-lock the unit), so
  * the check that refuses lowering the decimals of a used unit sees their rows.
  */
 export async function alterUnit(context: LedgerContext, unitId: string, value: unknown): Promise<StockUnit> {
@@ -217,10 +219,17 @@ export async function alterUnit(context: LedgerContext, unitId: string, value: u
 
 export async function deleteUnit(context: LedgerContext, unitId: string, value: unknown): Promise<void> {
   const input = parseInput(revisionInput, value, unitFields);
+  const inUse = ledgerError(409, 'This unit is used by stock items and cannot be deleted.', 'in_use');
+  // Items come before units in the lock order: holding the unit while the foreign key check waits for an item that an
+  // opening write holds (and that write waiting for the unit) would deadlock. An item committed after this read is still
+  // caught by the foreign key.
+  const { rows: [use] } = await context.client.query<{ used: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM stock_item WHERE unit_id = $2 AND company_id = $1) AS used', [context.company.companyId, unitId]);
+  if (use.used) throw inUse;
   const before = await readUnit(context, unitId, 'FOR UPDATE');
   if (before.revision !== input.revision) throw conflict('unit');
   await context.client.query('DELETE FROM stock_unit WHERE company_id = $1 AND id = $2', [context.company.companyId, unitId])
-    .catch(error => refusal(error, { ...unitRefusals, '23503': ledgerError(409, 'This unit is used by stock items and cannot be deleted.', 'in_use') }));
+    .catch(error => refusal(error, { ...unitRefusals, '23503': inUse }));
   await logRevision(context, 'stock_unit', unitId, 'delete', before, null);
 }
 
@@ -230,6 +239,7 @@ const itemRefusals = {
   stock_item_name_idx: ledgerError(409, 'A stock item with this name already exists.', 'duplicate_name'),
   stock_item_unit_fixed: ledgerError(409, 'This item has opening stock, so its unit cannot change.', 'in_use'),
   stock_opening_quantity_places: ledgerError(400, 'An opening quantity has more decimal places than the item\'s unit allows.', 'validation'),
+  stock_opening_locked: ledgerError(409, 'Opening stock is locked: the books are locked through the books beginning.', 'locked_period'),
   stock_unit_decimals: unitRefusals.stock_unit_decimals,
 };
 
@@ -274,6 +284,13 @@ export async function readItem(context: LedgerContext, itemId: string, lock = fa
 
 type OpeningPlan = { locationId: string; quantity: string; rate: string | null; value: bigint };
 
+/** Whether value ÷ quantity, rounded half-up to six places as the database derives it, fits the rate column (numeric(20, 6)). */
+export function derivedRateFits(value: bigint, quantity: string, exponent: number): boolean {
+  const [whole, fraction = ''] = quantity.split('.');
+  const millionths = value * 10n ** BigInt(6 + fraction.length), per = 10n ** BigInt(exponent) * BigInt(whole + fraction);
+  return (2n * millionths + per) / (2n * per) < 10n ** 20n;
+}
+
 /**
  * Checks the item's opening rows against its unit and the currency: a quantity above zero with at most the unit's
  * decimals; a rate with at most the currency's places (the value is quantity × rate, half-up), or a value (the rate is
@@ -293,6 +310,9 @@ function planOpenings(context: LedgerContext, unit: StockUnit, rows: NonNullable
     if (row.value !== undefined) {
       const value = parseAmount(row.value, exponent, `The value of ${where}`);
       if (value < 0n) throw ledgerError(400, `The value of ${where} cannot be negative.`, 'validation');
+      if (!derivedRateFits(value, row.quantity, exponent)) {
+        throw ledgerError(400, `The value of ${where} is too large for its quantity: the rate it gives must stay below 100,000,000,000,000.`, 'validation');
+      }
       return { locationId: row.locationId, quantity: row.quantity, rate: null, value };
     }
     if ((row.rate!.split('.')[1] ?? '').length > exponent) throw ledgerError(400, `Enter the rate of ${where} with at most ${exponent} decimal places.`, 'validation');
@@ -302,12 +322,11 @@ function planOpenings(context: LedgerContext, unit: StockUnit, rows: NonNullable
   });
 }
 
-/** Replaces the item's opening rows: key-shares the unit, then the locations in id order, then writes the set. */
+/** Inserts the opening rows of an item that has none (new, or just emptied): share-locks the unit, key-shares the locations in id order. */
 async function writeOpenings(context: LedgerContext, itemId: string, unitId: string, rows: OpeningPlan[]): Promise<void> {
   const { companyId, exponent } = context.company;
-  await context.client.query('DELETE FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, itemId]);
   if (!rows.length) return;
-  await readUnit(context, unitId, 'FOR KEY SHARE');
+  await readUnit(context, unitId, 'FOR SHARE');
   const locationIds = [...new Set(rows.map(row => row.locationId))].sort();
   const { rows: found } = await context.client.query<{ id: string }>(
     'SELECT id FROM stock_location WHERE company_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR KEY SHARE', [companyId, locationIds]);
@@ -361,14 +380,17 @@ export async function alterItem(context: LedgerContext, itemId: string, value: u
   const openings = input.openings === undefined ? null : planOpenings(context, unit, input.openings);
   const rowsAfter = openings ?? before.openings;
   if (unit.id !== before.unitId && rowsAfter.length) throw itemRefusals.stock_item_unit_fixed;
-  if (openings && !sameOpenings(before.openings, openings)) assertOpeningOpen(context);
-  if (openings) await context.client.query('DELETE FROM stock_opening WHERE company_id = $1 AND item_id = $2', [context.company.companyId, itemId]);
+  // The same set re-sent is no change, so it is kept as stored (and allowed under the lock).
+  const replacement = openings && !sameOpenings(before.openings, openings) ? openings : null;
+  if (replacement) assertOpeningOpen(context);
+  // Before the update, so an item whose rows go may change its unit.
+  if (replacement) await context.client.query('DELETE FROM stock_opening WHERE company_id = $1 AND item_id = $2', [context.company.companyId, itemId]);
   await context.client.query(
     `UPDATE stock_item SET group_id = $3, category_id = $4, unit_id = $5, name = $6, second_language_name = $7, standard_selling_rate = $8, revision = revision + 1
      WHERE company_id = $1 AND id = $2`,
     [context.company.companyId, itemId, input.groupId, input.categoryId, unit.id, input.name, input.secondLanguageName, input.standardSellingRate])
     .catch(error => refusal(error, itemRefusals));
-  if (openings) await writeOpenings(context, itemId, unit.id, openings);
+  if (replacement) await writeOpenings(context, itemId, unit.id, replacement);
   const after = await readItem(context, itemId);
   await logRevision(context, 'stock_item', itemId, 'alter', before, after);
   return after;

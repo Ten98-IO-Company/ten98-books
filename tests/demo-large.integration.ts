@@ -156,10 +156,10 @@ test('cost centres: every centre total of the year and of both checkpoints match
 
 test('opening stock: sunrise and gulfline hold it in every statement, their openings agree with it, and profit stays the ledgers\' alone', async () => {
   const cases = [
-    // sunrise: the profit and loss excluding stock of expected.json; the balance sheet without its loss line is expected.json's
-    // 233,357.70 less the 53,382.95 stock change that valuation adds (the reference deducts a loss on the liabilities side,
-    // ten98-books shows it with the assets, so both of its totals carry the 341,322.50 loss as well).
-    { slug: 'sunrise', stock: 3727000n, gross: -9268150n, net: -34132250n, balanceSheet: 17997475n, stockItems: 8 },
+    // sunrise: the profit and loss excluding stock of expected.json; the balance sheet total of expected.json, read on the
+    // reference's screen, where the loss is a positive line with the assets. Valuation will move 53,382.95 from the loss
+    // line into closing stock, both on the assets side, so the total already agrees.
+    { slug: 'sunrise', stock: 3727000n, gross: -9268150n, net: -34132250n, balanceSheet: 52129725n, stockItems: 8 },
     { slug: 'gulfline', stock: 36944000n, gross: null, net: null, balanceSheet: null, stockItems: 14 },
   ];
   for (const expected of cases) {
@@ -176,8 +176,12 @@ test('opening stock: sunrise and gulfline hold it in every statement, their open
         assert.deepEqual([row.name, row.openingDebit, row.closingDebit, parent.systemKey], ['Opening stock', expected.stock, expected.stock, 'current_assets'], `${expected.slug} ${from}`);
         assert.deepEqual(trial.openingDifference, { amount: 0n, side: null }, `${expected.slug} ${from}: no difference`);
         assert.deepEqual([trial.grandTotals.openingDebit, trial.grandTotals.closingDebit], [trial.grandTotals.openingCredit, trial.grandTotals.closingCredit], `${expected.slug} ${from}: balanced`);
-        // Without the row the ledger openings alone fall short by exactly the opening stock, on the credit side.
-        if (from === period.from) assert.equal(trial.grandTotals.openingCredit - (trial.grandTotals.openingDebit - expected.stock), expected.stock);
+        // Without the row the ledger openings alone fall short by exactly the opening stock, on the debit side.
+        if (from === period.from) {
+          const ledgers = trial.nodes.filter(node => node.kind === 'ledger');
+          const net = ledgers.reduce((sum, node) => sum + node.openingDebit - node.openingCredit, 0n);
+          assert.equal(net, -expected.stock, `${expected.slug}: the ledger openings net to the opening stock on the credit side`);
+        }
       }
       const profit = await profitAndLossReport(context, { from: period.from, to: period.to });
       assert.deepEqual(profit.stock, { opening: expected.stock, closing: expected.stock }, expected.slug);
@@ -185,8 +189,7 @@ test('opening stock: sunrise and gulfline hold it in every statement, their open
       const sheet = await balanceSheetReport(context, { date: period.to });
       assert.equal(sheet.closingStock, expected.stock);
       assert.equal(sheet.totals.liabilities, sheet.totals.assets, `${expected.slug}: the balance sheet balances`);
-      const retained = sheet.profitAndLoss.broughtForward + sheet.profitAndLoss.currentPeriod;
-      if (expected.balanceSheet !== null) assert.equal(sheet.totals.assets + (retained < 0n ? retained : 0n), expected.balanceSheet);
+      if (expected.balanceSheet !== null) assert.equal(sheet.totals.assets, expected.balanceSheet);
     });
   }
 });

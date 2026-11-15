@@ -1,13 +1,13 @@
 -- 0011: stock masters (M2b slice a). Units, stock groups, stock categories, locations and stock items, with opening
 -- stock per item and location as of the books beginning, and the company's inventory switch. Item lines on vouchers and
--- valuation come later (0012 and slice c); until then the statements value stock at the opening rows. Every new table
+-- valuation come later (0013 and slice c); until then the statements value stock at the opening rows. Every new table
 -- carries company_id, joins through composite keys that include it and forces the one company policy. This migration
 -- only adds: no existing row is checked or changed apart from the seeded main location of each company.
 
 -- ---- Company setting ----
 
 -- On for new companies (the reference workflow's default), off for existing ones: none holds items yet. Switching it
--- off while items exist is refused by the API.
+-- off while items exist is refused by the API only.
 ALTER TABLE company ADD COLUMN inventory_enabled boolean NOT NULL DEFAULT false;
 ALTER TABLE company ALTER COLUMN inventory_enabled SET DEFAULT true;
 
@@ -180,8 +180,8 @@ CREATE TRIGGER stock_category_guard BEFORE INSERT OR UPDATE OR DELETE ON stock_c
 CREATE TRIGGER stock_location_guard BEFORE INSERT OR UPDATE OR DELETE ON stock_location FOR EACH ROW EXECUTE FUNCTION stock_tree_guard();
 
 -- A unit's decimals cannot be lowered while an opening row uses it (observed through export and import; item lines join
--- this rule in 0012). Raising them is allowed. The API takes the unit's row lock first, so an opening write in flight,
--- which key-shares the unit, commits before this check reads.
+-- this rule in 0013). Raising them is allowed. An opening write in flight share-locks the unit (stock_opening_guard), so
+-- the update waits for it to commit and this check, reading afresh, sees its rows.
 CREATE FUNCTION stock_unit_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN PERFORM ledger_assert_scope(OLD.company_id); RETURN OLD; END IF;
@@ -195,7 +195,8 @@ BEGIN
 END $$;
 CREATE TRIGGER stock_unit_guard BEFORE INSERT OR UPDATE OR DELETE ON stock_unit FOR EACH ROW EXECUTE FUNCTION stock_unit_guard();
 
--- An item's unit cannot change once it has opening rows (item lines join this rule in 0012).
+-- An item's unit cannot change once it has opening rows (item lines join this rule in 0013). An opening write in flight
+-- share-locks the item, so the update waits for it to commit and this check sees its rows.
 CREATE FUNCTION stock_item_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN PERFORM ledger_assert_scope(OLD.company_id); RETURN OLD; END IF;
@@ -208,14 +209,23 @@ BEGIN
 END $$;
 CREATE TRIGGER stock_item_guard BEFORE INSERT OR UPDATE OR DELETE ON stock_item FOR EACH ROW EXECUTE FUNCTION stock_item_guard();
 
--- An opening quantity carries no more places than its item's unit allows.
+-- Opening rows follow the opening balances' lock, as opening bills do (0006): none is written or removed while the
+-- locked-through date reaches the books beginning. An opening quantity carries no more places than its item's unit
+-- allows, checked against the item and then the unit as share-locked here (the API's order: items, units, locations),
+-- so a unit's decimals lowered, or an item's unit changed, in a transaction still open is waited for and its result checked.
 CREATE FUNCTION stock_opening_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
-DECLARE v_decimals smallint;
+DECLARE v_row stock_opening; v_company company; v_unit uuid; v_decimals smallint;
 BEGIN
-  IF TG_OP = 'DELETE' THEN PERFORM ledger_assert_scope(OLD.company_id); RETURN OLD; END IF;
-  PERFORM ledger_assert_scope(NEW.company_id);
-  SELECT u.decimals INTO v_decimals FROM stock_item i JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id
-  WHERE i.company_id = NEW.company_id AND i.id = NEW.item_id;
+  IF TG_OP = 'DELETE' THEN v_row := OLD; ELSE v_row := NEW; END IF;
+  PERFORM ledger_assert_scope(v_row.company_id);
+  -- A row removed with its whole company has no record left to protect.
+  SELECT * INTO v_company FROM company WHERE company_id = v_row.company_id;
+  IF FOUND AND v_company.locked_through IS NOT NULL AND v_company.locked_through >= v_company.books_beginning THEN
+    RAISE EXCEPTION 'opening stock is inside the locked period' USING ERRCODE = '23514', CONSTRAINT = 'stock_opening_locked';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  SELECT unit_id INTO v_unit FROM stock_item WHERE company_id = NEW.company_id AND id = NEW.item_id FOR SHARE;
+  SELECT decimals INTO v_decimals FROM stock_unit WHERE company_id = NEW.company_id AND id = v_unit FOR SHARE;
   IF v_decimals IS NOT NULL AND NEW.quantity <> round(NEW.quantity, v_decimals) THEN
     RAISE EXCEPTION 'the opening quantity has more decimal places than its unit' USING ERRCODE = '23514', CONSTRAINT = 'stock_opening_quantity_places';
   END IF;

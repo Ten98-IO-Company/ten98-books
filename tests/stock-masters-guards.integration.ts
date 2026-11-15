@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import pg, { type PoolClient } from 'pg';
 import { getDatabase, migrationFiles } from '../src/server/db.ts';
-import { alterItem, alterUnit, createItem, createUnit, readItem } from '../src/server/ledger/stock-masters.ts';
+import { alterItem, alterUnit, createItem, createUnit, deleteUnit, readItem } from '../src/server/ledger/stock-masters.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { accountingTables, assertDatabaseRoles, setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
@@ -13,8 +13,9 @@ import { earlierCompany } from './helpers/master-names-migration.ts';
 /**
  * Stock master guards in the database (M2b slice a): migration 0011 on companies an earlier release created (main
  * location seeded, inventory left off), hand-written SQL as the application role (the path an application bug would
- * take), the tenancy shape of the six tables, a unit alter racing an opening write, and the index paths of the unit
- * check proven by the transaction's own table counters, without and with table statistics.
+ * take), the tenancy shape of the six tables, the period lock on opening rows, unit and item changes racing an opening
+ * write (through the API and by direct SQL), and the index paths of the unit check proven by the transaction's own
+ * table counters, without and with table statistics.
  */
 let database: TestDatabase;
 let admin: pg.Client;
@@ -169,7 +170,9 @@ async function race<A, B>(first: Parameters<typeof write<A>>[0], second: Paramet
   return { firstResult, second: secondWrite };
 }
 
-test('lowering a unit\'s decimals waits for an opening write in flight, then sees its rows and is refused', async () => {
+test('lowering a unit\'s decimals while an opening write is in flight is refused once its rows are committed', async () => {
+  // The unit's update itself waits for the opening write's lock on the unit, so this holds whatever lock the alter takes
+  // first; the opening guard's own locks are proven by direct SQL below.
   const unit = await write(context => createUnit(context, { symbol: 'Litre', decimals: 2 }));
   const item = await write(context => createItem(context, { name: 'Oil', unitId: unit.id }));
   const { second } = await race(
@@ -179,16 +182,100 @@ test('lowering a unit\'s decimals waits for an opening write in flight, then see
   assert.deepEqual((await inCompany(user, companyId, context => readItem(context, item.id))).openings.map(row => row.quantity), ['1.50']);
 });
 
-test('an opening write waits for a unit alter in flight (it key-shares the unit) and is checked against the lowered decimals', async () => {
+test('an opening write waits for a unit alter in flight and is checked against the lowered decimals', async () => {
   const unit = await write(context => createUnit(context, { symbol: 'Gallon', decimals: 2 }));
   const item = await write(context => createItem(context, { name: 'Paint', unitId: unit.id }));
-  // Without the key-share, the opening row's check would read the decimals before the alter commits and keep 1.5 on a
-  // unit of 0 places.
+  // The unit is share-locked before the row's check, which reads the decimals the alter committed, not those before it.
   const { second } = await race(
     context => alterUnit(context, unit.id, { symbol: 'Gallon', decimals: 0, revision: unit.revision }),
     context => alterItem(context, item.id, { name: 'Paint', unitId: unit.id, openings: [{ locationId: ids.main, quantity: '1.5', rate: '3.00' }], revision: item.revision }));
   await assert.rejects(second, (error: { code?: string }) => error.code === 'validation', 'refused against the committed decimals');
   assert.deepEqual((await inCompany(user, companyId, context => readItem(context, item.id))).openings, []);
+});
+
+/** A raw transaction as the application role, held open: statements run on `client` until `end`. */
+async function openApp(): Promise<{ client: PoolClient; end: (how: 'COMMIT' | 'ROLLBACK') => Promise<void> }> {
+  const client = await getDatabase().pool.connect();
+  await client.query('BEGIN');
+  await setCompanyScope(client, [companyId]);
+  let open = true;
+  return { client, end: async how => { if (!open) return; open = false; try { await client.query(how); } finally { client.release(); } } };
+}
+const insertOpening = (itemId: string, quantity: string) => (client: PoolClient) => client.query(
+  'INSERT INTO stock_opening (company_id, item_id, location_id, quantity, rate, value) VALUES ($1, $2, $3, $4, 2, 300)', [companyId, itemId, ids.main, quantity]);
+
+/**
+ * Direct SQL as the application role, the path item lines and imports will also take: `change` runs in a transaction
+ * held open while an opening row of 1.5 is inserted on a second connection. The insert must wait for it and then be
+ * checked against what it committed.
+ */
+async function openingDuring(change: (client: PoolClient) => Promise<unknown>, itemId: string): Promise<void> {
+  const first = await openApp();
+  let insert: Promise<void> | undefined;
+  try {
+    await change(first.client);
+    insert = asApp(insertOpening(itemId, '1.5'));
+    assert.equal(await state(insert), 'waiting', 'the insert waits for the open change');
+    await first.end('COMMIT');
+    await assert.rejects(insert, code('23514', 'stock_opening_quantity_places'), 'checked against the committed change');
+  } finally {
+    await first.end('ROLLBACK');
+    await insert?.catch(() => undefined);
+  }
+  assert.equal(Number((await one('SELECT count(*) FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, itemId])).count), 0);
+}
+
+test('by direct SQL, an opening row inserted while a unit\'s decimals are lowered in an open transaction waits and is checked against the lowered decimals', async () => {
+  const unit = await write(context => createUnit(context, { symbol: 'Drum', decimals: 2 }));
+  const item = await write(context => createItem(context, { name: 'Resin', unitId: unit.id }));
+  await openingDuring(client => client.query('UPDATE stock_unit SET decimals = 0 WHERE company_id = $1 AND id = $2', [companyId, unit.id]), item.id);
+});
+
+test('by direct SQL, an opening row inserted while its item\'s unit is changed in an open transaction waits and is checked against the new unit', async () => {
+  const fine = await write(context => createUnit(context, { symbol: 'Sack', decimals: 2 }));
+  const whole = await write(context => createUnit(context, { symbol: 'Bale', decimals: 0 }));
+  const item = await write(context => createItem(context, { name: 'Cotton', unitId: fine.id }));
+  await openingDuring(client => client.query('UPDATE stock_item SET unit_id = $3 WHERE company_id = $1 AND id = $2', [companyId, item.id, whole.id]), item.id);
+});
+
+test('deleting a unit while an opening write holds one of its items answers in_use at once instead of deadlocking', async () => {
+  const unit = await write(context => createUnit(context, { symbol: 'Crate', decimals: 0 }));
+  const item = await write(context => createItem(context, { name: 'Melon', unitId: unit.id }));
+  const first = await openApp();
+  let deletion: Promise<void> | undefined;
+  try {
+    // An opening write's first lock (an item's alter holds its row), then the unit and the row, as the API does.
+    await first.client.query('SELECT 1 FROM stock_item WHERE company_id = $1 AND id = $2 FOR UPDATE', [companyId, item.id]);
+    deletion = write(context => deleteUnit(context, unit.id, { revision: unit.revision }));
+    await state(deletion);
+    await first.client.query('SELECT 1 FROM stock_unit WHERE company_id = $1 AND id = $2 FOR SHARE', [companyId, unit.id]);
+    await insertOpening(item.id, '2')(first.client);
+    await first.end('COMMIT');
+    await assert.rejects(deletion, (error: { code?: string }) => error.code === 'in_use', 'the unit has an item');
+  } finally {
+    await first.end('ROLLBACK');
+    await deletion?.catch(() => undefined);
+  }
+  assert.equal(Number((await one('SELECT count(*) FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, item.id])).count), 1, 'the opening write committed');
+});
+
+test('by direct SQL, opening rows are neither written nor removed while the locked-through date reaches the books beginning', async () => {
+  const unit = await write(context => createUnit(context, { symbol: 'Roll', decimals: 0 }));
+  const item = await write(context => createItem(context, { name: 'Twine', unitId: unit.id }));
+  const kept = await write(context => createItem(context, { name: 'Wire', unitId: unit.id, openings: [{ locationId: ids.main, quantity: '4', rate: '1.00' }] }));
+  const { books_beginning: beginning } = await one("SELECT books_beginning::text FROM company WHERE company_id = $1", [companyId]);
+  await admin.query('UPDATE company SET locked_through = $2 WHERE company_id = $1', [companyId, beginning]);
+  try {
+    await assert.rejects(asApp(insertOpening(item.id, '1')), code('23514', 'stock_opening_locked'), 'a new row');
+    await assert.rejects(asApp(client => client.query('DELETE FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, kept.id])), code('23514', 'stock_opening_locked'), 'a removed row');
+    await assert.rejects(asApp(client => client.query('DELETE FROM stock_item WHERE company_id = $1 AND id = $2', [companyId, kept.id])), code('23514', 'stock_opening_locked'), 'an item deleted with its rows');
+    // A lock that ends before the books begin leaves the openings open.
+    await admin.query("UPDATE company SET locked_through = $2::date - 1 WHERE company_id = $1", [companyId, beginning]);
+    await assert.doesNotReject(asApp(insertOpening(item.id, '1')));
+  } finally {
+    await admin.query('UPDATE company SET locked_through = NULL WHERE company_id = $1', [companyId]);
+  }
+  assert.equal(Number((await one('SELECT count(*) FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, kept.id])).count), 1, 'the locked rows stayed');
 });
 
 type Counters = { seq_scan: number; seq_tup_read: number; idx_scan: number; idx_tup_fetch: number };

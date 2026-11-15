@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { AccountGroup } from '../src/lib/ledger.ts';
 import { quantityText, rateText, stockItemCreateInput, stockOpeningInput, stockUnitCreateInput } from '../src/lib/stock.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
+import { derivedRateFits } from '../src/server/ledger/stock-masters.ts';
 import { rollUp, statementTree } from '../src/server/reports/tree.ts';
 
 /** Stock masters' pure checks (M2b slice a): the wire schemas and the stock line of the statement tree. */
@@ -42,4 +43,13 @@ test('the stock line stands first inside the seeded current assets group, counts
   assert.equal(rollUp(nodes, node => node.closing).get('g:ca'), 870n, 'rolled up like a ledger');
   assert.equal(statementTree(groups, rows).some(node => node.kind === 'stock'), false, 'no stock, no line');
   assert.equal(statementTree([group('fa', null, 'Fixed Assets')], [], { name: 'Opening stock', value: 1n }).length, 1, 'only the seeded current assets group holds it');
+});
+
+test('a value fits when the rate it gives, to six places, stays below 10^14 (the rate column)', () => {
+  assert.equal(derivedRateFits(9_999_999_999_999_999n, '1', 2), true, '99,999,999,999,999.99 for one');
+  assert.equal(derivedRateFits(10_000_000_000_000_000n, '1', 2), false, '10^14 for one');
+  assert.equal(derivedRateFits(999_999_999_999n, '0.0001', 2), true, '9,999,999,999.99 for a ten-thousandth');
+  assert.equal(derivedRateFits(1_000_000_000_000n, '0.0001', 2), false, '10^10 for a ten-thousandth');
+  assert.equal(derivedRateFits(99_999_999_999_999_999n, '10', 3), true, 'three-place currency');
+  assert.equal(derivedRateFits(0n, '0.0001', 2), true, 'zero cost');
 });
