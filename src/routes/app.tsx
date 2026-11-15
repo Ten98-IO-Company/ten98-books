@@ -4,13 +4,13 @@ import { AppBrand } from '@ten98/ui/app'
 import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { version } from '../../package.json'
-import { CompanyPicker, roleLabels } from '../components/CompanyPicker'
+import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
 import { KeyboardShell } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
-import { sectionPath } from '../lib/company'
+import { sectionPath, workspaceOptions } from '../lib/company'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
 export const Route = createFileRoute('/app')({ component: AppLayout })
@@ -138,11 +138,6 @@ function AppLayout() {
     </KeyboardShell>
   </PresentationProvider></AppContext>
 }
-
-/** The switcher's options: a company is a workspace (D-03), with its role as the caption under the select. */
-const workspaceOptions = (companies: CompanySummary[] | null) => companies?.map(item => ({
-  id: item.id, name: item.name, roleLabel: `${roleLabels[item.role]}${item.company || item.twoFactorLocked ? '' : ' · not set up yet'}`,
-})) ?? null
 
 const switcherLabels = { workspace: 'Company', chooseWorkspace: 'Choose a company', loadingWorkspaces: 'Loading companies…', noWorkspaces: 'No companies yet' }
 const createCompany = { label: 'Create company', href: '/app/companies/new' }

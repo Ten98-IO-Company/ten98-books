@@ -1,4 +1,4 @@
-import { Alert, Button, ShortcutScope, useLeaveGuard as usePackageLeaveGuard, type LeaveGuardBlocker } from '@ten98/ui'
+import { Alert, Button, ShortcutScope, type LeaveGuardBlocker } from '@ten98/ui'
 import { useBlocker, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { ApiError, errMsg } from '../../lib/api'
@@ -6,7 +6,7 @@ import { useApp } from '../../lib/app-context'
 import { contextTitles } from '../../lib/commands'
 import { describeFailure, nextFieldAfter, singleFlight } from '../../lib/masters'
 import { ReservedKeys, useAppCommand } from '../KeyboardShell'
-import type { AppConfirmRequest } from '../useConfirm'
+import { createLeaveGuard } from './leave-guard'
 
 /** The entry context for a master form: Enter, accept, cancel, delete and history register inside it. */
 export function EntryScope({ children }: { children: ReactNode }) {
@@ -100,19 +100,14 @@ export function useLeave(fallback: { to: string; params: Record<string, string> 
 const useRouterBlocker: LeaveGuardBlocker = shouldBlock => { useBlocker({ shouldBlockFn: shouldBlock, enableBeforeUnload: false }) }
 
 /**
- * Keeps typed work from being lost: the package's `useLeaveGuard`, with this app's router and its own `confirm` (useConfirm,
- * so one dialog serves every question on the screen and each one opens on Cancel). While `dirty`, any route change away
- * from the screen (go-to, the company switcher, a link, the browser's back) waits for the question and goes ahead only on a
- * yes, and closing or reloading the tab gets the browser's own warning. `pass` runs an exit the screen has already settled
- * (after a save or a delete) without asking; `leave` asks first (when dirty) and then leaves, for the screen's own exits.
- * `confirm` is required and always handed on: the guard renders a dialog of its own only when it gets none, and that
- * dialog would open on the confirm button for a question that is not marked `danger`; tests/keyboard.test.ts pins both.
- * Every entry screen guards itself with this; the same test checks that each one rendering `EntryScope` does.
+ * Keeps typed work from being lost: while `dirty`, any route change away from the screen (go-to, the company switcher, a
+ * link, the browser's back) waits for the question and goes ahead only on a yes, and closing or reloading the tab gets the
+ * browser's own warning. `pass` runs an exit the screen has already settled (after a save or a delete) without asking;
+ * `leave` asks first (when dirty) and then leaves, for the screen's own exits. The second argument is the question's
+ * `confirm` (see createLeaveGuard in ./leave-guard.ts, which pins the package guard to it).
+ * Every entry screen guards itself with this; tests/keyboard.test.ts checks that each one rendering `EntryScope` does.
  */
-export function useLeaveGuard(dirty: boolean, confirm: (request: AppConfirmRequest) => Promise<boolean>) {
-  const { leave, pass } = usePackageLeaveGuard(dirty, { useBlocker: useRouterBlocker, confirm })
-  return { leave, pass }
-}
+export const useLeaveGuard = createLeaveGuard(useRouterBlocker)
 
 export type Failure = ReturnType<typeof describeFailure>
 

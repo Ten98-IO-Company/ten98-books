@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chordFromEvent, findChordConflicts, useLeaveGuard, type ConfirmRequest, type LeaveGuard, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
+import { chordFromEvent, findChordConflicts, type ConfirmRequest, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
@@ -9,6 +9,7 @@ import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
+import { createLeaveGuard } from '../src/components/masters/leave-guard.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
 
@@ -344,44 +345,59 @@ test('only chords with Ctrl, Alt or Meta, and function keys, are ever claimed', 
 
 test('every entry screen guards typed work against leaving: route changes ask first and unload warns', () => {
   const entry = readFileSync(new URL('../src/components/masters/entry.tsx', import.meta.url), 'utf8');
-  // The router adapter is the package guard's hook: defined once at module level, never inside the wrapper or a component.
+  // The router adapter is the package guard's hook: defined once at module level, never inside a function or a component.
   const adapter = entry.indexOf('const useRouterBlocker: LeaveGuardBlocker');
-  assert.ok(adapter > 0 && adapter < entry.indexOf('export function useLeaveGuard'), 'the adapter is a module-level constant');
+  assert.ok(adapter > 0 && adapter < entry.indexOf('export const useLeaveGuard'), 'the adapter is a module-level constant');
   assert.match(entry, /const useRouterBlocker: LeaveGuardBlocker = shouldBlock => \{ useBlocker\(\{ shouldBlockFn: shouldBlock, enableBeforeUnload: false \}\) \}/);
-  const guard = entry.slice(entry.indexOf('export function useLeaveGuard'), entry.indexOf('export type Failure'));
-  assert.match(guard, /usePackageLeaveGuard\(dirty, \{ useBlocker: useRouterBlocker, confirm \}\)/, 'the package guard gets the adapter and the app confirm');
-  assert.doesNotMatch(guard, /\bdialog\b/, 'the package guard has no dialog of its own to render here');
-  assert.match(guard, /confirm: \(request: AppConfirmRequest\) => Promise<boolean>\)/, 'the confirm is a required argument');
+  assert.match(entry, /export const useLeaveGuard = createLeaveGuard\(useRouterBlocker\)/, 'the guard of the screens is the factory\'s, built once with that adapter');
+  const factory = readFileSync(new URL('../src/components/masters/leave-guard.ts', import.meta.url), 'utf8');
+  assert.match(factory, /usePackageLeaveGuard\(dirty, \{ useBlocker, confirm \}\)/, 'the package guard gets the adapter and the confirm of the screen');
+  assert.doesNotMatch(factory.slice(factory.indexOf('export function')), /\bdialog\b/, 'the package guard has no dialog of its own to render here');
+  assert.match(factory, /confirm: \(request: AppConfirmRequest\) => Promise<boolean>\)/, 'the confirm is a required argument');
   const screens = sources(new URL('../src/components/', import.meta.url)).filter(file => /<EntryScope[\s>]/.test(readFileSync(file, 'utf8')));
   assert.ok(screens.length >= 2, 'the group and ledger forms render EntryScope');
   for (const file of screens) {
     const source = readFileSync(file, 'utf8');
-    assert.match(source, /useLeaveGuard\(dirty.*, confirm\)/, `${file.pathname} guards its dirty state with the app confirm`);
+    // A dirty flag and a second argument: the form's confirm, or (the voucher screen) a function that settles its grid and then asks.
+    assert.match(source, /useLeaveGuard\(dirty[^)]*, \w+\)/, `${file.pathname} guards its dirty state`);
     assert.doesNotMatch(source, /setFlash\([^)]*\); leave\(\)/, `${file.pathname} leaves after a save or delete through guard.pass`);
   }
-  // The package hook is reached from entry.tsx only, and there always with the app confirm.
+  // The package hook is reached from the factory only.
   for (const file of sources(new URL('../src/', import.meta.url))) {
-    if (file.pathname.endsWith('/src/components/masters/entry.tsx')) continue;
+    if (file.pathname.endsWith('/src/components/masters/leave-guard.ts')) continue;
     for (const statement of readFileSync(file, 'utf8').matchAll(/(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]@ten98\/ui['"]/g)) {
-      assert.doesNotMatch(statement[1], /\buseLeaveGuard\b|\bLeaveGuardBlocker\b/, `${file.pathname} reaches the package guard through entry.tsx`);
+      assert.doesNotMatch(statement[1], /\buseLeaveGuard\b/, `${file.pathname} reaches the package guard through the factory`);
     }
   }
 });
 
-test('the package leave guard, given the app confirm: no dialog of its own, its default question through that confirm, one question at a time', async () => {
-  let guard!: LeaveGuard;
+test('the leave guard of the screens at run time: the app confirm asks the package question on Cancel, one at a time; a settled exit passes unasked once', async () => {
+  let shouldBlock!: () => Promise<boolean>;
+  let guard!: { leave: (exit: () => void) => Promise<boolean>; pass: (exit: () => void) => void };
+  const useGuard = createLeaveGuard(block => { shouldBlock = block; });
   const asked: ConfirmRequest[] = [];
-  const confirm = (request: ConfirmRequest) => new Promise<boolean>(resolve => { asked.push(confirmRequest(request)); setTimeout(() => resolve(false), 5); });
-  const Screen = () => { guard = useLeaveGuard(true, { confirm }); return null; };
+  const confirm = (request: AppConfirmRequest) => new Promise<boolean>(resolve => { asked.push(confirmRequest(request)); setTimeout(() => resolve(false), 5); });
+  const Screen = () => { guard = useGuard(true, confirm); return null; };
   renderToString(createElement(Screen));
-  assert.equal(guard.dialog, null, 'with a confirm the guard renders no dialog, so its own (confirm-first) dialog is unreachable');
+  assert.deepEqual(Object.keys(guard).sort(), ['leave', 'pass'], 'the package guard\'s own dialog is not handed on');
+  // Two exits while one question is open share it; Keep editing runs neither.
   const exits: string[] = [];
-  const first = guard.leave(() => exits.push('first'));
-  const second = guard.leave(() => exits.push('second'));
-  assert.deepEqual(await Promise.all([first, second]), [false, false]);
+  assert.deepEqual(await Promise.all([guard.leave(() => exits.push('first')), guard.leave(() => exits.push('second'))]), [false, false]);
   assert.equal(asked.length, 1, 'a second attempt while the question is open waits for the same answer');
-  assert.deepEqual(exits, [], 'Keep editing runs no exit');
+  assert.equal(exits.length, 0, 'Keep editing runs no exit');
   assert.deepEqual(asked[0], { title: 'Discard unsaved changes?', description: 'Your changes have not been saved.', confirmLabel: 'Discard changes', cancelLabel: 'Keep editing', danger: true, initialFocus: 'cancel' });
+  // A route change asks, and Keep editing holds it (true stays).
+  asked.length = 0;
+  assert.equal(await shouldBlock(), true);
+  assert.equal(asked.length, 1);
+  // After a save or delete the screen passes its exit: nothing is asked, for that one navigation only.
+  asked.length = 0;
+  guard.pass(() => exits.push('left'));
+  assert.deepEqual(exits, ['left']);
+  assert.equal(await shouldBlock(), false, 'the exit the screen settled goes through');
+  assert.equal(asked.length, 0, 'save then leave asks nothing');
+  assert.equal(await shouldBlock(), true, 'the next route change asks again');
+  assert.equal(asked.length, 1);
 });
 
 test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
@@ -403,8 +419,11 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
-  // Six deletes, switching cost centres off and the preferences page's question. The leave question of the four master forms is the
-  // package guard's, asked through the form's `confirm` (checked above), so it is no call site of its own.
+  // What this counts: every `confirm(` call in a file that calls `useConfirm()`, which is every question a screen asks on its own.
+  // Here: six deletes, switching cost centres off and the preferences page's question. The leave question of the master forms is
+  // the package guard's, asked through the form's `confirm` passed to `useLeaveGuard` (checked above), so it is no call site of its
+  // own. A screen that adds a question (the voucher entry screen's leave question, a delete) raises the number by exactly its own
+  // `confirm(` calls; on a merge of two branches, add what each one added to the number on `dev`.
   assert.equal(questions, 8, 'every question is asked through useConfirm');
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
