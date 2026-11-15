@@ -3,12 +3,12 @@ import { addMoney, assertMoneyInRange, compareMoney, formatMoney } from '@ten98/
 import { isCalendarDate } from '../../lib/company.ts';
 import {
   revisionInput, voucherAlterInput, voucherCreateInput, voucherListQuery,
-  type BillRow, type BillRowInput, type BillWarning, type CostAllocationInput, type CreditPeriod, type CreditUnit, type ItemLineInput, type Side, type Voucher, type VoucherKind,
+  type BillRow, type BillRowInput, type VoucherWarning, type CostAllocationInput, type CreditPeriod, type CreditUnit, type ItemLineInput, type Side, type Voucher, type VoucherKind,
   type VoucherLine, type VoucherPage, type VoucherSummary, type VoucherType,
 } from '../../lib/ledger.ts';
 import { billsCreatedBy, billWarnings, planBills, storedBillRows, writeBills, type BillLine, type BillPlan } from './bills.ts';
 import { costRowsByLine, planCost, storedCostRows, writeCost, type CostLine, type CostPlan, type StoredCostRow } from './cost-centres.ts';
-import { insertItemLines, lockItemLines, planItemLines, readItemLines, type PlannedItemLine } from './item-lines.ts';
+import { insertItemLines, lockItemLines, planItemLines, readItemLines, stockWarnings, type PlannedItemLine } from './item-lines.ts';
 import { inventoryEnabled } from './stock-masters.ts';
 import { conflict, ledgerError, parseAmount, parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql, missingAs, readVoucherType } from './masters.ts';
@@ -266,7 +266,7 @@ export function requestHash(body: { inventory?: unknown[]; itemLedgerId?: string
 }
 
 /** A posting's answer: the voucher plus what happened to its bill and cost rows that the caller may not expect. */
-export type VoucherResult = { voucher: Voucher; warnings: BillWarning[] };
+export type VoucherResult = { voucher: Voucher; warnings: VoucherWarning[] };
 
 /**
  * Writes the voucher's bill rows in the lock order: rows named now (and their new bills) before the counter, then the
@@ -314,7 +314,7 @@ export async function createVoucher(context: LedgerContext, value: unknown): Pro
   await writeVoucherBills(context, { id: voucherId, date: body.date, typeId: type.id, series: type.numberingSeries }, plan, body.status === 'regular', null);
   const voucher = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'create', null, voucher);
-  return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows), ...cost.warnings] };
+  return { voucher, replayed: false, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows), ...cost.warnings, ...await stockWarnings(context, null, voucher)] };
 }
 
 /**
@@ -398,7 +398,7 @@ export async function alterVoucher(context: LedgerContext, voucherId: string, va
   const after = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'alter', before, after);
   const held = new Set(stored.flatMap(row => row.billId ? [row.billId] : []));
-  return { voucher: after, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows, created, held), ...cost.warnings] };
+  return { voucher: after, warnings: [...plan.warnings, ...await billWarnings(context, voucherId, plan.rows, created, held), ...cost.warnings, ...await stockWarnings(context, before, after)] };
 }
 
 /**
@@ -415,17 +415,18 @@ export async function cancelVoucher(context: LedgerContext, voucherId: string, v
   await context.client.query(`UPDATE voucher SET status = 'cancelled', revision = revision + 1, updated_at = now() WHERE company_id = $1 AND id = $2`, [context.company.companyId, voucherId]);
   const after = await readVoucher(context, voucherId);
   await logRevision(context, 'voucher', voucherId, 'cancel', before, after);
-  return { voucher: after, warnings: await billWarnings(context, voucherId, [], created) };
+  return { voucher: after, warnings: [...await billWarnings(context, voucherId, [], created), ...await stockWarnings(context, before, after)] };
 }
 
 /** Soft delete: the row stays for the revision log and its number stays used, so the gap is permanent. */
-export async function deleteVoucher(context: LedgerContext, voucherId: string, value: unknown): Promise<{ warnings: BillWarning[] }> {
+export async function deleteVoucher(context: LedgerContext, voucherId: string, value: unknown): Promise<{ warnings: VoucherWarning[] }> {
   const input = parseInput(revisionInput, value, voucherFields);
   const before = await changeable(context, voucherId, input.revision);
   assertDateOpen(context, before.date);
   const created = await billsCreatedBy(context, voucherId);
   await context.client.query('UPDATE voucher SET deleted_at = now(), deleted_by = $3, revision = revision + 1, updated_at = now() WHERE company_id = $1 AND id = $2',
     [context.company.companyId, voucherId, context.userId]);
-  await logRevision(context, 'voucher', voucherId, 'delete', before, await readVoucher(context, voucherId));
-  return { warnings: await billWarnings(context, voucherId, [], created) };
+  const after = await readVoucher(context, voucherId);
+  await logRevision(context, 'voucher', voucherId, 'delete', before, after);
+  return { warnings: [...await billWarnings(context, voucherId, [], created), ...await stockWarnings(context, before, after)] };
 }

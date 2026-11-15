@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isCalendarDate } from './company.ts';
 import { moneyText } from './money.ts';
 
 /**
@@ -51,6 +52,11 @@ export const stockItemCreateInput = z.object({
 }).strict();
 export const stockItemAlterInput = stockItemCreateInput.extend({ revision }).strict();
 export const inventorySettingInput = z.object({ enabled: z.boolean() }).strict();
+const readDate = z.string().refine(isCalendarDate, { message: 'Enter a real date as YYYY-MM-DD.' });
+/** An item's quantity at the end of `date`, at one location or in all (M2b slice b2). */
+export const stockQuantityQuery = z.object({ date: readDate, locationId: id.optional() }).strict();
+/** The rate of an item's latest sale dated on or before `date` (M2b slice b2). */
+export const lastRateQuery = z.object({ date: readDate }).strict();
 
 export type StockUnit = { id: string; symbol: string; formalName: string | null; decimals: number; revision: number };
 export type StockGroup = { id: string; parentId: string | null; name: string; secondLanguageName: string | null; addQuantities: boolean; revision: number };
@@ -58,6 +64,10 @@ export type StockCategory = { id: string; parentId: string | null; name: string;
 export type StockLocation = { id: string; systemKey: string | null; parentId: string | null; name: string; secondLanguageName: string | null; revision: number };
 /** An opening row as stored: the quantity in its unit's places, the rate as entered or derived, the value. */
 export type StockOpening = { locationId: string; locationName: string; quantity: string; rate: string; value: bigint };
+/** A quantity read: in the unit's places; `locationId` null for the item in all locations. */
+export type StockQuantity = { itemId: string; locationId: string | null; date: string; quantity: string };
+/** The latest sale's rate, as stored (at least the currency's places), or null when the item has none by the date. */
+export type LastRate = { itemId: string; date: string; rate: string | null };
 export type StockItem = {
   id: string; name: string; secondLanguageName: string | null; groupId: string | null; groupName: string | null;
   categoryId: string | null; categoryName: string | null; unitId: string; unitSymbol: string; standardSellingRate: string | null;

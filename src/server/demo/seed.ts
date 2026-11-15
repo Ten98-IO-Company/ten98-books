@@ -489,6 +489,8 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
           report.bills.rowsPosted += body.lines.reduce((sum, line) => sum + (line.bills?.length ?? 0), 0);
           let sentCostRows = body.lines.reduce((sum, line) => sum + (line.costAllocations?.length ?? 0), 0);
           for (const warning of warnings) {
+            // Stock warnings are not bill or cost rows: the seed report counts them with the stock (below).
+            if (warning.code === 'negative_stock') continue;
             const code: string = warning.code;
             if (code.startsWith('cost_')) {
               (report.costs.warnings[code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}`);

@@ -1,6 +1,7 @@
 import { addMoney, assertMoneyInRange, multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
-import type { InventoryLine, ItemLineInput, Side, VoucherKind } from '../../lib/ledger.ts';
-import { ledgerError, parseAmount, refusal, type LedgerContext } from './context.ts';
+import type { InventoryLine, ItemLineInput, Side, StockWarning, Voucher, VoucherKind } from '../../lib/ledger.ts';
+import { lastRateQuery, stockQuantityQuery, type LastRate, type StockQuantity } from '../../lib/stock.ts';
+import { ledgerError, parseAmount, parseInput, refusal, type LedgerContext } from './context.ts';
 import { derivedRateFits, inventoryEnabled } from './stock-masters.ts';
 
 /**
@@ -190,4 +191,102 @@ export async function readItemLines(context: LedgerContext, voucherId: string): 
        JOIN stock_location s ON s.company_id = l.company_id AND s.id = l.location_id
      WHERE l.company_id = $1 AND l.voucher_id = $2 ORDER BY l.entry_no`, [context.company.companyId, voucherId, context.company.exponent]);
   return rows;
+}
+
+// ---- Reads (M2b slice b2) ----
+//
+// The item lines are sought first, by item (and location) through inventory_line_item_idx, in a MATERIALIZED CTE: a
+// plain join lets the planner start from the vouchers instead (without statistics it read every voucher of the company
+// and every line of each, measured), and company_id = $n beside the item would let it take the company-led primary
+// key. The forced policy keeps the scope. Only then are their vouchers joined, by primary key, for status, deletion
+// and date. Opening rows are read by their primary key.
+
+/** The item's lines (at `$4` when `location` is set) that count: regular, undeleted vouchers; `l` and `v` for the caller. */
+const countedLines = (location: boolean) => `(WITH sought AS MATERIALIZED (
+    SELECT company_id, voucher_id, entry_no, direction, quantity, rate FROM inventory_line WHERE item_id = $2${location ? ' AND location_id = $4' : ''})
+  SELECT s.*, v.date, v.voucher_type_id FROM sought s JOIN voucher v ON v.company_id = s.company_id AND v.id = s.voucher_id
+  WHERE v.status = 'regular' AND v.deleted_at IS NULL) l`;
+const itemNotFound = ledgerError(404, 'Stock item not found.', 'not_found');
+
+/**
+ * An item's quantity at the end of `date`: its opening rows and the item lines of regular, undeleted vouchers dated on
+ * or before it, at one location or in all, in the unit's places.
+ */
+export async function readStockQuantity(context: LedgerContext, itemId: string, value: unknown): Promise<StockQuantity> {
+  const query = parseInput(stockQuantityQuery, value, path => path[0] === 'locationId' ? 'the location' : 'the date');
+  const location = query.locationId ?? null;
+  const { rows } = await context.client.query<{ quantity: string }>(
+    `SELECT round(coalesce((SELECT sum(o.quantity) FROM stock_opening o WHERE o.company_id = $1 AND o.item_id = i.id${location ? ' AND o.location_id = $4' : ''}), 0)
+       + coalesce((SELECT sum(CASE l.direction WHEN 'in' THEN l.quantity ELSE -l.quantity END) FROM ${countedLines(location !== null)} WHERE l.date <= $3), 0), u.decimals)::text AS quantity
+     FROM stock_item i JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id WHERE i.company_id = $1 AND i.id = $2`,
+    [context.company.companyId, itemId, query.date, ...location ? [location] : []]);
+  if (!rows[0]) throw itemNotFound;
+  return { itemId, locationId: location, date: query.date, quantity: rows[0].quantity };
+}
+
+/**
+ * The rate of the item's latest sale dated on or before `date` (sales vouchers only, regular and undeleted; ties by the
+ * later voucher, uuidv7 order, then the later entry), as `readItemLines` shows a rate; null when there is none.
+ */
+export async function readLastRate(context: LedgerContext, itemId: string, value: unknown): Promise<LastRate> {
+  const query = parseInput(lastRateQuery, value, () => 'the date');
+  const { rows } = await context.client.query<{ rate: string | null }>(
+    `SELECT (SELECT CASE WHEN l.rate = round(l.rate, $4::integer) THEN round(l.rate, $4::integer)::text ELSE trim_scale(l.rate)::text END
+         FROM ${countedLines(false)} WHERE l.date <= $3
+           AND EXISTS (SELECT 1 FROM voucher_type t WHERE t.company_id = l.company_id AND t.id = l.voucher_type_id AND t.kind = 'sales')
+         ORDER BY l.date DESC, l.voucher_id DESC, l.entry_no DESC LIMIT 1) AS rate
+     FROM stock_item i WHERE i.company_id = $1 AND i.id = $2`,
+    [context.company.companyId, itemId, query.date, context.company.exponent]);
+  if (!rows[0]) throw itemNotFound;
+  return { itemId, date: query.date, rate: rows[0].rate };
+}
+
+type Pair = { itemId: string; locationId: string };
+const pairKey = (row: Pair) => `${row.itemId}|${row.locationId}`;
+/** A quantity in ten-thousandths, exactly (quantities carry at most four places). */
+const tenThousandths = (quantity: string) => { const [whole, fraction = ''] = quantity.split('.'); return BigInt(whole + fraction.padEnd(4, '0')); };
+/** The inward quantity of a voucher per (item, location), when the voucher counts (regular, not deleted). */
+function inwards(voucher: Voucher | null): Map<string, { pair: Pair; quantity: bigint }> {
+  const result = new Map<string, { pair: Pair; quantity: bigint }>();
+  if (!voucher || voucher.status !== 'regular' || voucher.deleted) return result;
+  for (const row of voucher.inventory) {
+    if (row.direction !== 'in') continue;
+    const entry = result.get(pairKey(row)) ?? { pair: { itemId: row.itemId, locationId: row.locationId }, quantity: 0n };
+    entry.quantity += tenThousandths(row.quantity);
+    result.set(pairKey(row), entry);
+  }
+  return result;
+}
+
+/**
+ * The negative-stock warnings of a change from `before` to `after` (either null: a create, or nothing left). Checked:
+ * each (item, location) the voucher moves out when it counts after the change, and each one whose inward quantity the
+ * change reduces (an alter, a cancel or a delete). An optional voucher never warns and does not count. The balance is
+ * over every date, later-dated vouchers included, from opening rows and the lines of regular, undeleted vouchers: one
+ * sum per pair through the item index, linear in that pair's history. Read after the writes, in the same transaction.
+ */
+export async function stockWarnings(context: LedgerContext, before: Voucher | null, after: Voucher | null): Promise<StockWarning[]> {
+  const pairs = new Map<string, Pair>();
+  if (after && after.status === 'regular' && !after.deleted) {
+    for (const row of after.inventory) if (row.direction === 'out') pairs.set(pairKey(row), { itemId: row.itemId, locationId: row.locationId });
+  }
+  const was = inwards(before), is = inwards(after);
+  for (const [key, entry] of was) if ((is.get(key)?.quantity ?? 0n) < entry.quantity) pairs.set(key, entry.pair);
+  if (!pairs.size) return [];
+  const list = [...pairs.values()].sort((x, y) => pairKey(x).localeCompare(pairKey(y)));
+  const { rows } = await context.client.query<{ itemId: string; locationId: string; quantity: string }>(
+    `WITH pairs AS (SELECT * FROM unnest($2::uuid[], $3::uuid[]) WITH ORDINALITY AS p(item_id, location_id, ord)),
+       sought AS MATERIALIZED (
+         SELECT p.ord, l.company_id, l.voucher_id, l.direction, l.quantity FROM pairs p
+           JOIN inventory_line l ON l.item_id = p.item_id AND l.location_id = p.location_id),
+       moved AS (SELECT s.ord, sum(CASE s.direction WHEN 'in' THEN s.quantity ELSE -s.quantity END) AS quantity
+         FROM sought s JOIN voucher v ON v.company_id = s.company_id AND v.id = s.voucher_id
+         WHERE v.status = 'regular' AND v.deleted_at IS NULL GROUP BY s.ord)
+     SELECT p.item_id AS "itemId", p.location_id AS "locationId", round(coalesce(o.quantity, 0) + coalesce(m.quantity, 0), u.decimals)::text AS quantity
+     FROM pairs p JOIN stock_item i ON i.company_id = $1 AND i.id = p.item_id JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id
+       CROSS JOIN LATERAL (SELECT sum(o.quantity) AS quantity FROM stock_opening o WHERE o.company_id = $1 AND o.item_id = p.item_id AND o.location_id = p.location_id) o
+       LEFT JOIN moved m ON m.ord = p.ord
+     WHERE coalesce(o.quantity, 0) + coalesce(m.quantity, 0) < 0 ORDER BY p.ord`,
+    [context.company.companyId, list.map(pair => pair.itemId), list.map(pair => pair.locationId)]);
+  return rows.map(row => ({ code: 'negative_stock', itemId: row.itemId, locationId: row.locationId, quantity: row.quantity }));
 }

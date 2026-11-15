@@ -60,8 +60,8 @@
     "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/item-lines.ts": {
-    "count": 6,
-    "reason": "Item lines (M2b slice b1), six statements: three take row locks in id order (items and units FOR SHARE, locations FOR KEY SHARE); the location default (two rows at most), the insert from unnest with the rate derived in the database, and the voucher read of its item lines are plain statements on ledger tables, which have no Drizzle schema before the D-12 pilot. Written before D-12; converts after the cost-centre pilot."
+    "count": 9,
+    "reason": "Item lines (M2b slices b1 and b2), nine statements: three take row locks in id order (items and units FOR SHARE, locations FOR KEY SHARE); the location default (two rows at most), the insert from unnest with the rate derived in the database, the voucher read of its item lines, and the two reads and the negative-stock sum of b2 (each seeks item lines by item through inventory_line_item_idx, with measured counters, and joins the voucher by its key) are plain statements on ledger tables, which have no Drizzle schema before the D-12 pilot. Written before D-12; converts after the cost-centre pilot."
   },
   "src/server/ledger/masters.ts": {
     "count": 28,

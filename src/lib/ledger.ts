@@ -274,6 +274,13 @@ export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached',
   'cost_ignored', 'cost_kept', 'cost_rebalanced', 'cost_dropped'] as const;
 export type BillWarningCode = (typeof billWarningCodes)[number];
 export type BillWarning = { code: BillWarningCode; line: number | null; billId: string | null; billName: string | null; amount: bigint | null };
+/**
+ * A location's stock that a posting, alter, cancel or delete leaves below zero (M2b slice b2): the item, the location
+ * and the quantity there over every date, in the unit's places. A warning only: the voucher is saved.
+ */
+export type StockWarning = { code: 'negative_stock'; itemId: string; locationId: string; quantity: string };
+/** What a voucher's answer may warn of: its bill and cost rows, and its stock. */
+export type VoucherWarning = BillWarning | StockWarning;
 export type VoucherSummary = Omit<Voucher, 'lines' | 'inventory'>;
 export type VoucherPage = { vouchers: VoucherSummary[]; next: string | null };
 
