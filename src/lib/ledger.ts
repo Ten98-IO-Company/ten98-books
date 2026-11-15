@@ -283,7 +283,11 @@ export type BillWarning = { code: BillWarningCode; line: number | null; billId: 
  * A location's stock that a posting, alter, cancel or delete leaves below zero (M2b slice b2): the item, the location
  * and the quantity there over every date, in the unit's places. A warning only: the voucher is saved.
  */
-export type StockWarning = { code: 'negative_stock'; itemId: string; locationId: string; quantity: string };
+/**
+ * Stock warnings: an (item, location) left below zero, or the check could not be completed in its own time budget (the
+ * posting stands either way; docs/LEDGER.md, "Stock reads").
+ */
+export type StockWarning = { code: 'negative_stock'; itemId: string; locationId: string; quantity: string } | { code: 'stock_check_incomplete' };
 /** What a voucher's answer may warn of: its bill and cost rows, and its stock. */
 export type VoucherWarning = BillWarning | StockWarning;
 export type VoucherSummary = Omit<Voucher, 'lines' | 'inventory'>;

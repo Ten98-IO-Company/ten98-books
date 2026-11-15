@@ -150,6 +150,65 @@ test('viewers read; another company\'s item, and any route of a company the call
   assert.equal((await call(`/stock-items/${seen}/stock?date=2026-12-31`, {})).status, 405);
 });
 
+test('the stock read counts a credit note in and a debit note out, at the unit\'s places', async () => {
+  const kg = (await ok('/stock-units', { symbol: 'Kg2', decimals: 2 })).stockUnit.id as string;
+  const flour = (await ok('/stock-items', { name: 'Flour', unitId: kg, openings: [{ locationId: ids.main, quantity: '0.5', rate: '1.00' }] })).stockItem.id as string;
+  await post(voucher('credit_note', '2026-06-10', [{ itemId: flour, locationId: ids.main, quantity: '1.25', rate: '2.00' }]));
+  assert.equal(await stock(flour, '2026-06-10'), '1.75', 'a credit note brings stock in');
+  await post(voucher('debit_note', '2026-06-11', [{ itemId: flour, locationId: ids.main, quantity: '0.75', rate: '2.00' }]));
+  assert.deepEqual([await stock(flour, '2026-06-11'), await stock(flour, '2026-06-10')], ['1.00', '1.75'], 'a debit note takes it out; two places shown, also for a whole quantity');
+});
+
+test('the warning counts regular vouchers only, warns below zero and not at zero', async () => {
+  const cap = await item('Cap', [{ locationId: ids.main, quantity: '1', rate: '1.00' }]);
+  await post(voucher('purchase', '2026-07-01', [{ itemId: cap, locationId: ids.main, quantity: '10', rate: '1.00' }], { status: 'optional' }));
+  const sold = await post(voucher('sales', '2026-07-02', [{ itemId: cap, locationId: ids.main, quantity: '3', rate: '2.00' }]));
+  assert.deepEqual(stockOnly(sold.warnings), [[ids.main, '-2']], 'an optional purchase brings nothing in');
+  const lid = await item('Lid', [{ locationId: ids.main, quantity: '2', rate: '1.00' }]);
+  const exact = await post(voucher('sales', '2026-07-02', [{ itemId: lid, locationId: ids.main, quantity: '2', rate: '2.00' }]));
+  assert.deepEqual(stockOnly(exact.warnings), [], 'a balance of exactly zero is not below zero');
+});
+
+test('the last rate on one voucher with the item twice is the later entry\'s', async () => {
+  const cord = await item('Cord', [{ locationId: ids.main, quantity: '10', rate: '1.00' }]);
+  await post(voucher('sales', '2026-08-01', [{ itemId: cord, locationId: ids.main, quantity: '1', rate: '12.00' }, { itemId: cord, locationId: ids.main, quantity: '1', rate: '10.00' }]));
+  assert.equal(await lastRate(cord, '2026-08-31'), '10.00');
+});
+
+test('a location that is not the company\'s answers not found; a repeated or unknown field names the query', async () => {
+  const seen = await item('Located', [{ locationId: ids.main, quantity: '1', rate: '1.00' }]);
+  const theirs = ((await owner.browser.call(`/api/companies/${other}/stock-locations`)).body.stockLocations as any[])[0].id as string;
+  for (const location of [theirs, randomUUID()]) {
+    const answer = await call(`/stock-items/${seen}/stock?date=2026-12-31&locationId=${location}`);
+    assert.deepEqual([answer.status, answer.body.code, answer.body.error], [404, 'not_found', 'Stock location not found.'], location);
+  }
+  const repeated = await call(`/stock-items/${seen}/stock?date=2026-12-31&locationId=${ids.main}&locationId=${ids.yard}`);
+  assert.deepEqual([repeated.status, repeated.body.error], [400, 'Check the query and try again.']);
+  const unknown = await call(`/stock-items/${seen}/last-rate?date=2026-12-31&locationId=${ids.main}`);
+  assert.deepEqual([unknown.status, unknown.body.error], [400, 'Check the query and try again.']);
+});
+
+test('a stock check that cannot finish never fails the posting: the voucher stands and the answer says the check is incomplete', async () => {
+  const peg = await item('Peg', [{ locationId: ids.main, quantity: '1', rate: '1.00' }]);
+  // Another session holds the opening rows the check reads, so the check waits past its own statement timeout.
+  const answer = await asAdmin(database.adminUrl, async admin => {
+    await admin.query('BEGIN');
+    await admin.query('LOCK TABLE stock_opening IN ACCESS EXCLUSIVE MODE');
+    try { return await post(voucher('sales', '2026-09-01', [{ itemId: peg, locationId: ids.main, quantity: '5', rate: '2.00' }])); }
+    finally { await admin.query('ROLLBACK'); }
+  });
+  assert.deepEqual(answer.warnings.filter(warning => warning.code.startsWith('stock_')), [{ code: 'stock_check_incomplete' }], 'never a silently missing warning');
+  const stored = await ok(`/vouchers/${answer.voucher.id}`);
+  assert.deepEqual([stored.voucher.status, stored.voucher.inventory.length, stored.voucher.lines.length], ['regular', 1, 2], 'posted whole');
+  assert.equal(await stock(peg, '2026-09-01'), '-4', 'and its line counts');
+  // The statement timeout of the posting's own transaction is back to the pool's after the check.
+  await inCompany(owner.userId, companyId, async context => {
+    const before = (await context.client.query<{ value: string }>("SELECT current_setting('statement_timeout') AS value")).rows[0].value;
+    await stockWarnings(context, null, await readVoucher(context, answer.voucher.id));
+    assert.equal((await context.client.query<{ value: string }>("SELECT current_setting('statement_timeout') AS value")).rows[0].value, before);
+  });
+});
+
 type Counters = { items: number; itemsSequential: number; vouchers: number; vouchersSequential: number };
 const counters = async (client: PoolClient): Promise<Counters> => {
   const { rows } = await client.query<{ relname: string; seq_tup_read: string; idx_tup_fetch: string }>(

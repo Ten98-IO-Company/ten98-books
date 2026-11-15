@@ -60,8 +60,8 @@
     "reason": "Currencies and dated rates: writes under row locks (FOR NO KEY UPDATE on the base row, FOR UPDATE, key share) and an advisory lock, with ON CONFLICT upserts. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/item-lines.ts": {
-    "count": 9,
-    "reason": "Item lines (M2b slices b1 and b2), nine statements: three take row locks in id order (items and units FOR SHARE, locations FOR KEY SHARE); the location default (two rows at most), the insert from unnest with the rate derived in the database, the voucher read of its item lines, and the two reads and the negative-stock sum of b2 (each takes the item's lines first, by item through inventory_line_item_idx, in a MATERIALIZED CTE and only then joins their vouchers by key: that shape is measured by table counters, without and with statistics, and must not be flattened into a plain join, which lets the planner start from the vouchers) are plain statements on ledger tables, which have no Drizzle schema before the D-12 pilot. Written before D-12; converts after the cost-centre pilot."
+    "count": 11,
+    "reason": "Item lines (M2b slices b1 and b2), eleven statements: the savepoint that opens the negative-stock check under its own statement timeout and the rollback that closes it (transaction control with no builder form); three take row locks in id order (items and units FOR SHARE, locations FOR KEY SHARE); the location default (two rows at most), the insert from unnest with the rate derived in the database, the voucher read of its item lines, and the two reads and the negative-stock sum of b2 (each takes the item's lines first, by item through inventory_line_item_idx, in a MATERIALIZED CTE and only then joins their vouchers by key: that shape is measured by table counters, without and with statistics, and must not be flattened into a plain join, which lets the planner start from the vouchers) are plain statements on ledger tables, which have no Drizzle schema before the D-12 pilot. Written before D-12; converts after the cost-centre pilot."
   },
   "src/server/ledger/masters.ts": {
     "count": 28,

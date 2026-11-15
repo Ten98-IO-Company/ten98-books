@@ -208,14 +208,17 @@ const itemNotFound = ledgerError(404, 'Stock item not found.', 'not_found');
  * or before it, at one location or in all, in the unit's places.
  */
 export async function readStockQuantity(context: LedgerContext, itemId: string, value: unknown): Promise<StockQuantity> {
-  const query = parseInput(stockQuantityQuery, value, path => path[0] === 'locationId' ? 'the location' : 'the date');
+  const query = parseInput(stockQuantityQuery, value, path => path[0] === 'locationId' ? 'the location' : path[0] === 'date' ? 'the date' : 'the query');
   const location = query.locationId ?? null;
-  const { rows } = await context.client.query<{ quantity: string }>(
-    `SELECT round(coalesce((SELECT sum(o.quantity) FROM stock_opening o WHERE o.company_id = $1 AND o.item_id = i.id${location ? ' AND o.location_id = $4' : ''}), 0)
+  const { rows } = await context.client.query<{ quantity: string; located: boolean }>(
+    `SELECT ${location ? 'EXISTS (SELECT 1 FROM stock_location sl WHERE sl.company_id = $1 AND sl.id = $4)' : 'true'} AS located,
+       round(coalesce((SELECT sum(o.quantity) FROM stock_opening o WHERE o.company_id = $1 AND o.item_id = i.id${location ? ' AND o.location_id = $4' : ''}), 0)
        + coalesce((SELECT sum(CASE l.direction WHEN 'in' THEN l.quantity ELSE -l.quantity END) FROM ${countedLines(location !== null)} WHERE l.date <= $3), 0), u.decimals)::text AS quantity
      FROM stock_item i JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id WHERE i.company_id = $1 AND i.id = $2`,
     [context.company.companyId, itemId, query.date, ...location ? [location] : []]);
   if (!rows[0]) throw itemNotFound;
+  // Another company's location, or a made-up one, is not found, like an item.
+  if (!rows[0].located) throw ledgerError(404, 'Stock location not found.', 'not_found');
   return { itemId, locationId: location, date: query.date, quantity: rows[0].quantity };
 }
 
@@ -224,7 +227,7 @@ export async function readStockQuantity(context: LedgerContext, itemId: string, 
  * later voucher, uuidv7 order, then the later entry), as `readItemLines` shows a rate; null when there is none.
  */
 export async function readLastRate(context: LedgerContext, itemId: string, value: unknown): Promise<LastRate> {
-  const query = parseInput(lastRateQuery, value, () => 'the date');
+  const query = parseInput(lastRateQuery, value, path => path[0] === 'date' ? 'the date' : 'the query');
   const { rows } = await context.client.query<{ rate: string | null }>(
     `SELECT (SELECT CASE WHEN l.rate = round(l.rate, $4::integer) THEN round(l.rate, $4::integer)::text ELSE trim_scale(l.rate)::text END
          FROM ${countedLines(false)} WHERE l.date <= $3
@@ -253,22 +256,52 @@ function inwards(voucher: Voucher | null): Map<string, { pair: Pair; quantity: b
   return result;
 }
 
+/** The stock check's own statement time budget; it is advice, so it gives up rather than slow the posting past it. */
+export const stockCheckTimeout = '2s';
+
 /**
- * The negative-stock warnings of a change from `before` to `after` (either null: a create, or nothing left). Checked:
+ * The stock warnings of a change, which can never fail, slow past `stockCheckTimeout` or abort the posting: the check runs
+ * in a savepoint under that statement timeout, and if it fails for any database reason (a timeout, a lock wait cut short)
+ * the posting goes on and the answer says `stock_check_incomplete` instead of leaving the warning out silently. The
+ * savepoint holds only the check's reads, so it is rolled back on success too, which also ends its timeout. A lost
+ * connection is not caught: there is no posting left to save.
+ */
+export async function stockWarnings(context: LedgerContext, before: Voucher | null, after: Voucher | null): Promise<StockWarning[]> {
+  const pairs = checkedPairs(before, after);
+  if (!pairs.length) return [];
+  const { client } = context;
+  await client.query(`SAVEPOINT stock_check; SET LOCAL statement_timeout = '${stockCheckTimeout}'`);
+  const close = () => client.query('ROLLBACK TO SAVEPOINT stock_check; RELEASE SAVEPOINT stock_check');
+  let warnings: StockWarning[];
+  try { warnings = await negativeStock(context, pairs); }
+  catch (error) {
+    const code = (error as { code?: unknown })?.code;
+    if (typeof code !== 'string' || code.startsWith('08')) throw error;
+    warnings = [{ code: 'stock_check_incomplete' }];
+  }
+  await close();
+  return warnings;
+}
+
+/**
+ * The (item, location) pairs a change from `before` to `after` (either null: a create, or nothing left) can lower. Checked:
  * each (item, location) the voucher moves out when it counts after the change, and each one whose inward quantity the
  * change reduces (an alter, a cancel or a delete). An optional voucher never warns and does not count. The balance is
  * over every date, later-dated vouchers included, from opening rows and the lines of regular, undeleted vouchers: one
  * sum per pair through the item index, linear in that pair's history. Read after the writes, in the same transaction.
  */
-export async function stockWarnings(context: LedgerContext, before: Voucher | null, after: Voucher | null): Promise<StockWarning[]> {
+function checkedPairs(before: Voucher | null, after: Voucher | null): Pair[] {
   const pairs = new Map<string, Pair>();
   if (after && after.status === 'regular' && !after.deleted) {
     for (const row of after.inventory) if (row.direction === 'out') pairs.set(pairKey(row), { itemId: row.itemId, locationId: row.locationId });
   }
   const was = inwards(before), is = inwards(after);
   for (const [key, entry] of was) if ((is.get(key)?.quantity ?? 0n) < entry.quantity) pairs.set(key, entry.pair);
-  if (!pairs.size) return [];
-  const list = [...pairs.values()].sort((x, y) => pairKey(x).localeCompare(pairKey(y)));
+  return [...pairs.values()].sort((x, y) => pairKey(x).localeCompare(pairKey(y)));
+}
+
+/** The pairs among `list` whose balance is below zero, with that balance. */
+async function negativeStock(context: LedgerContext, list: Pair[]): Promise<StockWarning[]> {
   const { rows } = await context.client.query<{ itemId: string; locationId: string; quantity: string }>(
     `WITH pairs AS (SELECT * FROM unnest($2::uuid[], $3::uuid[]) WITH ORDINALITY AS p(item_id, location_id, ord)),
        sought AS MATERIALIZED (

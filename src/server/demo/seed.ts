@@ -580,6 +580,7 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
               report.stock.warnings.push(`${voucher.key}: ${itemName.get(warning.itemId) ?? warning.itemId} at ${locationName.get(warning.locationId) ?? warning.locationId} ${warning.quantity}`);
               continue;
             }
+            if (warning.code === 'stock_check_incomplete') { report.stock.warnings.push(`${voucher.key}: the stock check could not be completed`); continue; }
             const code: string = warning.code;
             if (code.startsWith('cost_')) {
               (report.costs.warnings[code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}`);
