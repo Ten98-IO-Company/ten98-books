@@ -32,11 +32,15 @@ export const withBalances = <T extends NodeAmounts>(amounts: T): T & { opening: 
   closing: subtractMoney(amounts.closingDebit, amounts.closingCredit),
 });
 
+/** The company's stock as a statement line: its label in this statement and its value (opening and closing alike). */
+export type StockLine = { name: string; value: bigint };
+
 /**
  * The hierarchy in pre-order: primary groups by nature (liabilities, assets, income, expenses) and name, each followed
- * by its sub-groups and then its ledgers, by name; ledgers outside every group come last at depth 0.
+ * by its sub-groups and then its ledgers, by name; ledgers outside every group come last at depth 0. `stock`, when
+ * given, is a debit line first inside the seeded current assets group, counted in that group's sums.
  */
-export function statementTree(groups: readonly AccountGroup[], ledgers: readonly LedgerRow[]): StatementNode[] {
+export function statementTree(groups: readonly AccountGroup[], ledgers: readonly LedgerRow[], stock: StockLine | null = null): StatementNode[] {
   const subGroups = new Map<string | null, AccountGroup[]>();
   for (const group of groups) subGroups.set(group.parentId, [...subGroups.get(group.parentId) ?? [], group]);
   const groupLedgers = new Map<string | null, LedgerRow[]>();
@@ -58,6 +62,14 @@ export function statementTree(groups: readonly AccountGroup[], ledgers: readonly
       nature: group.nature, grossProfit: group.grossProfit, systemKey: group.systemKey, ...zeroAmounts(), opening: 0n, closing: 0n,
     };
     nodes.push(node);
+    if (stock && group.systemKey === 'current_assets') {
+      const line: StatementNode = {
+        key: 's:stock', kind: 'stock', id: 'stock', name: stock.name, parentKey: node.key, depth: depth + 1, nature: group.nature, grossProfit: false,
+        systemKey: null, ...zeroAmounts(), openingDebit: stock.value, closingDebit: stock.value, opening: 0n, closing: 0n,
+      };
+      nodes.push(line);
+      addAmounts(node, line);
+    }
     for (const child of [...subGroups.get(group.id) ?? []].sort(byName)) addAmounts(node, addGroup(child, depth + 1, node.key));
     for (const ledger of [...groupLedgers.get(group.id) ?? []].sort(byName)) addAmounts(node, addLedger(ledger, depth + 1, node.key));
     return node;
@@ -78,11 +90,11 @@ export function subtree(nodes: readonly StatementNode[], index: number): Stateme
   return nodes.slice(index, end);
 }
 
-/** Sums a per-ledger value up the hierarchy: the value of every node, keyed by node key. */
+/** Sums a per-line value (ledgers and the stock line) up the hierarchy: the value of every node, keyed by node key. */
 export function rollUp(nodes: readonly StatementNode[], ledgerValue: (node: StatementNode) => bigint): Map<string, bigint> {
   const values = new Map<string, bigint>();
   for (const node of [...nodes].reverse()) {
-    const own = node.kind === 'ledger' ? ledgerValue(node) : values.get(node.key) ?? 0n;
+    const own = node.kind !== 'group' ? ledgerValue(node) : values.get(node.key) ?? 0n;
     values.set(node.key, own);
     if (node.parentKey) values.set(node.parentKey, addMoney(values.get(node.parentKey) ?? 0n, own));
   }
