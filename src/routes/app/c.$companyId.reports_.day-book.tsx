@@ -1,5 +1,6 @@
 import { Text, type DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { Amount, Blank, Particulars, VoucherMarks } from '../../components/reports/cells'
 import { query, reportSearch } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
@@ -7,6 +8,7 @@ import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
 import { registerRange, type DayBookReport, type DayBookRow } from '../../lib/reports'
+import { sessionStore, writeWorkingDate } from '../../lib/working-date'
 
 /**
  * The day book: the vouchers of one day (by default the last voucher date) or of a period, in entry order. The amount
@@ -32,6 +34,8 @@ function DayBookScreen() {
   const screen = useReportScreen<Wire<DayBookReport>>(search, 'day', (period, companyId) => `/api/companies/${companyId}/reports/day-book?${query({ ...period, after: pages.after })}`)
   const data = screen.report.data
   const range = data ? registerRange(pages.before, data.rows.length, data.next !== null) : null
+  // Viewing one day moves the tab's working date to it, as the reference's day book does (docs/VOUCHERS.md).
+  useEffect(() => { if (screen.period && screen.period.from === screen.period.to) writeWorkingDate(sessionStore, screen.company.id, screen.period.from) }, [screen.company.id, screen.period?.from, screen.period?.to])
   return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}
     period={{ kind: 'range', period: screen.period, onChange: screen.setPeriod }}
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/day-book/export?${query(screen.period)}` : null}

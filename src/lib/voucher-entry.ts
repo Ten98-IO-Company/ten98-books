@@ -533,7 +533,9 @@ export type DraftAction =
   | { type: 'narration'; text: string }
   | { type: 'bills'; row: string; rows: readonly BillDraft[] }
   | { type: 'switch'; kind: EntryKind; layout: EntryLayout; exponent: MoneyExponent }
-  | { type: 'next' };
+  | { type: 'next' }
+  /** The draft kept in the tab before a sign-in, taken back as it was. */
+  | { type: 'restore'; state: DraftState };
 
 export const lineKey = (serial: number): string => `line-${serial}`;
 
@@ -569,6 +571,7 @@ export function draftReducer(state: DraftState, action: DraftAction): DraftState
     }
     // After a save: same type, layout and date; everything else empty (optional and post-dated are never carried).
     case 'next': return blankDraft(state.kind, state.layout, state.date, state.serial);
+    case 'restore': return action.state;
   }
 }
 

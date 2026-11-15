@@ -101,6 +101,17 @@ export const commands = {
   // Cost categories and centres: moving a centre and switching the company feature are list actions of that screen.
   'list.move': { title: 'Move the selected cost centre', context: 'list' },
   'list.switch': { title: 'Switch cost centres on or off', context: 'list' },
+
+  // Voucher entry (docs/VOUCHERS.md). The type keys above switch the type in place; Escape and Ctrl+Q stay
+  // entry.cancel, whose run tells them apart (Escape empties the focused value first). In classic, Ctrl+Enter in a
+  // ledger lookup alters the highlighted ledger through entry.accept's own run.
+  'app.working-date': { title: 'Set the working date', context: 'global' },
+  'entry.previous-field': { title: 'Previous field', context: 'entry', bar: false },
+  'entry.skip-account': { title: 'Skip the account', context: 'entry', bar: false },
+  'entry.voucher.list': { title: 'Choose another voucher type', context: 'entry' },
+  'entry.voucher.mode': { title: 'Change the entry layout', context: 'entry' },
+  'entry.voucher.date': { title: 'Change the voucher date', context: 'entry' },
+  'entry.line.remove': { title: 'Remove this line', context: 'entry' },
 } as const satisfies Record<string, CommandDefinition>
 
 export type CommandId = keyof typeof commands

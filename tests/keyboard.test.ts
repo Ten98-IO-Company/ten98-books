@@ -20,7 +20,10 @@ function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): Res
 }
 
 /** Commands the screens register with allowInTextInput (entry.tsx, MasterList.tsx under its search field, MasterPicker.tsx, a dialog's accept); a test below reads them from the sources. */
-const inTextInput = new Set<string>(['entry.next-field', 'entry.accept', 'entry.cancel', 'list.next', 'list.previous', 'list.open', 'list.cancel']);
+const inTextInput = new Set<string>(['entry.next-field', 'entry.accept', 'entry.cancel', 'list.next', 'list.previous', 'list.open', 'list.cancel', 'entry.previous-field', 'entry.skip-account']);
+
+/** Commands only the voucher entry screen registers: masters forms leave them out. */
+const voucherOnly = commandIds.filter(id => id.startsWith('entry.voucher.') || id === 'entry.line.remove' || id === 'entry.skip-account' || id === 'entry.previous-field');
 
 /** `popupOpen`: the focused element is a select or holds an open popup (a lookup's list), as the registry checks it. */
 function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other', disabled: readonly string[] = [], popupOpen = false) {
@@ -92,8 +95,10 @@ test('an inner context reuses a key of the global context only where that is the
     // The alter list's search field owns Escape the same way (clear the filter, then go back).
     // Classic leaves with Ctrl+Q (nav.quit), which entry and list screens take over the same way.
     // A list leaves at once on Ctrl+Q through nav.quit; its own cancel keeps only the Escape ladder.
+    // F2 sets the working date on the company menu; a report's period and a voucher's date take it on their screens.
     assert.deepEqual(shadows.sort(), (name === 'classic'
-      ? ['entry.cancel over nav.back on Escape', 'entry.cancel over nav.quit on Ctrl+Q', 'list.cancel over nav.back on Escape']
+      ? ['entry.cancel over nav.back on Escape', 'entry.cancel over nav.quit on Ctrl+Q', 'list.cancel over nav.back on Escape',
+        'entry.voucher.date over app.working-date on F2', 'report.period over app.working-date on F2']
       : ['entry.cancel over nav.back on Escape', 'list.cancel over nav.back on Escape']).sort(), name);
   }
 });
@@ -245,8 +250,8 @@ test('global keys behave the same from every context and focus target', () => {
     // Ctrl+Q leaves one level: an entry screen through its own cancel (which asks first), everywhere else nav.quit.
     const quit = context[0] === 'entry' ? 'entry.cancel' : 'nav.quit';
     assert.equal(resolve('classic', 'Ctrl+Q', context, target), quit, where);
-    // F2 changes the period on a report; elsewhere it is held for the working date and does nothing yet.
-    assert.equal(resolve('classic', 'F2', context, target), context[0] === 'report' ? 'report.period' : undefined, where);
+    // F2 changes the period on a report and the date on a voucher; elsewhere it sets the working date.
+    assert.equal(resolve('classic', 'F2', context, target), context[0] === 'report' ? 'report.period' : context[0] === 'entry' ? 'entry.voucher.date' : 'app.working-date', where);
     // Accept runs only where there is something to accept.
     assert.equal(resolve('classic', 'Ctrl+A', context, target), context[0] === 'entry' ? 'entry.accept' : undefined, where);
   }
@@ -311,7 +316,10 @@ test('classic claims every reserved key in its context, and the keys of a switch
   // An entry form, from inside a field: print, export and the reserved entry keys are claimed.
   assert.equal(resolveScreen('classic', 'Ctrl+P', ['entry'], 'text'), 'reserved.global');
   assert.equal(resolveScreen('classic', 'Ctrl+E', ['entry'], 'text'), 'reserved.global');
-  assert.equal(resolveScreen('classic', 'Ctrl+H', ['entry'], 'text'), 'reserved.entry');
+  // The voucher screen changes its layout on Ctrl+H; a masters form, which has no voucher commands, keeps it as a habit chord.
+  assert.equal(resolveScreen('classic', 'Ctrl+H', ['entry'], 'text'), 'entry.voucher.mode');
+  assert.equal(resolveScreen('classic', 'Ctrl+H', ['entry'], 'text', [], voucherOnly), 'reserved.global');
+  assert.equal(resolveScreen('classic', 'Ctrl+I', ['entry'], 'text'), 'reserved.entry');
   assert.equal(resolveScreen('classic', 'Alt+R', ['entry'], 'text'), 'reserved.entry');
   // A list: the disputed create and delete candidates and the list settings keys.
   for (const chord of ['Ctrl+H', 'F10', 'F5', 'Alt+R', 'Alt+U']) assert.equal(resolveScreen('classic', chord, ['list'], 'control'), 'reserved.list', chord);
