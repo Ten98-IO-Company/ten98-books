@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
+import { appMarker } from '../src/lib/api.ts';
 import { handleApi } from '../src/server/api.ts';
 import { bucketsBodyBytes } from '../src/server/api/bills.ts';
 import { currencyBodyBytes } from '../src/server/api/currencies.ts';
@@ -25,12 +26,12 @@ before(async () => {
 after(async () => { await database?.drop(); });
 
 /** One raw request as `member` (or signed out): any method, a body sent as given. */
-async function send(member: Member | null, method: string, path: string, body?: string): Promise<{ status: number; allow: string | null; text: string }> {
+async function send(member: Member | null, method: string, path: string, body?: string): Promise<{ status: number; allow: string | null; marker: string | null; text: string }> {
   const headers = new Headers({ origin: getConfig().appUrl });
   if (member?.browser.cookies.size) headers.set('cookie', [...member.browser.cookies].map(([name, value]) => `${name}=${value}`).join('; '));
   if (body !== undefined) headers.set('content-type', 'application/json');
   const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method, headers, ...(body === undefined ? {} : { body }) }));
-  return { status: response.status, allow: response.headers.get('allow'), text: await response.text() };
+  return { status: response.status, allow: response.headers.get('allow'), marker: response.headers.get(appMarker.header), text: await response.text() };
 }
 const code = (answer: { status: number; text: string }) => [answer.status, answer.text ? JSON.parse(answer.text).code ?? null : null];
 /** A body over `limit` bytes that would otherwise be valid JSON. */
@@ -148,22 +149,25 @@ test('team routes: an id in capitals is the same id for the owner, and an outsid
   }
 });
 
+/** Every write route of a company or workspace `id`, with `someone` as the id of a member, invitation or master. */
+const writeRoutes = (id: string, someone: string) => [
+  `/api/companies/${id}/setup`,
+  ...['rename', 'invitations', 'transfer-ownership', 'two-factor'].map(action => `/api/workspaces/${id}/${action}`),
+  ...['role', 'remove'].map(action => `/api/workspaces/${id}/members/${someone}/${action}`),
+  ...['revoke', 'resend', 'new-link'].map(action => `/api/workspaces/${id}/invitations/${someone}/${action}`),
+  ...['groups', 'ledgers', 'voucher-types', 'vouchers', 'cost-categories', 'cost-centres', 'stock-units', 'stock-groups', 'stock-categories', 'stock-locations', 'stock-items']
+    .flatMap(kind => [`/api/companies/${id}/${kind}`, `/api/companies/${id}/${kind}/${someone}`, `/api/companies/${id}/${kind}/${someone}/delete`]),
+  `/api/companies/${id}/vouchers/${someone}/cancel`, `/api/companies/${id}/vouchers/balance-preview`,
+  `/api/companies/${id}/currencies`, `/api/companies/${id}/currencies/xyz`, `/api/companies/${id}/currencies/xyz/delete`, `/api/companies/${id}/exchange-rates`,
+  `/api/companies/${id}/ageing-buckets`, `/api/companies/${id}/cost-centres-setting`, `/api/companies/${id}/inventory-setting`,
+];
+
 test('every write route: an outsider with a body the route refuses gets the answer for a company that does not exist', async () => {
   const companyId = await createCompany(owner.browser, { name: 'Outsider Writes' });
   const outsider = { browser: browser(), userId: '' } as Member;
   await setupOutsider(outsider);
   const someone = randomUUID();
-  const writes = (id: string) => [
-    `/api/companies/${id}/setup`,
-    ...['rename', 'invitations', 'transfer-ownership', 'two-factor'].map(action => `/api/workspaces/${id}/${action}`),
-    ...['role', 'remove'].map(action => `/api/workspaces/${id}/members/${someone}/${action}`),
-    ...['revoke', 'resend', 'new-link'].map(action => `/api/workspaces/${id}/invitations/${someone}/${action}`),
-    ...['groups', 'ledgers', 'voucher-types', 'vouchers', 'cost-categories', 'cost-centres', 'stock-units', 'stock-groups', 'stock-categories', 'stock-locations', 'stock-items']
-      .flatMap(kind => [`/api/companies/${id}/${kind}`, `/api/companies/${id}/${kind}/${someone}`, `/api/companies/${id}/${kind}/${someone}/delete`]),
-    `/api/companies/${id}/vouchers/${someone}/cancel`, `/api/companies/${id}/vouchers/balance-preview`,
-    `/api/companies/${id}/currencies`, `/api/companies/${id}/currencies/xyz`, `/api/companies/${id}/currencies/xyz/delete`, `/api/companies/${id}/exchange-rates`,
-    `/api/companies/${id}/ageing-buckets`, `/api/companies/${id}/cost-centres-setting`, `/api/companies/${id}/inventory-setting`,
-  ];
+  const writes = (id: string) => writeRoutes(id, someone);
   const missing = writes(randomUUID());
   for (const [index, path] of writes(companyId).entries()) {
     // A body no route accepts (an unknown field), and one that is not JSON at all.
@@ -173,6 +177,47 @@ test('every write route: an outsider with a body the route refuses gets the answ
       if (body.startsWith('{"')) assert.notEqual(theirs.status, 400, `${path}: ${theirs.text}`);
     }
   }
+});
+
+test('every answer of the API carries the application marker: signed out, outsider, wrong method, invalid body, over a limit, success', async () => {
+  const companyId = await createCompany(owner.browser, { name: 'Marked Books' });
+  const books = await chart(owner.browser, companyId);
+  const outsider = { browser: browser(), userId: '' } as Member;
+  await setupOutsider(outsider);
+  const answers: { what: string; status: number; marker: string | null }[] = [];
+  const record = (what: string, answer: { status: number; marker: string | null }) => { answers.push({ what, status: answer.status, marker: answer.marker }); };
+  const raw = async (what: string, path: string, init: RequestInit) => {
+    const response = await handleApi(new Request(new URL(path, getConfig().appUrl), init));
+    record(what, { status: response.status, marker: response.headers.get(appMarker.header) });
+  };
+  for (const path of writeRoutes(companyId, randomUUID())) {
+    record(`signed out ${path}`, await send(null, 'POST', path, '{}'));
+    record(`outsider ${path}`, await send(outsider, 'POST', path, JSON.stringify({ unknownField: true })));
+    record(`invalid body ${path}`, await send(owner, 'POST', path, JSON.stringify({ unknownField: true })));
+    record(`wrong method ${path}`, await send(owner, 'DELETE', path, '{}'));
+  }
+  const ledger = JSON.stringify({ name: 'Marked Ledger', groupId: books.group('capital') });
+  record('created', await send(owner, 'POST', `/api/companies/${companyId}/ledgers`, ledger));
+  record('the same name again', await send(owner, 'POST', `/api/companies/${companyId}/ledgers`, ledger));
+  record('a list', await send(owner, 'GET', `/api/companies/${companyId}/ledgers`));
+  record('over the size limit', await send(owner, 'POST', `/api/companies/${companyId}/ledgers`, oversized(masterBodyBytes)));
+  record('no route', await send(owner, 'GET', '/api/no-such-route'));
+  for (const path of ['/api/health/live', '/api/health/ready']) {
+    record(`GET ${path}`, await send(null, 'GET', path));
+    await raw(`HEAD ${path}`, path, { method: 'HEAD' });
+  }
+  record('session, signed out', await send(null, 'GET', '/api/session'));
+  record('sign-in refused (the identity library)', await send(null, 'POST', '/api/auth/sign-in/email', JSON.stringify({ email: 'nobody@books.test', password: 'wrong horse battery staple' })));
+  await raw('another origin', `/api/companies/${companyId}/ledgers`, { method: 'POST', headers: { origin: 'https://elsewhere.test', 'content-type': 'application/json' }, body: ledger });
+  await raw('not JSON', `/api/companies/${companyId}/ledgers`, { method: 'POST', headers: { origin: getConfig().appUrl, 'content-type': 'text/plain', cookie: [...owner.browser.cookies].map(([name, value]) => `${name}=${value}`).join('; ') }, body: ledger });
+  await asAdmin(database.adminUrl, admin => admin.query(`INSERT INTO request_limit (key, minute, count) VALUES ($1, floor(extract(epoch FROM now()) / 60), 20)
+    ON CONFLICT (key, minute) DO UPDATE SET count = 20`, [`companies:${owner.userId}`]));
+  record('over a rate limit', await send(owner, 'POST', '/api/companies', JSON.stringify({ name: 'One Too Many' })));
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit WHERE key = $1', [`companies:${owner.userId}`]));
+  record('sign-out (the identity library)', await send(outsider, 'POST', '/api/auth/sign-out', '{}'));
+  assert.deepEqual(answers.filter(answer => answer.marker !== appMarker.value), [], 'every answer is marked');
+  const statuses = new Set(answers.map(answer => answer.status));
+  for (const status of [200, 201, 400, 401, 403, 404, 405, 409, 413, 415, 429]) assert.ok(statuses.has(status), `a ${status} was checked (${[...statuses].sort().join(', ')})`);
 });
 
 /** Signs a second person up through an invitation to a company of their own, so they are a member elsewhere only. */

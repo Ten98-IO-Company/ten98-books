@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { z } from 'zod';
+import { appMarker } from '../lib/api.ts';
 import { FoundationError } from './auth.ts';
 import { getConfig } from './config.ts';
 import { assertSchema, getDatabase, migrationLedger } from './db.ts';
@@ -86,7 +87,19 @@ function databaseReady(): Promise<boolean> {
 const publicAreas: readonly ApiArea[] = [accountApi, sessionApi];
 const signedInAreas: readonly SignedInArea[] = [teamApi, companiesApi, settingsApi, mastersApi, vouchersApi, reportsApi, billsApi, voucherEntryApi, costCentresApi, stockMastersApi, currenciesApi];
 
+/**
+ * The one entry of the API (`src/routes/api/$.ts` hands it every request under /api): every answer, from any area, any
+ * refusal or the identity library, leaves through here with the application marker. The response is rebuilt because a
+ * library's headers may be read-only.
+ */
 export async function handleApi(request: Request): Promise<Response> {
+  const response = await answerApi(request);
+  const headers = new Headers(response.headers);
+  headers.set(appMarker.header, appMarker.value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function answerApi(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, '');

@@ -1,3 +1,10 @@
+/**
+ * The header every answer of the application's own API carries (`X-Ten98-App: books`), on every status. An answer
+ * without it was made by something in front of the application (a proxy or gateway), so a screen must not read it as
+ * the application's refusal of what it sent.
+ */
+export const appMarker = { header: 'X-Ten98-App', value: 'books' } as const
+
 export class ApiError extends Error { status = 0; /** The server's stable reason (`code` beside `error`), when it sends one. */ code?: string }
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
