@@ -1,4 +1,6 @@
 import type { Dispatch, RefObject, SetStateAction } from 'react'
+import { flushSync } from 'react-dom'
+import { inOnePress } from '../../lib/key-press-steps'
 import { typedOutcome, typedOutcomeMoves } from '../../lib/lookup-entry'
 import type { Choice } from '../../lib/masters'
 import { entryText, focusEntryField } from './entry'
@@ -37,13 +39,18 @@ export function useEntryLookups<V, A extends { type: string }, F extends string>
     return next
   }
 
-  /** Typed lookup text with no row highlighted, on Enter (`move`) or the accept chord: pick the one choice it names or show the error here. */
+  /**
+   * Typed lookup text with no row highlighted, on Enter (`move`) or the accept chord: pick the one choice it names or show
+   * the error here. Called from the lookup's key handler. The pick is committed at once (a pick can change which fields
+   * the form shows) and focus moves to the field that is next after that change before the handler returns, so text
+   * typed straight after Enter lands there (`inOnePress`).
+   */
   function typedEnter(field: F, text: string, move: boolean): 'picked' | 'error' | 'unchanged' {
     const spec = specs[field]
     const outcome = typedOutcome(spec.options, text, spec.current(values), spec.blank)
-    settle(field, text, values)
+    inOnePress({ commit: flushSync, change: () => { settle(field, text, values) },
+      then: outcome.kind !== 'error' && typedOutcomeMoves(outcome, move) ? () => advance(field) : undefined })
     if (outcome.kind === 'error') return 'error'
-    if (typedOutcomeMoves(outcome, move)) window.setTimeout(() => advance(field), 0)
     return outcome.kind === 'pick' ? 'picked' : 'unchanged'
   }
 
