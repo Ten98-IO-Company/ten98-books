@@ -6,7 +6,7 @@ import { authCookiePrefix } from '../src/server/auth.ts';
 import { getConfig } from '../src/server/config.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, browser, invite, password, setupOwner, type Member } from './helpers/ledger.ts';
-import { challenged as challengedIn, enableFactor, step, totp, verifyWith } from './helpers/two-factor.ts';
+import { challenged as challengedIn, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, step, totp, verifyWith } from './helpers/two-factor.ts';
 
 /**
  * The second step of sign-in, through the real handler and the real auth preset (its own cookie prefix, as in
@@ -367,17 +367,56 @@ test('odd Cookie header shapes: a used code never signs anyone in; a fresh code 
   for (const line of outcomes) t.diagnostic(line);
 });
 
-test('the session the library creates must be the user the handler checked: a newer row naming another user rolls back', async () => {
+test('the session the library creates must be the user the handler checked: a newer row committed after the lookup rolls back', async () => {
   await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
   const challenge = challengeOf(await challenged(owner));
-  // The library reads the newest row of an identifier; the handler's lookup reads the first. A newer row naming the second
-  // user makes the library verify the second user's code and sign them in, while the handler checked the owner.
-  await asAdmin(database.adminUrl, admin => admin.query(`INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
-    VALUES ($1, $2, $3, now() + interval '10 minutes', now() + interval '1 minute', now())`, [randomUUID(), identifierOf(challenge), second.userId]));
   const before = await sessions(second.userId);
-  const answer = await verifyWith(`${challengeName()}=${challenge}`, totp(secrets.get(second.userId)!, step()));
+  // Both read the identifier's newest row, so the difference is made in time: the owner's row is held, the handler finds
+  // the owner's challenge and waits on that lock, a newer row naming the second user is committed meanwhile, and the
+  // library, reading after the lock is let go, verifies the second user's code and signs them in.
+  const answer = await asAdmin(database.adminUrl, async locker => {
+    await locker.query('BEGIN');
+    await locker.query('SELECT id FROM "user" WHERE id = $1 FOR UPDATE', [owner.userId]);
+    const pending = verifyWith(`${challengeName()}=${challenge}`, totp(secrets.get(second.userId)!, step()));
+    try {
+      // A backend waiting on a lock this connection holds (pg_locks shows other roles' waits; their query text is hidden).
+      const waiting = () => locker.query('SELECT 1 FROM pg_locks WHERE NOT granted AND pg_backend_pid() = ANY(pg_blocking_pids(pid))');
+      for (let tries = 0; !(await waiting()).rowCount; tries += 1) {
+        assert.ok(tries < 100, 'the handler never waited on the user lock');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await asAdmin(database.adminUrl, admin => admin.query(`INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+        VALUES ($1, $2, $3, now() + interval '10 minutes', now() + interval '1 minute', now())`, [randomUUID(), identifierOf(challenge), second.userId]));
+    } finally { await locker.query('ROLLBACK'); }
+    return pending;
+  });
   assert.deepEqual([answer.status, answer.signedIn], [401, false]);
   assert.equal(await sessions(second.userId), before, 'the library\'s session was rolled back');
+});
+
+test('an expired challenge is refused before the library, byte for byte as no challenge, and the refusal sets no cookie', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  const challenge = challengeOf(await challenged(owner));
+  await asAdmin(database.adminUrl, admin => admin.query(`UPDATE verification SET "expiresAt" = now() - interval '1 second' WHERE identifier = $1`, [identifierOf(challenge)]));
+  const raw = async (cookie?: string) => {
+    const response = await handleApi(new Request(new URL('/api/auth/two-factor/verify-totp', getConfig().appUrl), { method: 'POST',
+      headers: { ...(cookie ? { cookie } : {}), origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code: totp(secrets.get(owner.userId)!, step()) }) }));
+    return { status: response.status, headers: [...response.headers].filter(([name]) => name !== 'date'), setCookie: response.headers.getSetCookie(), body: await response.text() };
+  };
+  const expired = await raw(`${challengeName()}=${challenge}`);
+  // Passed on, the library would refuse it too, but with a Set-Cookie that clears the challenge.
+  assert.deepEqual(expired.setCookie, [], 'no cookie set');
+  assert.deepEqual(expired, await raw(), 'the same answer as without a challenge');
+});
+
+test('the duplicate case clears the challenge cookie with the scope the library set it with', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  const { line, value } = await challengeSetCookie(database.adminUrl, owner, challengeName());
+  const { status, cleared } = await duplicateRefusal(challengeName(), value);
+  assert.equal(status, 401);
+  assert.ok(cleared && /;\s*Max-Age=0(;|$)/i.test(cleared), String(cleared));
+  assert.deepEqual(cookieScope(cleared), cookieScope(line), `cleared ${cleared}, set ${line}`);
+  assert.deepEqual([cookieScope(line).domain, cookieScope(line).secure], [undefined, false], 'http: no Domain, not Secure');
 });
 
 test('a client already signed in is told the sign-in is complete, and no second session is made', async () => {

@@ -276,10 +276,12 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
         return json({ error: 'This sign-in is already complete.' }, 409);
       }
       // The identifier is only a lock and lookup hint, never authentication: Better Auth validates the signed cookie and
-      // consumes the challenge below. The row must be the challenge itself (its value an existing user), never its attempts
-      // counter or any other verification row.
+      // consumes the challenge below. The row read is the identifier's newest, as the library reads it; an expired one is
+      // refused here, so the library never answers it (its answer would clear the cookie). The join keeps the row to the
+      // challenge itself (its value an existing user), never its attempts counter or another verification row; no test pins
+      // it, since no reachable row under a challenge identifier names anything but a user.
       const pending = await client.query<{ id: string }>(
-        'SELECT u.id FROM verification v JOIN "user" u ON u.id=v.value WHERE v.identifier=$1 AND v."expiresAt">clock_timestamp()', [cookie.identifier]);
+        'SELECT u.id FROM verification v JOIN "user" u ON u.id=v.value WHERE v.identifier=$1 AND v."expiresAt">clock_timestamp() ORDER BY v."createdAt" DESC LIMIT 1', [cookie.identifier]);
       const userId = pending.rows[0]?.id;
       if (!userId) return refused();
       await client.query('SELECT id FROM "user" WHERE id=$1 FOR UPDATE', [userId]);
@@ -287,8 +289,8 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       const response = await invoke(auth, request, totp ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', details);
       if (!response.ok) return rejected(response, 'The code was not accepted. Try another code or sign in again.');
       // The session the library created must be that user's; otherwise the transaction rolls back and nothing is signed in.
-      // Not reachable while the cookie checked above is the one the library reads (no test can make them differ): kept as
-      // defence in depth.
+      // Both read the identifier's newest row, so they differ only if a newer row is committed between the lookup and the
+      // library's read (the test does so while the user lock above waits): defence in depth.
       const verified = await response.clone().json().catch(() => null) as { user?: { id?: unknown } } | null;
       if (verified?.user?.id !== userId) throw new FoundationError(401, 'The code was not accepted. Try another code or sign in again.');
       if (totp) await rememberCode(client, userId, details.code);

@@ -38,6 +38,30 @@ export async function challenged(adminUrl: string, member: Member): Promise<Memb
   return client;
 }
 
+/** Where a Set-Cookie line sends its cookie: the name, Path, Domain, HttpOnly, SameSite and Secure. */
+export function cookieScope(line: string) {
+  const [pair, ...attributes] = line.split(';').map(part => part.trim());
+  const named = new Map(attributes.map(attribute => { const [key, ...value] = attribute.split('='); return [key.toLowerCase(), value.join('=')] as const; }));
+  return { name: pair.slice(0, pair.indexOf('=')), path: named.get('path'), domain: named.get('domain'), httpOnly: named.has('httponly'), sameSite: named.get('samesite')?.toLowerCase(), secure: named.has('secure') };
+}
+
+/** The library's Set-Cookie line for the challenge cookie `name` when `member` signs in with the password, and the value. */
+export async function challengeSetCookie(adminUrl: string, member: Member, name: string): Promise<{ line: string; value: string }> {
+  const email = await asAdmin(adminUrl, async admin => (await admin.query('SELECT email FROM "user" WHERE id = $1', [member.userId])).rows[0].email as string);
+  const response = await handleApi(new Request(new URL('/api/auth/sign-in/email', getConfig().appUrl), { method: 'POST',
+    headers: { origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) }));
+  const line = response.headers.getSetCookie().find(candidate => candidate.startsWith(`${name}=`));
+  assert.ok(line, response.headers.getSetCookie().join(' | '));
+  return { line, value: line.slice(name.length + 1).split(';')[0] };
+}
+
+/** The refusal of a verify that sends the challenge cookie `name` twice (a planted copy first), and its clearing line. */
+export async function duplicateRefusal(name: string, value: string) {
+  const response = await handleApi(new Request(new URL('/api/auth/two-factor/verify-totp', getConfig().appUrl), { method: 'POST',
+    headers: { cookie: `${name}=planted.x; ${name}=${value}`, origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code: '000000' }) }));
+  return { status: response.status, cleared: response.headers.getSetCookie().find(line => line.startsWith(`${name}=;`)) };
+}
+
 /** A verify with a Cookie header written by hand. */
 export async function verifyWith(cookie: string, code: string, path = '/api/auth/two-factor/verify-totp') {
   const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method: 'POST',

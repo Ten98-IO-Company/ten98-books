@@ -10,7 +10,7 @@ process.env.APP_URL = 'https://books.test';
 const { authCookiePrefix } = await import('../src/server/auth.ts');
 const { freshDatabase } = await import('./helpers/database.ts');
 const { asAdmin, setupOwner } = await import('./helpers/ledger.ts');
-const { challenged, enableFactor, step, totp, verifyWith } = await import('./helpers/two-factor.ts');
+const { challenged, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, step, totp, verifyWith } = await import('./helpers/two-factor.ts');
 
 let database: Awaited<ReturnType<typeof freshDatabase>>;
 let owner: Awaited<ReturnType<typeof setupOwner>>;
@@ -29,6 +29,16 @@ test('on https the challenge cookie is the __Secure- name, and a real sign-in th
   assert.ok(client.browser.cookies.has(secureName()), [...client.browser.cookies.keys()].join(', '));
   const accepted = await verifyWith(`${secureName()}=${client.browser.cookies.get(secureName())}`, totp(secret, step()));
   assert.deepEqual([accepted.status, accepted.signedIn], [200, true], JSON.stringify(accepted.body));
+});
+
+test('on https the duplicate case clears the __Secure- challenge cookie with the scope the library set it with', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  const { line, value } = await challengeSetCookie(database.adminUrl, owner, secureName());
+  const { status, cleared } = await duplicateRefusal(secureName(), value);
+  assert.equal(status, 401);
+  assert.ok(cleared && /;\s*Max-Age=0(;|$)/i.test(cleared), String(cleared));
+  assert.deepEqual(cookieScope(cleared), cookieScope(line), `cleared ${cleared}, set ${line}`);
+  assert.deepEqual([cookieScope(line).domain, cookieScope(line).secure], [undefined, true], 'https: no Domain, Secure');
 });
 
 test('on https a planted plain-named variant beside the __Secure- challenge is ignored in either order', async () => {
