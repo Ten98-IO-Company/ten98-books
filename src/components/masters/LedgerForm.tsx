@@ -224,9 +224,11 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
         {existing && !readOnly && !deleteReason && <Button type='button' variant='danger' onClick={() => void remove()} disabled={busy} aria-keyshortcuts={deleteKeys}>Delete <KeyHint command='entry.delete' /></Button>}
       </FormActions>
     </Form>
-    <Card title='Opening balances of the company' description='Every ledger’s opening balance added up by the books. They may differ while you set up; saving is never blocked by it.' headingLevel={2}>
+    <Card title='Opening balances of the company' description='Every ledger’s opening balance, and the opening stock, added up by the books. They may differ while you set up; saving is never blocked by it.' headingLevel={2}>
       {openings.totals
         ? <DescriptionList items={[
+          // Shown as the server sent it, so the totals below reconcile with the ledgers: they count it on the debit side.
+          ...(openings.totals.openingStock === null ? [] : [{ term: 'Opening stock', description: displayAmount(openings.totals.openingStock, exponent) }]),
           { term: 'Total debit', description: displayAmount(openings.totals.totals.openingDebit, exponent) },
           { term: 'Total credit', description: displayAmount(openings.totals.totals.openingCredit, exponent) },
           { term: 'Difference', description: openings.totals.openingDifference.side === null ? 'None, the openings balance' : `${displayAmount(openings.totals.openingDifference.amount, exponent)} ${openings.totals.openingDifference.side}` },
