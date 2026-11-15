@@ -2,23 +2,23 @@ import { Alert } from '@ten98/ui'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { TotalsSummary } from '../../components/reports/cells'
-import { query } from '../../components/reports/navigation'
+import { query, reportSearch } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { StatementTable } from '../../components/reports/StatementTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import { useCompany } from '../../lib/app-context'
 import type { Wire } from '../../lib/money'
-import { asAtPeriod, readReportSearch, unreadableDateNotice, unreadableTo, type BalanceSheetReport } from '../../lib/reports'
+import { asAtPeriod, unreadableDateNotice, unreadableTo, type BalanceSheetReport } from '../../lib/reports'
 
 /**
  * The balance sheet as at the period's end date. It shares the period with the other reports: changing its date moves
  * the end of the period (and its start too, if the new date is earlier). `to` alone is the as-at date. Both dates are
- * always written into the validated search (balanceSheetDates), so the raw address cannot show through. A `to` that is
+ * always written into the validated search (reportSearch reads every key), so the raw address cannot show through. A `to` that is
  * no date arrives as `badTo` for one render (unreadableTo): the screen keeps it as its state for that visit and removes
  * it from the address, so a reload or a shared link never shows a stale notice.
  */
 export const Route = createFileRoute('/app/c/$companyId/reports_/balance-sheet')({
-  validateSearch: search => ({ ...readReportSearch(search), badTo: unreadableTo(search) }),
+  validateSearch: search => ({ ...reportSearch(search), badTo: unreadableTo(search) }),
   component: BalanceSheetScreen,
 })
 

@@ -2,9 +2,8 @@ import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp } from '../../lib/app-context'
-import { isCalendarDate } from '../../lib/company'
 import type { Wire } from '../../lib/money'
-import { dataForSubject, readCursorStack, reportLevel, recordPeriod, rememberedPeriod, writeCursorStack, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
+import { dataForSubject, readReportSearch, reportLevel, recordPeriod, rememberedPeriod, type PeriodKind, type ReportDefaults, type ReportPeriod } from '../../lib/reports'
 
 /**
  * Report navigation (D-09: drill-down is by route). Everything a report shows is in its search parameters, so a report
@@ -20,21 +19,13 @@ export type ReportSearch = {
   pages?: string
 }
 
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const key = /^[a-z]:[0-9a-f-]{36}$|^[a-z]:[a-z-]+$|^[0-9a-f-]{36}$|^\d{4}-\d{2}$/i
-
-/** The route search schema of every report screen: unknown or malformed values are dropped, never trusted. */
+/**
+ * The route search schema of every report screen: unknown or malformed values are dropped, never trusted. It writes every
+ * key (readReportSearch), because the router lays the raw address under a validated search and a key left out would let
+ * a number, a list or a text that is no date through to the screen.
+ */
 export function reportSearch(search: Record<string, unknown>): ReportSearch {
-  const date = (value: unknown) => typeof value === 'string' && isCalendarDate(value) ? value : undefined
-  const id = (value: unknown) => typeof value === 'string' && uuid.test(value) ? value.toLowerCase() : undefined
-  const result: ReportSearch = {
-    from: date(search.from), to: date(search.to),
-    detail: search.detail === true ? true : undefined, zeros: search.zeros === true ? true : undefined,
-    hl: typeof search.hl === 'string' && key.test(search.hl) ? search.hl : undefined,
-    group: id(search.group), ledger: id(search.ledger), voucher: id(search.voucher), centre: id(search.centre), fromCentre: id(search.fromCentre),
-    pages: writeCursorStack(readCursorStack(search.pages)),
-  }
-  return Object.fromEntries(Object.entries(result).filter(([, value]) => value !== undefined)) as ReportSearch
+  return readReportSearch(search)
 }
 
 /** The statement period last shown per company in this tab: a statement opened without one carries it on (it is sticky). */

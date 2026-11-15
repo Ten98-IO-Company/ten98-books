@@ -3,14 +3,14 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
 import { CostCentresOff } from '../../components/reports/CostCentresOff'
-import { query, useReport, type ReportSearch } from '../../components/reports/navigation'
+import { query, reportSearch, useReport, type ReportSearch } from '../../components/reports/navigation'
 import { PickerFind, useChooser } from '../../components/reports/PickerFind'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { CostBreakupRow, CostCentreBreakup, CostCentreListItem } from '../../lib/cost-centres'
 import type { Wire } from '../../lib/money'
-import { costBreakupKey, costBreakupSummary, costBreakupTarget, narrowByName, readReportSearch } from '../../lib/reports'
+import { costBreakupKey, costBreakupSummary, costBreakupTarget, narrowByName } from '../../lib/reports'
 
 /**
  * One cost centre's break-up for the period (`centre` in the address): its direct sub-centres, each with its own
@@ -18,7 +18,7 @@ import { costBreakupKey, costBreakupSummary, costBreakupTarget, narrowByName, re
  * ledger's vouchers for the period (all of them: the vouchers report has no centre filter, and both screens say so).
  * Without a centre the screen lists the centres to choose from.
  */
-export const Route = createFileRoute('/app/c/$companyId/reports_/cost-centre-breakup')({ validateSearch: readReportSearch, component: CostCentreBreakupScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/cost-centre-breakup')({ validateSearch: reportSearch, component: CostCentreBreakupScreen })
 
 type Row = Wire<CostBreakupRow>
 const columns: DataColumn<Row>[] = [

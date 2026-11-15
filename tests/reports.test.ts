@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
 import { addressDate, asAtPeriod, balanceSheetDates, centreOriginNotice, chooserFilters, costCentresOffNotice, failureActions, lineToOpen, listTarget, monthlyClipNotice, readReportSearch, unreadableTo, narrowByName, pickerEscape, restoredFilter, scopeLine, unreadableDate, unreadableDateNotice, defaultScopeNote, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
@@ -349,4 +349,19 @@ test('every report route reads its address through readReportSearch: only readab
     for (const key of keys.filter(name => name !== 'pages' || typeof value !== 'string')) assert.equal((strange as Record<string, unknown>)[key], key === 'detail' || key === 'zeros' ? (value === true ? true : undefined) : undefined, `${key} from ${JSON.stringify(value)}`);
   }
   assert.deepEqual(Object.keys(readReportSearch({})).sort(), keys);
+});
+
+// A source check, the one in this file (the routes cannot be loaded without a DOM): every report route reads its address
+// through reportSearch, which reads through readReportSearch (tested above). Comments are stripped before reading.
+test('every report route validates its search through reportSearch, so none can pass a raw address value on', () => {
+  const folder = new URL('../src/routes/app/', import.meta.url);
+  const routes = readdirSync(folder).filter(name => /^c\.\$companyId\.reports_\..+\.tsx$/.test(name));
+  assert.ok(routes.length >= 11, 'the report routes are found');
+  for (const name of routes) {
+    const source = readFileSync(new URL(name, folder), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const call = /validateSearch:\s*([^\n]+)/.exec(source)?.[1] ?? '';
+    assert.ok(/^reportSearch\b|reportSearch\(search\)/.test(call), `${name} validates with reportSearch (found: ${call.slice(0, 60)})`);
+  }
+  const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(navigation, /export function reportSearch\([^)]*\)[^{]*\{\s*return readReportSearch\(search\)\s*\}/, 'reportSearch is the pure reader');
 });

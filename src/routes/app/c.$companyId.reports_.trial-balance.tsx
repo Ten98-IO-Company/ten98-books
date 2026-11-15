@@ -2,15 +2,15 @@ import type { DataColumn } from '@ten98/ui'
 import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Particulars, TotalsSummary } from '../../components/reports/cells'
-import { query } from '../../components/reports/navigation'
+import { query, reportSearch } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
-import { isZeroNode, type NodeAmounts, type StatementNode, type TrialBalanceReport, readReportSearch } from '../../lib/reports'
+import { isZeroNode, type NodeAmounts, type StatementNode, type TrialBalanceReport } from '../../lib/reports'
 
 /** Trial balance by group: opening, debit, credit and closing columns, with the opening difference line (D-10). */
-export const Route = createFileRoute('/app/c/$companyId/reports_/trial-balance')({ validateSearch: readReportSearch, component: TrialBalanceScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/trial-balance')({ validateSearch: reportSearch, component: TrialBalanceScreen })
 
 type Line = { key: string; label: string; depth: number; node: Wire<StatementNode> | null; amounts: Wire<NodeAmounts> }
 

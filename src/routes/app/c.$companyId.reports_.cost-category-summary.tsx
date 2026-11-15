@@ -3,19 +3,19 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { Amount, Balance, Particulars } from '../../components/reports/cells'
 import { CostCentresOff } from '../../components/reports/CostCentresOff'
-import { query } from '../../components/reports/navigation'
+import { query, reportSearch } from '../../components/reports/navigation'
 import { ReportScreen } from '../../components/reports/ReportScreen'
 import { ReportTable } from '../../components/reports/ReportTable'
 import { useReportScreen } from '../../components/reports/useReportScreen'
 import type { CostCategorySummary } from '../../lib/cost-centres'
 import type { Wire } from '../../lib/money'
-import { costSummaryLines, costSummaryTarget, type CostSummaryLine, readReportSearch } from '../../lib/reports'
+import { costSummaryLines, costSummaryTarget, type CostSummaryLine } from '../../lib/reports'
 
 /**
  * The cost category summary (docs/REPORTS.md, "Cost centres"): each category with its top-level centres for the
  * period, every sub-centre folded into its top-level centre. Enter on a centre opens its break-up.
  */
-export const Route = createFileRoute('/app/c/$companyId/reports_/cost-category-summary')({ validateSearch: readReportSearch, component: CostCategorySummaryScreen })
+export const Route = createFileRoute('/app/c/$companyId/reports_/cost-category-summary')({ validateSearch: reportSearch, component: CostCategorySummaryScreen })
 
 const columns: DataColumn<CostSummaryLine>[] = [
   { key: 'particulars', header: 'Particulars', rowHeader: true, wrap: true, minWidth: 'md',
