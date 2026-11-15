@@ -333,3 +333,43 @@ test('the unit check seeks the unit\'s own items: lowering an unused unit\'s dec
     });
   }
 });
+
+test('the unit check costs one probe of the openings and one of the item lines per item of the unit, beside 3,000 stocked items, without and with statistics and with generic plans', async () => {
+  // A unit of 1,000 items with no opening and no line, beside the 3,000 stocked items of the test above (their unit is
+  // another): lowering its decimals reads the unit's items twice (once per loop of stock_unit_guard), probes the openings
+  // and the item lines once per item and finds nothing, and reads none of the company's other items or openings.
+  const many = await write(context => createUnit(context, { symbol: 'Many', decimals: 4 }));
+  await asAdmin(database.adminUrl, async client => {
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('app.company_ids', $1, true)", [companyId]);
+    await client.query(`INSERT INTO stock_item (company_id, name, unit_id) SELECT $1, 'Loose ' || n, $2 FROM generate_series(1, 1000) n`, [companyId, many.id]);
+    await client.query('COMMIT');
+  });
+  const items = 1000;
+  let revision = many.revision, decimals = 4;
+  const states = [['without statistics', false, false], ['without statistics, generic plan', false, true], ['analysed', true, false], ['analysed, generic plan', true, true]] as const;
+  for (const [label, analysed, generic] of states) {
+    await asAdmin(database.adminUrl, async client => {
+      if (analysed) { await client.query('ANALYZE stock_item; ANALYZE stock_opening; ANALYZE inventory_line'); return; }
+      for (const table of ['stock_item', 'stock_opening', 'inventory_line']) {
+        await client.query("SELECT pg_clear_relation_stats('public', $1)", [table]);
+        await client.query(`SELECT count(pg_clear_attribute_stats('public', $1, attname, false)) FROM pg_attribute WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped`, [table]);
+      }
+    });
+    await write(async context => {
+      if (generic) await context.client.query('SET LOCAL plan_cache_mode = force_generic_plan');
+      const before = { item: await counters(context.client, 'stock_item'), opening: await counters(context.client, 'stock_opening'), line: await counters(context.client, 'inventory_line') };
+      decimals -= 1;
+      revision = (await alterUnit(context, many.id, { symbol: 'Many', decimals, revision })).revision;
+      const after = { item: await counters(context.client, 'stock_item'), opening: await counters(context.client, 'stock_opening'), line: await counters(context.client, 'inventory_line') };
+      const read = (table: 'item' | 'opening' | 'line') => [after[table].seq_tup_read - before[table].seq_tup_read, after[table].idx_tup_fetch - before[table].idx_tup_fetch];
+      assert.deepEqual(read('item'), [0, 2 * items], `${label}: the unit's items, once per loop, and no other item`);
+      assert.deepEqual([read('opening'), read('line')], [[0, 0], [0, 0]], `${label}: one probe per item finds no row; no opening or item line is read`);
+      // A probe is an index scan, or once analysed a sequential scan of zero rows when the table is empty (no item line
+      // exists in this database): counted either way, and reading nothing (above).
+      const probes = (table: 'opening' | 'line') => after[table].idx_scan + after[table].seq_scan - before[table].idx_scan - before[table].seq_scan;
+      assert.deepEqual([probes('opening'), probes('line')], [items, items], `${label}: one probe per item`);
+    });
+    if (decimals === 0) break;
+  }
+});

@@ -80,7 +80,7 @@
     "reason": "One call of the database function that seeds a company's chart. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/stock-masters.ts": {
-    "count": 31,
+    "count": 30,
     "reason": "Stock masters and opening stock: writes with RETURNING under FOR UPDATE and share row locks, and sums of opening values. Not converted yet; conversion follows the cost-centre pilot (D-12)."
   },
   "src/server/ledger/voucher-entry.ts": {

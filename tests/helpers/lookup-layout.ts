@@ -80,7 +80,9 @@ export async function buildLayout(database: TestDatabase, busy: boolean): Promis
         WHERE f.n BETWEEN 20041 AND 40040`, [company]);
       await admin.query(`INSERT INTO stock_unit (company_id, symbol) SELECT $1, 'U' || n FROM generate_series(1, 50) n`, [company]);
       await admin.query(`INSERT INTO stock_location (company_id, name) SELECT $1, 'Place ' || n FROM generate_series(1, 50) n`, [company]);
-      await admin.query(`INSERT INTO stock_item (company_id, unit_id, name) SELECT $1, (SELECT id FROM stock_unit WHERE company_id = $1 AND symbol = 'U1'), 'Thing ' || n FROM generate_series(1, 2000) n`, [company]);
+      // Company B holds twice company A's items, so a cost that grew with the company's items would show.
+      await admin.query(`INSERT INTO stock_item (company_id, unit_id, name) SELECT $1, (SELECT id FROM stock_unit WHERE company_id = $1 AND symbol = 'U1'), 'Thing ' || n FROM generate_series(1, $2::int) n`,
+        [company, label === 'A' ? 2000 : 4000]);
       await admin.query(`INSERT INTO voucher_type (company_id, kind, name, numbering_series) SELECT $1, 'journal', 'Journal ' || n, 'j' || n FROM generate_series(1, 50) n`, [company]);
       await admin.query('COMMIT');
     });
@@ -94,10 +96,14 @@ export const plannerStates = [
   { label: 'analysed', analysed: true, generic: false }, { label: 'analysed, generic plan', analysed: true, generic: true },
 ] as const;
 
-/** Clears every public table's statistics (PG18) or analyses them all. */
+/**
+ * Clears every public table's statistics (PG18), or vacuums and analyses them all. The vacuum sets the visibility map,
+ * so the planner's own index-endpoint probes, which it makes while costing a join once statistics exist, no longer visit
+ * heap rows and are not counted as the statement's fetches (proveLookups measures them separately, unvacuumed).
+ */
 export async function setStatistics(database: TestDatabase, analysed: boolean): Promise<void> {
   await asAdmin(database.adminUrl, async admin => {
-    if (analysed) { await admin.query('ANALYZE'); return; }
+    if (analysed) { await admin.query('VACUUM ANALYZE'); return; }
     await admin.query(`SELECT count(pg_clear_relation_stats('public', c.relname)) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'`);
     await admin.query(`SELECT count(pg_clear_attribute_stats('public', c.relname, a.attname, false)) FROM pg_class c
       JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'`);
@@ -176,9 +182,7 @@ export async function lookupCases(database: TestDatabase, company: string): Prom
     { name: 'ledger by company and id (bill and cost guards, per row)', sql: 'SELECT bill_wise FROM ledger WHERE company_id = $1 AND id = $2', params: [A, ledger], bound: { ledger: 1 } },
     { name: 'stock_item by company and id FOR SHARE (item-row guard, per row)', sql: 'SELECT unit_id FROM stock_item WHERE company_id = $1 AND id = $2 FOR SHARE', params: [A, rows.item.id], bound: { stock_item: 1 } },
     { name: 'stock_unit by company and id FOR SHARE (item-row guard, per row)', sql: 'SELECT decimals FROM stock_unit WHERE company_id = $1 AND id = $2 FOR SHARE', params: [A, rows.item.unit_id], bound: { stock_unit: 1 } },
-    // Once analysed the planner may reach the item through its unit and read a few of the unit's items (5 measured on the
-    // busy layout, of the company's 2,001): bounded, once per read, never the company's items.
-    { name: 'stock_item with its unit (stock read)', sql: 'SELECT u.decimals FROM stock_item i JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id WHERE i.company_id = $1 AND i.id = $2', params: [A, rows.item.id], bound: { stock_item: 10, stock_unit: 4 } },
+    { name: 'stock_item with its unit (stock read)', sql: 'SELECT u.decimals FROM stock_item i JOIN stock_unit u ON u.company_id = i.company_id AND u.id = i.unit_id WHERE i.company_id = $1 AND i.id = $2', params: [A, rows.item.id], bound: { stock_item: 1, stock_unit: 4 } },
     { name: 'stock_location by company and id (stock read)', sql: 'SELECT EXISTS (SELECT 1 FROM stock_location sl WHERE sl.company_id = $1 AND sl.id = $2)', params: [A, rows.place.id], bound: { stock_location: 2 } },
     { name: 'voucher_type by company and id (kind, numbering)', sql: 'SELECT kind FROM voucher_type WHERE company_id = $1 AND id = $2', params: [A, rows.type.id], bound: { voucher_type: 1 } },
     { name: 'stock_location by ids FOR KEY SHARE (posting)', sql: 'SELECT id FROM stock_location WHERE company_id = $1 AND id = ANY($2::uuid[]) ORDER BY id FOR KEY SHARE', params: [A, [rows.place.id]], bound: { stock_location: 1 } },
@@ -203,6 +207,19 @@ export async function proveLookups(t: TestContext, database: TestDatabase, layou
   const sizes = new Map((await asAdmin(database.adminUrl, admin => admin.query<{ relname: string; live: string }>(
     'SELECT relname, n_live_tup AS live FROM pg_stat_user_tables'))).rows.map(row => [row.relname, Number(row.live)]));
   const failures: string[] = [];
+  // Analysed but never vacuumed (a bulk load, then ANALYZE): the planner's endpoint probes while costing the item's join
+  // to its unit visit heap rows on pages not marked all-visible and count as fetches (4 measured: execution reads 1).
+  // They are a constant: the same in company A and in company B, which holds twice A's items.
+  await asAdmin(database.adminUrl, admin => admin.query('ANALYZE'));
+  const unvacuumed = [];
+  for (const company of [layout.companyA, layout.companyB]) {
+    const item = (await lookupCases(database, company)).cases.find(lookup => lookup.name.startsWith('stock_item with its unit'))!;
+    const fetched = await measure(company, false, item.sql, item.params);
+    note(t, `analysed, not vacuumed, company ${company === layout.companyA ? 'A' : 'B'}`, item.name, fetched);
+    unvacuumed.push(fetched.stock_item?.fetched ?? 0);
+  }
+  assert.equal(unvacuumed[0], unvacuumed[1], 'the planning-time fetches do not grow with the company\'s items');
+  assert.ok(unvacuumed[0] <= 10, `a few planning-time probes, not the company's items: ${unvacuumed[0]}`);
   for (const state of plannerStates) {
     await setStatistics(database, state.analysed);
     for (const lookup of cases) {

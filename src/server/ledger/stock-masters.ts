@@ -197,19 +197,14 @@ export async function createUnit(context: LedgerContext, value: unknown): Promis
 
 /**
  * Renames a unit or changes its decimals. The row lock waits for opening writes in flight (they share-lock the unit), so
- * the check that refuses lowering the decimals of a used unit sees their rows.
+ * the database's check that refuses lowering the decimals of a used unit (stock_unit_guard, by opening rows and item
+ * lines) sees their rows; its refusal is mapped to the answer below.
  */
 export async function alterUnit(context: LedgerContext, unitId: string, value: unknown): Promise<StockUnit> {
   const input = parseInput(stockUnitAlterInput, value, unitFields);
   const before = await readUnit(context, unitId, 'FOR UPDATE');
   if (before.revision !== input.revision) throw conflict('unit');
   const decimals = input.decimals ?? before.decimals;
-  if (decimals < before.decimals) {
-    const { rows: [use] } = await context.client.query<{ used: boolean }>(
-      `SELECT EXISTS (SELECT 1 FROM stock_item i JOIN stock_opening o ON o.company_id = i.company_id AND o.item_id = i.id WHERE i.unit_id = $2 AND i.company_id = $1) AS used`,
-      [context.company.companyId, unitId]);
-    if (use.used) throw unitRefusals.stock_unit_decimals;
-  }
   await context.client.query('UPDATE stock_unit SET symbol = $3, formal_name = $4, decimals = $5, revision = revision + 1 WHERE company_id = $1 AND id = $2',
     [context.company.companyId, unitId, input.symbol, input.formalName, decimals]).catch(error => refusal(error, unitRefusals));
   const after = await readUnit(context, unitId);

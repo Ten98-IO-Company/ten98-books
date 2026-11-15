@@ -12,6 +12,9 @@ import { test } from 'node:test';
 test('migration 0014 counts shared ids inside its all-company scope, before any index statement', () => {
   const sql = readFileSync(join(process.cwd(), 'migrations', '0014_lookup_by_id.sql'), 'utf8');
   const code = sql.split('\n').filter(line => !line.trimStart().startsWith('--')).join('\n');
+  // The replaced guard comes after every index statement; its body is not a statement of the migration.
+  const guard = code.indexOf('CREATE OR REPLACE FUNCTION stock_unit_guard()');
+  const statementsOnly = code.replace(/\$\$[^]*?\$\$/g, '$$ $$');
   const opened = code.indexOf("PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);");
   const cleared = code.indexOf("PERFORM set_config('app.company_ids', '', true);");
   assert.ok(opened > 0 && cleared > opened, 'the scope is set, then cleared');
@@ -33,6 +36,8 @@ test('migration 0014 counts shared ids inside its all-company scope, before any 
     assert.equal(code.indexOf(statement, at + 1), -1, `once: ${statement}`);
     last = at;
   }
-  assert.equal(code.match(/\b(INSERT|UPDATE|DELETE)\b/g), null, 'the file writes no row');
-  assert.equal(code.match(/CREATE (UNIQUE )?INDEX|DROP INDEX/g)?.length, statements.length, 'no other index statement');
+  assert.ok(guard > last, 'the unit check is replaced after the indexes');
+  assert.equal(code.indexOf('CREATE OR REPLACE FUNCTION', guard + 1), -1, 'one function is replaced');
+  assert.equal(statementsOnly.match(/\b(INSERT|UPDATE|DELETE)\b/g), null, 'the file writes no row');
+  assert.equal(statementsOnly.match(/CREATE (UNIQUE )?INDEX|DROP INDEX/g)?.length, statements.length, 'no other index statement');
 });
