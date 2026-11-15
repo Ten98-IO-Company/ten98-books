@@ -92,8 +92,9 @@ async function snapshot(client: pg.Client | pg.PoolClient, companyId: string) {
       FROM voucher v JOIN voucher_type t ON t.company_id = v.company_id AND t.id = v.voucher_type_id WHERE v.company_id = $1 ORDER BY t.kind, v.number`),
     counters: await rows(`SELECT t.kind, c.series, c.last_number FROM voucher_counter c JOIN voucher_type t ON t.company_id = c.company_id AND t.id = c.voucher_type_id
       WHERE c.company_id = $1 ORDER BY t.kind`),
-    // Later migrations log their own changes (0008 logs the ledgers it gives cost centres); those entries are not moved rows.
-    sizes: await rows(`SELECT ${tablesAt0005.map(table => `(SELECT count(*) FROM ${table} WHERE company_id = $1${table === 'revision_log' ? " AND actor_id NOT LIKE 'migration:%'" : ''})::int AS ${table}`).join(', ')}`),
+    // Later migrations log their own changes (0008 logs the ledgers it gives cost centres) and seed their own rows (0013 the
+    // stock journal type); those are not moved rows.
+    sizes: await rows(`SELECT ${tablesAt0005.map(table => `(SELECT count(*) FROM ${table} WHERE company_id = $1${({ revision_log: " AND actor_id NOT LIKE 'migration:%'", voucher_type: " AND system_key IS DISTINCT FROM 'stock_journal'" } as Record<string, string>)[table] ?? ''})::int AS ${table}`).join(', ')}`),
   };
 }
 

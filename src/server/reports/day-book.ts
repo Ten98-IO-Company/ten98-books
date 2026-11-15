@@ -6,8 +6,9 @@ import { decodeCursor, encodeCursor, exportLimit, exportTooLarge } from './curso
 /**
  * The day book: every undeleted voucher dated in the period, in date and entry order, keyset-paged. Particulars are the
  * first line's ledger and the voucher amount stands in that line's column; a voucher created cancelled without lines (a
- * void) has neither, and an amount of zero. Cancelled and optional vouchers are listed with their status and left out
- * of the totals and the count; a post-dated voucher is listed and counted on its own date. 15 seconds.
+ * void) has neither, and an amount of zero, as has a stock journal (item lines only). Cancelled and optional vouchers are
+ * listed with their status and left out of the totals and the count; a post-dated voucher is listed and counted on its
+ * own date. 15 seconds.
  */
 
 const budgetSeconds = 15;
@@ -38,15 +39,16 @@ export async function dayBookReport(context: LedgerContext, query: unknown, all 
      ORDER BY p.date, p.id`,
     [company.companyId, page.from, page.to, afterDate, afterId, limit + 1]);
   if (all && rows.length > limit) throw exportTooLarge;
-  // Totals of the whole period in one grouped pass over the lines: each voucher's amount and its first line's side.
+  // Totals of the whole period in one grouped pass over the vouchers and their lines: each voucher's amount and its first
+  // line's side. Counted from the vouchers, so one without lines (a stock journal) is counted, with amount 0.
   const { rows: [totals] } = await client.query<DayBookReport['totals']>(
     `SELECT coalesce(sum(x.total) FILTER (WHERE x.side = 'Dr'), 0)::bigint AS debit,
        coalesce(sum(x.total) FILTER (WHERE x.side = 'Cr'), 0)::bigint AS credit, count(*)::int AS vouchers
      FROM (
        SELECT coalesce(sum(l.amount) FILTER (WHERE l.side = 'Dr'), 0) AS total, (array_agg(l.side ORDER BY l.line_no))[1] AS side
-       FROM voucher_line l JOIN voucher v ON v.company_id = l.company_id AND v.id = l.voucher_id
-       WHERE l.company_id = $1 AND ${countsSql} AND v.date BETWEEN $2 AND $3
-       GROUP BY l.voucher_id) x`,
+       FROM voucher v LEFT JOIN voucher_line l ON l.company_id = v.company_id AND l.voucher_id = v.id
+       WHERE v.company_id = $1 AND ${countsSql} AND v.date BETWEEN $2 AND $3
+       GROUP BY v.id) x`,
     [company.companyId, page.from, page.to]);
   const shown = rows.slice(0, limit);
   const last = shown[shown.length - 1];
