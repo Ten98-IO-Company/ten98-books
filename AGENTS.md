@@ -32,6 +32,7 @@ One canonical document per topic, linked from [docs/ROADMAP.md](docs/ROADMAP.md)
 - Checked TypeScript only; no `@ts-nocheck`, no weakened strict options.
 - Money is `BIGINT` minor units and `bigint` in code, a string on the wire; quantities and rates are `NUMERIC`/strings. Never a float (D-04, D-07).
 - Every server entry point, export and job authorizes the company and runs accounting queries through `withCompany` (D-03). Each handler module has a wrong-company negative test.
-- Migrations are immutable numbered SQL files; the coordinator assigns numbers.
+- Migrations are immutable numbered SQL files and the coordinator assigns numbers, until the generated baseline of [D-12](docs/DECISIONS.md) replaces them; the database guards stay hand-written SQL after that too.
+- New application queries are typed Drizzle queries where a builder form emits the same statement (D-12); existing hand-written SQL in `src` is counted per file in `raw-statements.json` and the architecture check refuses a count above the recorded one. A change that must add a hand-written statement raises that file's count by hand and writes what the statement is and why it has no builder form in its reason, in the same diff; a new file with SQL gets its own entry. A change that removes statements lowers the count (`node node_modules/@ten98/runtime/check.mjs --update-raw-statement-baseline .`): a recorded count above the real one passes silently and hides later additions. Never lower a guard or bend a measured query shape to avoid the count.
 - Posting rules live in the server ledger module only; screens never compute balances.
 - A requirement is `done` only when observed, fixtured and tested (D-01); never describe unfinished behaviour as equivalent.
