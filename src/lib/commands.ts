@@ -197,6 +197,7 @@ export const heldReturn = (at: { path: string; index: number }, stack: readonly 
 /**
  * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take at a location (its path, history position and report trail
  * step number), in this order:
+ * 0. None while the screen for the address is still loading (`loading`).
  * 1. A level drilled into after the innermost go-to takes the screen's own back, one level up.
  * 2. The very entry a go-to opened returns to where that go-to was opened from (heldReturn: the latest return held on
  *    this entry, innermost or not). Go-to stacks, so the next one out applies there. A form opened from it and closed
@@ -206,7 +207,10 @@ export const heldReturn = (at: { path: string; index: number }, stack: readonly 
  * A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes back the usual
  * way, and that ends at the menu.
  */
-export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell }: { screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell, loading = false }: { screen: boolean; shell: boolean; loading?: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+  // While the screen for the address is still loading, nothing below knows where its back leads (a report reached by a
+  // drill-down goes up a level, not to the menu): Escape and Ctrl+Q wait until it has mounted, and do nothing meanwhile.
+  if (loading) return 'none'
   if (screen && drilledFrom(at.step, stack[stack.length - 1])) return 'screen'
   if (heldReturn(at, stack)) return 'go-to'
   return screen ? 'screen' : shell ? 'shell' : 'none'
@@ -227,3 +231,18 @@ export function shellBackTarget({ companyInAddress, listed, ready, atMenu }: { c
 /** The `aria-keyshortcuts` value for registry chords: space-separated, with Ctrl written Control as ARIA requires. */
 export const ariaKeyShortcuts = (keys: readonly string[]): string | undefined =>
   keys.length ? keys.map(chord => chord.split('+').map(part => part === 'Ctrl' ? 'Control' : part).join('+')).join(' ') : undefined
+
+/**
+ * One navigation per menu: the first item opened starts it, and every later open while the menu is still on screen (the
+ * next page has not mounted yet) is dropped, never run as another command. Letters typed straight after a menu key are
+ * therefore lost rather than opening a second screen; they are not carried over to the next page.
+ */
+export function oneNavigation(): (start: () => void) => boolean {
+  let started = false
+  return start => {
+    if (started) return false
+    started = true
+    start()
+    return true
+  }
+}

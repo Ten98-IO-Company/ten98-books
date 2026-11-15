@@ -169,3 +169,39 @@ test('the breadcrumb of a company the person is locked out of by its two-factor 
   assert.equal(shellPageTitle({ path: '/app/team', company: { company: null, twoFactorLocked: true } }), 'Team');
   assert.equal(shellPageTitle({ path: '/app' }), 'Companies');
 });
+
+test('the page-focus rule follows the page as it is drawn, and stops at the first key or pointer press', () => {
+  const log: string[] = [];
+  const node = (name: string) => ({ name, tabIndex: 0, focus() { log.push(name); doc.activeElement = this }, hasAttribute: () => false });
+  const body = {};
+  let content: Record<string, unknown> = {};
+  const main = { ...node('main'), querySelector: (selector: string) => content[selector] ?? null };
+  const listeners = new Map<string, () => void>();
+  const doc = {
+    body, activeElement: body as unknown, querySelector: (selector: string) => selector === 'main' ? main : null,
+    addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener) },
+    removeEventListener: (type: string) => { listeners.delete(type) },
+  };
+  let changed: () => void = () => undefined;
+  const global = globalThis as { MutationObserver?: unknown };
+  const previous = global.MutationObserver;
+  global.MutationObserver = class { constructor(callback: () => void) { changed = callback } observe() {} disconnect() {} };
+  try {
+    focusHeadingAfterLoad(doc as never, { timeout: 1000 });
+    assert.deepEqual(log, ['main'], 'nothing drawn yet: the main area itself');
+    content = { '[data-loading-state]': node('loading') };
+    changed();
+    assert.deepEqual(log, ['main', 'loading'], 'a loading state takes it from the main area');
+    content = { h1: node('heading') };
+    doc.activeElement = body; // the loading state is gone
+    changed();
+    assert.deepEqual(log, ['main', 'loading', 'heading']);
+    for (const type of ['keydown', 'pointerdown']) assert.ok(listeners.has(type), `${type} stops it`);
+    listeners.get('keydown')!();
+    assert.equal(listeners.size, 0, 'the first key removes both listeners');
+    doc.activeElement = body;
+    content = { h1: node('later heading') };
+    changed();
+    assert.deepEqual(log, ['main', 'loading', 'heading'], 'after a key the rule moves nothing');
+  } finally { global.MutationObserver = previous; }
+});

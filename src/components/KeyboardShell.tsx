@@ -1,9 +1,10 @@
-import { Alert, AuthLayout, Button, Dialog, ShortcutProvider, ShortcutScope, Stack, Text, useCommand, useCommandKeys, type NavLinkComponent } from '@ten98/ui'
+import { Alert, AuthLayout, Button, Dialog, ShortcutProvider, ShortcutScope, Stack, StatusLine, Text, useCommand, useCommandKeys, type NavLinkComponent } from '@ten98/ui'
 import { Link, useNavigate, useParams, useRouter, useRouterState } from '@tanstack/react-router'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { afterHistory, ariaKeyShortcuts, backSource, commandOf, commands, contextTitles, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../lib/commands'
 import { reportLevel } from '../lib/reports'
+import { focusFirstHeading, focusHeadingAfterLoad } from '../lib/page-focus'
 import { defaultKeymap, dialogClaims, disabledClaims, keymaps, reservedClaims, type KeymapName } from '../lib/keymaps'
 import { KeyboardHelp } from './KeyboardHelp'
 import { KeyboardMenu, type KeyboardMenuGroup } from './KeyboardMenu'
@@ -44,6 +45,9 @@ export function useOpenScreen(): OpenScreen {
 
 /** Sets or clears the page's own target for nav.back (useBackOverride). */
 const BackOverrideContext = createContext<((target: { run: () => void } | null) => void) | null>(null)
+
+/** Counts the loading states on screen (`LoadingState`): while one is shown, Escape and Ctrl+Q wait (backSource). */
+const LoadingContext = createContext<((change: 1 | -1) => void) | null>(null)
 
 export function useKeyboard(): KeyboardState {
   const state = useContext(KeyboardContext)
@@ -124,12 +128,16 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
   const [helpOpen, setHelpOpen] = useState(false)
   const [goToMode, setGoToMode] = useState<ScreenMode | null>(null)
   const [backOverride, setBackOverride] = useState<{ run: () => void } | null>(null)
+  const [loadingStates, setLoadingStates] = useState(0)
+  const changeLoading = useCallback((change: 1 | -1) => setLoadingStates(count => count + change), [])
   const [goTos, setGoTos] = useState<readonly GoToReturn[]>([])
   const router = useRouter()
   const navigate = useNavigate()
   const path = useRouterState({ select: state => state.location.pathname })
   const href = useRouterState({ select: state => state.location.href })
   const index = useRouterState({ select: state => historyIndex(state.location.state) })
+  // A navigation that has not finished: the address already names the next screen, the previous one is still shown.
+  const navigating = useRouterState({ select: state => state.status === 'pending' })
   const step = trailStepOf(href)
   const innermost = goTos[goTos.length - 1]
   // Set while Escape goes up the report trail from a level drilled into after the innermost go-to, so the push that
@@ -170,7 +178,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
     setGoTos([])
     await navigate({ to, params, search } as never)
   }, [router, navigate])
-  const source = backSource({ path, index, step }, goTos, { screen: backOverride !== null, shell: back !== undefined })
+  const source = backSource({ path, index, step }, goTos, { screen: backOverride !== null, shell: back !== undefined, loading: loadingStates > 0 || navigating })
   // Using a return spends it and goes back in history to the very entry the go-to was opened from.
   const held = heldReturn({ path, index }, goTos)
   const backNow = source === 'go-to' && held ? () => { setGoTos(stack => stack.filter(item => item !== held)); router.history.go(held.fromIndex - index) }
@@ -203,7 +211,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
   const focusMemory = useRef<FocusMemory['current']>(null)
   useEffect(() => rememberFocusOutsideDialogs(document, focusMemory), [])
 
-  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}><FocusMemoryContext value={focusMemory}>
+  return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}><FocusMemoryContext value={focusMemory}><LoadingContext value={changeLoading}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
       <GlobalCommands back={backNow} companyOpen={companyOpen} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
       <ReservedKeys context='global' />
@@ -211,7 +219,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = fals
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
       <GoToDialog mode={goToMode} onClose={() => setGoToMode(null)} />
     </ShortcutProvider>
-  </FocusMemoryContext></OpenScreenContext></BackOverrideContext></KeyboardContext>
+  </LoadingContext></FocusMemoryContext></OpenScreenContext></BackOverrideContext></KeyboardContext>
 }
 
 // An open dialog, popover or expanded popup owns Escape even when focus has moved outside it.
@@ -320,27 +328,26 @@ export const stateCopy = {
 
 /**
  * A state screen (an address no route matches, a company that cannot be opened, a page that failed), inside the signed-in
- * shell or outside it. Its heading takes focus when it appears, so focus is never left on the page body. Inside the shell
+ * shell or outside it. Its heading takes focus as it is attached, so focus is never left on the page body. Inside the shell
  * it sits in the shell's main area (an unlabelled layout, so the page keeps one main landmark), and Escape (Ctrl+Q in
- * classic) and "Go to the start page" go to /app, which opens the last company used. Outside the shell it is the page's
- * main landmark and the start page is /. What it shows depends only on its props: an error's own text never reaches it.
+ * classic) and "Go to the start page" go to /app, which opens the last company used, or to `backTo` when the screen
+ * names a better place (a company locked by the two-factor rule: the account's security section). Outside the shell it
+ * is the page's main landmark and the start page is /. "Try again" starts the page-focus rule again, so the page it
+ * brings back gets focus too. What it shows depends only on its props: an error's own text never reaches it.
  */
-export function StateScreen({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
+export function StateScreen({ state, title, message, onRetry, backTo }: { state: 'not-found' | 'error' | 'loading'; title: string; message: string; onRetry?: () => void; backTo?: { to: string; hash?: string } }) {
   const inShell = useContext(KeyboardContext) !== null
   const start = inShell ? '/app' : '/'
   const navigate = useNavigate()
-  const holder = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const heading = holder.current?.querySelector<HTMLElement>('h1')
-    if (heading) { heading.tabIndex = -1; heading.focus() }
-  }, [])
-  useBackOverride(() => void navigate({ to: start }))
-  return <Stack ref={holder}>
+  const focusHeading = useCallback((holder: HTMLElement | null) => { focusFirstHeading(holder) }, [])
+  useBackOverride(() => void navigate((backTo ?? { to: start }) as never))
+  const retry = onRetry && (() => { onRetry(); focusHeadingAfterLoad(document) })
+  return <Stack ref={focusHeading}>
     <AuthLayout label={inShell ? undefined : title} title={title} surface={inShell ? 'plain' : undefined} brand={inShell ? false : undefined} aside={inShell ? null : undefined}>
       <Stack gap={4}>
-        {state === 'not-found' ? <Text role='status'>{message}</Text> : <Alert tone='danger' role='alert' title={message} />}
+        {state === 'error' ? <Alert tone='danger' role='alert' title={message} /> : state === 'loading' ? <StatusLine busy>{message}</StatusLine> : <Text role='status'>{message}</Text>}
         {state === 'not-found' ? <Button href={start} component={RouterLink}>Go to the start page</Button>
-          : onRetry && <Button onClick={onRetry}>Try again</Button>}
+          : state === 'error' && retry && <Button onClick={retry}>Try again</Button>}
       </Stack>
     </AuthLayout>
   </Stack>
@@ -358,4 +365,19 @@ export function NotFoundScreen() {
 export function ErrorScreen({ reset }: { reset?: () => void }) {
   const router = useRouter()
   return <StateScreen state='error' {...stateCopy.error} onRetry={() => { reset?.(); void router.invalidate() }} />
+}
+
+/**
+ * A loading state inside the shell (a company being read before its page can mount). It is the named element focus goes
+ * to while it is shown (a status region that can take focus, labelled with what is loading), and while it is on screen
+ * Escape and Ctrl+Q wait: the page that will know where its back leads has not mounted yet (backSource `loading`).
+ */
+export function LoadingState({ message }: { message: string }) {
+  const change = useContext(LoadingContext)
+  useEffect(() => {
+    if (!change) return
+    change(1)
+    return () => change(-1)
+  }, [change])
+  return <Stack role='status' tabIndex={-1} aria-label={message} data-loading-state=''><StatusLine busy>{message}</StatusLine></Stack>
 }

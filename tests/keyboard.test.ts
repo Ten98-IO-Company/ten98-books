@@ -4,7 +4,7 @@ import { chordFromEvent, findChordConflicts, type ConfirmRequest, isPrintableCho
 import { readdirSync, readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { afterHistory, ariaKeyShortcuts, backSource, barCommands, commandIds, commands, drilledFrom, heldReturn, shellBackTarget, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, barCommands, commandIds, commands, drilledFrom, heldReturn, oneNavigation, shellBackTarget, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
@@ -13,6 +13,12 @@ import { acceptPress } from '../src/components/masters/accept-press.ts';
 import { controlAfterSave, createLeaveGuard, focusAfterKeepEditing } from '../src/components/masters/leave-guard.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
+
+/**
+ * A source without its comments, so a commented-out call or a note cannot satisfy or upset a count. Block comments go
+ * first, then line comments that do not follow a colon or a quote (an address such as `https://` is kept).
+ */
+const withoutComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 
 /** The keymap as the registry sees it: one command per id, scoped by its context, chords in canonical form. */
 function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): ResolvedCommand[] {
@@ -411,7 +417,7 @@ test('only the app confirmation hook imports the package confirmation pieces, so
   // The package itself, in either quote, not one of its files (`@ten98/ui/styles.css`).
   const pkg = String.raw`['"]@ten98\/ui['"]`;
   for (const file of files(new URL('../src/', import.meta.url))) {
-    const source = readFileSync(file, 'utf8');
+    const source = withoutComments(readFileSync(file, 'utf8'));
     const name = file.pathname.slice(file.pathname.indexOf('/src/') + 1);
     // Every way to reach the whole package: a namespace or default import, `export *` and a dynamic import.
     assert.doesNotMatch(source, new RegExp(String.raw`import\s+(?:\*\s*as\s+)?\w+\s*(?:,\s*\{[^}]*\}\s*)?from\s*${pkg}`), `${name} imports the whole package`);
@@ -420,7 +426,7 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     for (const statement of source.matchAll(new RegExp(String.raw`(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*${pkg}`, 'g'))) {
       if (/\b(?:useConfirmDialog|ConfirmDialog|ConfirmDialogProps)\b/.test(statement[1])) importers.push(name);
     }
-    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
+    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions += source.match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
   // What this counts: every `confirm(` call in a file that calls `useConfirm()`, which is every question a screen asks on its own.
@@ -441,13 +447,21 @@ test('only the app confirmation hook imports the package confirmation pieces, so
   const perFile = new Map<string, number>();
   for (const line of expectedQuestions) { const file = line.split(':')[0]; perFile.set(file, (perFile.get(file) ?? 0) + 1); }
   for (const [file, count] of perFile) {
-    const source = readFileSync(new URL(`../src/components/masters/${file}`, import.meta.url), 'utf8');
+    const source = withoutComments(readFileSync(new URL(`../src/components/masters/${file}`, import.meta.url), 'utf8'));
     assert.equal(source.match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0, count, `${file} asks the questions named for it`);
   }
   // The hook forwards each request through its merge rule, not as the caller wrote it.
-  const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
+  const hook = withoutComments(readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8'));
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
   assert.equal(hook.match(/\bconfirm\(/g)?.length, 1, 'the hook forwards in one place only');
+});
+
+test('the question count reads code, not comments: a commented call is not counted and a commented-out question is not hidden', () => {
+  const asked = (source: string) => withoutComments(source).match(/(?<![A-Za-z])confirm[(]/g)?.length ?? 0;
+  assert.equal(asked("const ok = await confirm({ title: 'Delete?' })"), 1);
+  assert.equal(asked("// confirm( before deleting\nconst ok = await confirm({ title: 'Delete?' })"), 1, 'a note naming confirm( is not a question');
+  assert.equal(asked("/* await confirm({ title: 'Delete?' }) */\nremove()"), 0, 'a question commented out is gone');
+  assert.equal(asked("api('https://example.test/confirm(x)')"), 1, 'an address in a string keeps its text');
 });
 
 test('a confirmation opens on Cancel unless the caller names the confirm button; a spread cannot change that', () => {
@@ -882,6 +896,47 @@ test('KEY-065: with no go-to return left Escape goes one level up; on a company 
   // After a reload a report holds no go-to return and takes its own back, one level up.
   assert.equal(backSource({ path: '/app/c/x/reports/trial-balance', index: 3, step: null }, [], { screen: true, shell: true }), 'screen')
 })
+
+test('KEY-065 under a slow load: while the screen for the address is loading, Escape and Ctrl+Q wait, whatever else applies', () => {
+  const report = { path: '/app/c/x/reports/trial-balance', index: 1, step: null };
+  const held: GoToReturn = { from: '/app/c/x/reports/day-book', to: '/app/c/x/reports/trial-balance', level: '', index: 1, fromIndex: 0, mark: 0 };
+  const cases = [[[], true, true, 'screen'], [[], false, true, 'shell'], [[held], true, true, 'go-to']] as const;
+  for (const [stack, screen, shell, mounted] of cases) {
+    assert.equal(backSource(report, stack, { screen, shell, loading: true }), 'none', `${mounted}: nothing runs while loading`);
+    assert.equal(backSource(report, stack, { screen, shell, loading: false }), mounted, `${mounted}: once mounted the usual order applies`);
+  }
+  // The shell counts what is loading: the company read (LoadingState) and a navigation still pending.
+  const shell = withoutComments(readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8'));
+  assert.match(shell, /loading: loadingStates > 0 \|\| navigating \}/);
+  assert.match(shell, /const navigating = useRouterState\(\{ select: state => state\.status === 'pending' \}\)/);
+  const company = withoutComments(readFileSync(new URL('../src/routes/app/c.$companyId.tsx', import.meta.url), 'utf8'));
+  assert.equal(company.match(/<LoadingState message='Loading the company…' \/>/g)?.length, 2, 'both waits for the company are loading states');
+  assert.doesNotMatch(company, /StatusLine/, 'no plain status line that Escape would not wait for');
+});
+
+test('one navigation per menu: letters pressed before the next page mounts are dropped, never run', () => {
+  const opened: string[] = [];
+  const once = oneNavigation();
+  assert.equal(once(() => opened.push('U')), true);
+  assert.equal(once(() => opened.push('N')), false);
+  assert.equal(once(() => opened.push('T')), false);
+  assert.deepEqual(opened, ['U'], 'only the first letter navigates');
+  const fresh: string[] = [];
+  oneNavigation()(() => fresh.push('T'));
+  assert.deepEqual(fresh, ['T'], 'a new menu starts again');
+  const menu = withoutComments(readFileSync(new URL('../src/routes/app/c.$companyId.index.tsx', import.meta.url), 'utf8'));
+  assert.match(menu, /const \[navigateOnce\] = useState\(oneNavigation\)/);
+  assert.match(menu, /open: \(\) => \{ navigateOnce\(\(\) => \{ lastOpened\.set\(company\.id, entry\.command\); void navigate\(/);
+});
+
+test('no environment badge in the shell (owner decision): the top bar has no badge and no screen says "Development preview"', () => {
+  const app = withoutComments(readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8'));
+  const start = app.indexOf('<AppTopbar');
+  assert.ok(start >= 0, 'the top bar is found');
+  assert.doesNotMatch(app.slice(start, app.indexOf('/>', start)), /\bbadge=/);
+  const files = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : /\.tsx?$/.test(entry.name) ? [new URL(entry.name, dir)] : []);
+  for (const file of files(new URL('../src/', import.meta.url))) assert.doesNotMatch(withoutComments(readFileSync(file, 'utf8')), /Development preview/i, file.pathname);
+});
 
 test('KEY-066: the action bar shows only what can run, and a command without a key only when a pointer can use it', () => {
   const bar = (keymap: KeymapName, enabled: Partial<Record<CommandId, boolean>>) => barCommands((['help.keyboard', 'nav.back', 'nav.quit', 'company.switch', 'nav.go-to', 'nav.switch-to'] as CommandId[])

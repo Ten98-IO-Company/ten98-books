@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { version } from '../../package.json'
 import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
-import { KeyboardShell, NotFoundScreen, RouterLink } from '../components/KeyboardShell'
+import { KeyboardShell, NotFoundScreen, RouterLink, StateScreen } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
@@ -56,10 +56,9 @@ function AppLayout() {
     catch (error) { if (error instanceof ApiError && error.status === 401) unauthorized(); else setLoadError(errMsg(error)) }
   }, [unauthorized])
   useEffect(() => { void loadMe() }, [loadMe])
-  // After a full load, once the shell is there: the page's heading takes focus unless the page puts it somewhere itself
-  // (src/lib/page-focus.ts), so focus is never left on the page body.
-  const shellShown = me !== null
-  useEffect(() => { if (shellShown) return focusHeadingAfterLoad(document) }, [shellShown])
+  // From the first render of a full load (the loading screen included): focus goes to a named element, never the page
+  // body (src/lib/page-focus.ts), until the first key or pointer press.
+  useEffect(() => focusHeadingAfterLoad(document), [])
 
   const reloadCompanies = useCallback(async () => {
     const request = ++companiesRequest.current
@@ -100,7 +99,7 @@ function AppLayout() {
   }
 
   if (loadError) return <AppStateScreen state='error' title='Unable to load your account' message={loadError} onRetry={() => { setLoadError(''); void loadMe() }} />
-  if (!me || !state) return <AppStateScreen state='loading' message='Loading…' />
+  if (!me || !state) return <StateScreen state='loading' title='Loading' message='Loading…' />
 
   const base = company ? `/app/c/${company.id}` : ''
   const ready = company?.company != null

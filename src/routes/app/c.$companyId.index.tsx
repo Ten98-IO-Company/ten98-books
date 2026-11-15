@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../../components/KeyboardMenu'
 import { KeymapPrompt } from '../../components/KeymapChoice'
 import { useApp, useCompany } from '../../lib/app-context'
-import { commands, type CommandId } from '../../lib/commands'
+import { commands, oneNavigation, type CommandId } from '../../lib/commands'
 import { baseCurrencies, financialYearOf } from '../../lib/company'
 import { longDate } from '../../lib/reports'
 
@@ -42,13 +42,15 @@ function CompanyHome() {
   const offered = destinations.filter(entry => writer || !('write' in entry))
   const [active, setActive] = useState<CommandId>(() => lastOpened.get(company.id) ?? offered[0].command)
   const [focusRequest, setFocusRequest] = useState(0)
+  // A menu letter starts one navigation; letters typed before the next page has mounted are dropped (oneNavigation).
+  const [navigateOnce] = useState(oneNavigation)
   const year = financialYearOf(company.financialYearStart, companyToday(company.timeZone))
 
   const groups: KeyboardMenuGroup[] = [...new Set(offered.map(entry => entry.group))].map(group => ({
     id: group.toLowerCase(), label: group,
     items: offered.filter(entry => entry.group === group).map(entry => ({
       command: entry.command, label: commands[entry.command].title,
-      open: () => { lastOpened.set(company.id, entry.command); void navigate({ to: entry.to, params: { companyId: company.id } }) },
+      open: () => { navigateOnce(() => { lastOpened.set(company.id, entry.command); void navigate({ to: entry.to, params: { companyId: company.id } }) }) },
     })),
   }))
 

@@ -29,7 +29,7 @@ A company comes into being in exactly two ways: first-user setup (which creates 
 | `POST /api/companies` | signed in | Creates a company; the caller becomes its owner. Optional `idempotencyKey` (8 to 100 of `A-Z a-z 0-9 _ . : -`). 201 with `{ company, replayed: false }`, 200 with `replayed: true` for a repeat, 409 `idempotency_mismatch`. |
 | `GET /api/companies/<id>` | member | The company's settings. 409 with code `not_set_up` before setup. |
 | `POST /api/companies/<id>/setup` | owner, admin | Saves the books settings of a company that is not set up yet and names it; 409 `already_set_up` afterwards. |
-| `POST /api/workspaces/<id>/rename` | owner, admin | Renames the company. |
+| `POST /api/workspaces/<id>/rename` | owner, admin | Renames the company. When it is refused because the person's role changed elsewhere (403 or 404), the settings page reads the company list again and shows the refusal above the name, which is then read-only. |
 | `/api/workspaces/<id>/team`, `/invitations`, `/members/...` | owner, admin | The company's team (shared team controller). |
 | `/api/companies/<id>/...` | member | Masters, vouchers and reports ([LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md)). |
 
