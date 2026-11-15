@@ -1,4 +1,5 @@
-import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,useConfirmDialog,type AccountProfileValues,type AuthNotice,type SelectOption} from '@ten98/ui';
+import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,type AccountProfileValues,type AuthNotice,type SelectOption} from '@ten98/ui';
+import {useConfirm} from './useConfirm';
 import {useCallback,useEffect,useId,useRef,useState} from 'react';
 import {useBlocker} from '@tanstack/react-router';
 import {ApiError,errMsg} from '../lib/api';
@@ -25,7 +26,7 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
   const blocked=!data||!draft||!!account?.loading||!!account?.error||busy;
   const saved=data?savedDraft(data):null;
   const changed=!!saved&&!!draft&&!sameDraft(draft,saved);
-  const [confirm,dialog]=useConfirmDialog();
+  const [confirm,dialog]=useConfirm();
   useBlocker({shouldBlockFn:async()=>changed&&!await confirm({title:'Discard your unsaved preferences?',description:'The changes you made on this page are not saved.',confirmLabel:'Discard',cancelLabel:'Keep editing',danger:true}),enableBeforeUnload:()=>changed});
   const zones=Array.from(new Set(['UTC',...(data?[data.preferences.timeZone]:[]),...Intl.supportedValuesOf('timeZone')])).sort();
   const onValuesChange=useCallback((values:AccountProfileValues)=>setDraft(asDraft(values)),[]);

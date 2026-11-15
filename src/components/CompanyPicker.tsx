@@ -1,5 +1,4 @@
 import { Button, Dialog, SelectableList } from '@ten98/ui'
-import { useEffect } from 'react'
 import type { CompanySummary } from '../lib/app-context'
 import { DialogKeys } from './KeyboardShell'
 
@@ -12,16 +11,7 @@ export function CompanyPicker({ open, onOpenChange, companies, currentId, onChoo
   onChoose: (companyId: string) => void
   onCreate: () => void
 }) {
-  // `@ten98/ui` 0.37.0 Dialog focuses its close button and has no initial-focus option yet, so focus moves to the
-  // list's tab stop (the current company, else the first) once the dialog has opened. Replace this effect with the
-  // Dialog's initial-focus prop when the design system ships it.
-  useEffect(() => {
-    if (!open) return
-    const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>(`dialog[open] [role="listbox"][aria-label="${listLabel}"] [role="option"][tabindex="0"]`)?.focus())
-    return () => cancelAnimationFrame(frame)
-  }, [open])
-
-  return <DialogKeys name='Change company' open={open}><Dialog open={open} onOpenChange={onOpenChange} title='Change company' description='Use the arrow keys to move and Enter to open a company.'>
+  return <DialogKeys name='Change company' open={open}><Dialog open={open} onOpenChange={onOpenChange} title='Change company' description='Use the arrow keys to move and Enter to open a company.' initialFocus={listStop}>
     {/* Keyed by `open` so each opening starts a fresh list whose tab stop is the current company, not the last one moved to. */}
     <SelectableList key={String(open)} label={listLabel} selectedId={currentId ?? null} emptyMessage='You do not belong to any company yet.'
       items={companies.map(company => ({ id: company.id, title: company.name, meta: roleLabels[company.role],
@@ -32,5 +22,8 @@ export function CompanyPicker({ open, onOpenChange, companies, currentId, onChoo
 }
 
 const listLabel = 'Companies'
+
+/** The list's tab stop (the current company, else the first): focus starts there when the dialog opens. */
+const listStop = { get current() { return document.querySelector<HTMLElement>(`dialog[open] [role="listbox"][aria-label="${listLabel}"] [role="option"][tabindex="0"]`) } }
 
 export const roleLabels: Record<CompanySummary['role'], string> = { owner: 'Owner', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' }

@@ -1,4 +1,5 @@
-import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
@@ -40,7 +41,7 @@ function CostCentreFormBody({ categories, centres, existing, initialCategoryId, 
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
   const refocus = useRef(false)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
   // A new centre starts on the first field, the category, as the reference does, and so does a move; an alter starts on the name. A viewer's starts on Back.
   useEffect(() => { if (!readOnly) focusEntryField(form.current, start) }, [readOnly, start])

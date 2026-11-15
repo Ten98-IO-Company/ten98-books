@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -59,6 +59,17 @@ test('only statement periods are remembered: the day book keeps its day to itsel
   assert.deepEqual(rememberedPeriod(memory, 'c1', 'statement'), { from: '2026-01-01', to: '2026-02-03' }, 'opening the day book does not narrow the trial balance');
   assert.equal(rememberedPeriod(memory, 'c1', 'day'), undefined, 'the day book opens on its own default day');
   assert.equal(rememberedPeriod(memory, 'c2', 'statement'), undefined);
+});
+
+test('a register page names the vouchers it shows once the period needs more than one page, so a printout says more exist', () => {
+  assert.equal(registerRange(0, 150, false), null, 'one page: nothing to say');
+  assert.equal(registerRange(0, 200, true), 'Vouchers 1 to 200; more on the next page.');
+  assert.equal(registerRange(1, 200, true), 'Vouchers 201 to 400; more on the next page.');
+  assert.equal(registerRange(1, 103, false), 'Vouchers 201 to 303, the last of the period.');
+  assert.equal(registerRange(1, 1, false), 'Voucher 201, the last of the period.', 'one voucher on the last page');
+  assert.equal(registerRange(1, 0, false), null, 'an empty page (a stale address past the last voucher) names no range');
+  assert.equal(registerRange(2, 0, true), null);
+  assert.equal(registerPageSize, reportPageQuery.parse({ from: '2026-01-01', to: '2026-12-31' }).limit, 'the screens rely on the server default page size');
 });
 
 test('page cursors: a repeated push of the cursor on top is ignored, so PageUp still returns to the first page', () => {

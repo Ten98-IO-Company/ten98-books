@@ -52,6 +52,8 @@ export function useCursorPages(search: ReportSearch) {
   }
   return {
     after: cursors.at(-1),
+    /** Pages before the one shown. */
+    before: cursors.length,
     hasPrevious: cursors.length > 0,
     next: (cursor: string) => change(current => pushCursor(current, cursor)),
     previous: () => change(popCursor),

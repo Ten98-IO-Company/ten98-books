@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
+import { chordFromEvent, findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, physicalChordFromEvent, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
-import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
+import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
 
@@ -18,14 +19,18 @@ function registered(name: KeymapName, platform: ShortcutPlatform = 'other'): Res
   }));
 }
 
-/** Commands the screens register with allowInTextInput (entry.tsx, MasterList.tsx under its search field, MasterPicker.tsx). */
+/** Commands the screens register with allowInTextInput (entry.tsx, MasterList.tsx under its search field, MasterPicker.tsx, a dialog's accept); a test below reads them from the sources. */
 const inTextInput = new Set<string>(['entry.next-field', 'entry.accept', 'entry.cancel', 'list.next', 'list.previous', 'list.open', 'list.cancel']);
 
-function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other', disabled: readonly string[] = []) {
+/** `popupOpen`: the focused element is a select or holds an open popup (a lookup's list), as the registry checks it. */
+function resolve(name: KeymapName, chord: string, contexts: readonly (CommandContext | `${CommandContext}:focus`)[], target: ShortcutTarget = 'other', disabled: readonly string[] = [], popupOpen = false) {
   const scopes = [...contexts.map(entry => ({ id: entry.replace(':focus', ''), focus: entry.endsWith(':focus') })), { id: 'global', focus: false }];
   const commandsNow = registered(name).map(command => ({ ...command, enabled: !disabled.includes(command.id), allowInTextInput: inTextInput.has(command.id) }));
-  return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: commandsNow, target })?.command.id;
+  return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: commandsNow, target, popupOpen })?.command.id;
 }
+
+/** Every `.tsx` file under a source folder. */
+const sources = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? sources(new URL(`${entry.name}/`, dir)) : entry.name.endsWith('.tsx') ? [new URL(entry.name, dir)] : []);
 
 /**
  * A dialog as DialogKeys (KeyboardShell.tsx) registers it: a modal scope holding nav.quit, help.keyboard, entry.accept
@@ -58,10 +63,6 @@ function resolveScreen(name: KeymapName, chord: string, contexts: readonly Comma
   const scopes = [...contexts.map(id => ({ id, focus: false })), { id: 'global', focus: false }];
   return resolveShortcut({ chord: parseChord(chord)!, scopes, commands: [...screen, ...reserved], target })?.command.id;
 }
-
-/** A focused element as the Escape guard sees it. */
-const element = (tagName: string, extra: { type?: string; role?: string; isContentEditable?: boolean } = {}) =>
-  ({ tagName, type: extra.type, isContentEditable: extra.isContentEditable, getAttribute: (name: string) => name === 'role' ? extra.role ?? null : null });
 
 test('both keymaps bind every command, and only commands the registry defines; web-safe leaves the classic-only ones unbound', () => {
   for (const name of keymapNames) {
@@ -149,26 +150,45 @@ test('menu letters and menu keys run only while the menu itself has focus', () =
   }
 });
 
-test('Escape in a text field: the engine runs nav.back there, so the shell disables it while a field keeps Escape', () => {
-  for (const name of keymapNames) {
-    // @ten98/ui 0.37.0 lets Escape run a command from a single-line field; this is why the app-side guard exists.
-    assert.equal(resolve(name, 'Escape', [], 'text'), 'nav.back');
-    assert.equal(resolve(name, 'Escape', [], 'multiline'), 'nav.back');
-    // With the guard, nav.back is disabled while the field has focus: nothing claims the key and the field keeps it.
-    assert.equal(resolve(name, 'Escape', [], 'text', ['nav.back']), undefined);
-    assert.equal(resolve(name, 'Escape', ['entry'], 'text', ['nav.back']), 'entry.cancel', 'an entry screen still decides Escape in its fields');
+/** The text of the call whose opening parenthesis is at `open`, to its matching close (strings skipped). */
+function callAt(source: string, open: number): string {
+  let depth = 0, quote = '';
+  for (let at = open; at < source.length; at++) {
+    const char = source[at];
+    if (quote) { if (char === '\\') at++; else if (char === quote) quote = ''; continue; }
+    if (char === "'" || char === '"' || char === '`') quote = char;
+    else if (char === '(') depth++;
+    else if (char === ')' && --depth === 0) return source.slice(open, at + 1);
   }
+  return source.slice(open);
+}
+
+test('Escape stays with a text field, a select and an open popup: nav.back never leaves from there, a form or picker cancel does', () => {
+  for (const name of keymapNames) {
+    assert.equal(resolve(name, 'Escape', []), 'nav.back', 'outside a field Escape goes back one level');
+    assert.equal(resolve(name, 'Escape', [], 'control'), 'nav.back', 'a focused button or row does not keep Escape');
+    for (const target of ['text', 'multiline'] as const) assert.equal(resolve(name, 'Escape', [], target), undefined, `a ${target} field keeps Escape`);
+    assert.equal(resolve(name, 'Escape', [], 'control', [], true), undefined, 'a select or a control with its popup open keeps Escape');
+    assert.equal(resolve(name, 'Escape', ['report'], 'text'), undefined, 'a report filter keeps Escape');
+    // A master form and a picker under its search field cancel from inside the field, as on the catalogue's forms.
+    assert.equal(resolve(name, 'Escape', ['entry'], 'text'), 'entry.cancel');
+    assert.equal(resolve(name, 'Escape', ['list'], 'text'), 'list.cancel');
+    assert.equal(resolve(name, 'Escape', ['entry'], 'text', [], true), undefined, 'a lookup with its list open closes the list first');
+  }
+  assert.equal(resolve('classic', 'Ctrl+Q', [], 'text'), 'nav.quit', 'classic Ctrl+Q leaves from inside a field');
 });
 
-test('the Escape guard keeps Escape for text fields, selects, editable regions and comboboxes only', () => {
-  for (const kept of [element('INPUT'), element('INPUT', { type: 'search' }), element('input', { type: 'date' }), element('TEXTAREA'), element('SELECT'),
-    element('DIV', { isContentEditable: true }), element('DIV', { role: 'combobox' }), element('SPAN', { role: 'textbox' }), element('DIV', { role: 'spinbutton' })]) {
-    assert.equal(keepsEscape(kept), true, JSON.stringify(kept));
+test('the commands that run from a text field are the ones the screens register with allowInTextInput, and nav.back is not one', () => {
+  const optedIn = new Set<string>();
+  for (const file of sources(new URL('../src/', import.meta.url))) {
+    const source = readFileSync(file, 'utf8');
+    for (const start of source.matchAll(/useAppCommand\('([a-z.-]+)'/g)) {
+      const call = callAt(source, start.index + 'useAppCommand'.length);
+      if (/allowInTextInput: (?!false)/.test(call)) optedIn.add(start[1]);
+    }
   }
-  for (const free of [null, undefined, element('BODY'), element('UL', { role: 'menu' }), element('BUTTON'), element('A'), element('INPUT', { type: 'checkbox' }),
-    element('INPUT', { type: 'radio' }), element('INPUT', { type: 'submit' }), element('LI', { role: 'option' })]) {
-    assert.equal(keepsEscape(free), false, JSON.stringify(free));
-  }
+  assert.deepEqual([...optedIn].sort(), [...inTextInput].sort());
+  assert.equal(optedIn.has('nav.back'), false);
 });
 
 test('classic keys never take a key reserved for a feature still to come, in the same context or from a global reservation', () => {
@@ -326,13 +346,70 @@ test('every entry screen guards typed work against leaving: route changes ask fi
   assert.match(guard, /useBlocker\(/);
   assert.match(guard, /shouldBlockFn/);
   assert.match(guard, /enableBeforeUnload/);
-  const sources = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? sources(new URL(`${entry.name}/`, dir)) : entry.name.endsWith('.tsx') ? [new URL(entry.name, dir)] : []);
   const screens = sources(new URL('../src/components/', import.meta.url)).filter(file => /<EntryScope[\s>]/.test(readFileSync(file, 'utf8')));
   assert.ok(screens.length >= 2, 'the group and ledger forms render EntryScope');
   for (const file of screens) {
     const source = readFileSync(file, 'utf8');
     assert.match(source, /useLeaveGuard\(dirty/, `${file.pathname} guards its dirty state`);
     assert.doesNotMatch(source, /setFlash\([^)]*\); leave\(\)/, `${file.pathname} leaves after a save or delete through guard.pass`);
+  }
+});
+
+test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
+  const files = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : /\.tsx?$/.test(entry.name) ? [new URL(entry.name, dir)] : []);
+  const importers: string[] = [];
+  let questions = 0;
+  // The package itself, in either quote, not one of its files (`@ten98/ui/styles.css`).
+  const pkg = String.raw`['"]@ten98\/ui['"]`;
+  for (const file of files(new URL('../src/', import.meta.url))) {
+    const source = readFileSync(file, 'utf8');
+    const name = file.pathname.slice(file.pathname.indexOf('/src/') + 1);
+    // Every way to reach the whole package: a namespace or default import, `export *` and a dynamic import.
+    assert.doesNotMatch(source, new RegExp(String.raw`import\s+(?:\*\s*as\s+)?\w+\s*(?:,\s*\{[^}]*\}\s*)?from\s*${pkg}`), `${name} imports the whole package`);
+    assert.doesNotMatch(source, new RegExp(String.raw`export\s*\*\s*(?:as\s+\w+\s*)?from\s*${pkg}`), `${name} re-exports the whole package`);
+    assert.doesNotMatch(source, new RegExp(String.raw`import\s*\(\s*${pkg}\s*\)`), `${name} imports the package at run time`);
+    for (const statement of source.matchAll(new RegExp(String.raw`(?:import|export)\s*(?:type\s*)?\{([^}]*)\}\s*from\s*${pkg}`, 'g'))) {
+      if (/\b(?:useConfirmDialog|ConfirmDialog|ConfirmDialogProps)\b/.test(statement[1])) importers.push(name);
+    }
+    if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
+  }
+  assert.deepEqual(importers, ['src/components/useConfirm.ts']);
+  // Six deletes, switching cost centres off, four "Leave without saving?" and the preferences page's question.
+  assert.equal(questions, 12, 'every question is asked through useConfirm');
+  // The hook forwards each request through its merge rule, not as the caller wrote it.
+  const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
+  assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
+  assert.equal(hook.match(/\bconfirm\(/g)?.length, 1, 'the hook forwards in one place only');
+});
+
+test('a confirmation opens on Cancel unless the caller names the confirm button; a spread cannot change that', () => {
+  const base = { title: 'Delete?', description: 'Gone for good.' };
+  assert.equal(confirmRequest(base).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, danger: true }).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, startOnConfirmButton: true }).initialFocus, 'confirm');
+  // A request built elsewhere with the package's own option keeps the application's rule.
+  const smuggled = { ...base, initialFocus: 'confirm' } as unknown as AppConfirmRequest;
+  assert.equal(confirmRequest({ ...smuggled }).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, startOnConfirmButton: 'yes' } as unknown as AppConfirmRequest).initialFocus, 'cancel');
+  assert.equal('startOnConfirmButton' in confirmRequest({ ...base, startOnConfirmButton: true }), false, 'the app option does not reach the package');
+  assert.deepEqual(confirmRequest({ ...base, confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true }), { ...base, confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true, initialFocus: 'cancel' });
+});
+
+test('menu letters also run by key position on a layout that types another script, still only while the menu has focus', () => {
+  const menu = readFileSync(new URL('../src/components/KeyboardMenu.tsx', import.meta.url), 'utf8');
+  assert.match(menu, /useAppCommand\(item\.command, item\.open, \{ matchPhysicalKey: true \}\)/, 'MenuItem registers its letter by position too');
+  const key = (typed: string, code: string) => ({ key: typed, code, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false });
+  for (const name of keymapNames) {
+    const letters = registered(name).map(command => command.scope === 'company-home' ? { ...command, matchPhysicalKey: true } : command);
+    const press = (event: ReturnType<typeof key>, focus = true, target: ShortcutTarget = 'other') => resolveShortcut({
+      chord: chordFromEvent(event)!, physicalChord: physicalChordFromEvent(event), target, commands: letters,
+      scopes: [{ id: 'company-home', focus }, { id: 'global', focus: false }],
+    })?.command.id;
+    assert.equal(press(key('t', 'KeyT')), 'home.trial-balance');
+    assert.equal(press(key('ف', 'KeyT')), 'home.trial-balance', 'an Arabic layout types another letter on the T key');
+    assert.equal(press(key('ف', 'KeyT'), false), undefined, 'a menu without focus takes no letters');
+    assert.equal(press(key('ف', 'KeyT'), true, 'text'), undefined, 'typing in a field never opens a report');
+    assert.equal(press(key('q', 'KeyA')), undefined, 'a Latin layout with letters elsewhere (AZERTY) goes by the letter typed');
   }
 });
 

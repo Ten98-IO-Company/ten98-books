@@ -1,5 +1,5 @@
 import { Badge, Icon, Inline, KeyHint, ShortcutScope, Stack, Text, useCommandKeys } from '@ten98/ui'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type RefObject } from 'react'
 import { contextTitles, type CommandId } from '../lib/commands'
 import { useAppCommand } from './KeyboardShell'
 
@@ -24,13 +24,16 @@ export function KeyboardMenu(props: {
   onActiveChange: (command: CommandId) => void
   /** Moves focus to the menu when it mounts and whenever this number changes; undefined leaves focus alone. */
   focusRequest?: number
+  /** Receives the menu element, for a dialog that starts with focus on the menu (its `initialFocus`). */
+  menuRef?: RefObject<HTMLElement | null>
 }) {
   return <ShortcutScope name={contextTitles['company-home']} activation='focus'><MenuBody {...props} /></ShortcutScope>
 }
 
-function MenuBody({ label, groups, active, onActiveChange, focusRequest }: Parameters<typeof KeyboardMenu>[0]) {
+function MenuBody({ label, groups, active, onActiveChange, focusRequest, menuRef }: Parameters<typeof KeyboardMenu>[0]) {
   const id = useId()
-  const menu = useRef<HTMLElement>(null)
+  const own = useRef<HTMLElement>(null)
+  const menu = menuRef ?? own
   const [focused, setFocused] = useState(false)
   const items = groups.flatMap(group => group.items)
   const index = Math.max(0, items.findIndex(item => item.command === active))
@@ -69,7 +72,8 @@ function MenuBody({ label, groups, active, onActiveChange, focusRequest }: Param
 }
 
 function MenuItem({ id, item, active, focused, onHighlight }: { id: string; item: KeyboardMenuItem; active: boolean; focused: boolean; onHighlight: () => void }) {
-  useAppCommand(item.command, item.open)
+  // By key position too, so the letters work on a layout that types another script (an Arabic layout).
+  useAppCommand(item.command, item.open, { matchPhysicalKey: true })
   const keys = useCommandKeys(item.command)
   // The key is announced through aria-keyshortcuts, so the visible key cap is hidden from the accessible name.
   return <Inline as='li' id={id} role='menuitem' aria-keyshortcuts={keys.join(' ') || undefined} gap={2} align='center'

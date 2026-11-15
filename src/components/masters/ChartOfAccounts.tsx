@@ -1,4 +1,5 @@
-import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
@@ -66,7 +67,7 @@ function ChartBody() {
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const rows = useMemo(() => groups && ledgers ? buildChartRows(groups, ledgers) : [], [groups, ledgers])
   const entries = useMemo(() => { const byId = new Map((groups ?? []).map(group => [group.id, group])); return rows.map(row => entryOf(row, exponent, byId)) }, [rows, groups, exponent])
   const cursors = rows.filter(isCursorRow)
