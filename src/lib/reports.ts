@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { financialYearOf } from './company.ts';
+import { financialYearOf, isCalendarDate } from './company.ts';
 import { calendarDate, type Nature, type Side, type VoucherKind, type VoucherStatus } from './ledger.ts';
 import type { CostCategorySummary, CostCentreBreakup, CostFigures } from './cost-centres.ts';
 import type { Wire } from './money.ts';
@@ -169,6 +169,63 @@ export function defaultPeriod(financialYearStart: { month: number; day: number }
   return { from: financialYearOf(financialYearStart, anchor).from, to: anchor };
 }
 
+/** What the address of the balance sheet says about its date: `from` and `to` as read, and the text of a `to` that is no date. */
+export type AsAtAddress = { from?: string; to?: string; badTo?: string };
+
+/** The text of a `to` that is not a calendar date between 1900 and 2199 (kept short for display), for a notice; undefined when it is a date or absent. */
+export const unreadableDate = (value: unknown): string | undefined =>
+  typeof value === 'string' && value !== '' && !isCalendarDate(value) ? value.slice(0, 40) : undefined;
+
+/**
+ * The period of a balance sheet address. The balance sheet is an "as at" report, so `to` alone is the date, and its
+ * financial year's start is the period's start (`from` is kept only when it is not after the date, as the screen does
+ * when both are given). Without a readable `to` there is no period yet: the screen fills in its default, and
+ * `unreadableDateNotice` says so when the address held a `to` that was no date.
+ */
+export function asAtPeriod(address: AsAtAddress, financialYearStart: { month: number; day: number }): ReportPeriod | null {
+  if (!address.to) return null;
+  return { from: address.from && address.from <= address.to ? address.from : financialYearOf(financialYearStart, address.to).from, to: address.to };
+}
+
+/** The notice for a balance sheet address whose `to` is no date: what was asked for, and the date shown instead (null while none is). */
+export const unreadableDateNotice = (badTo: string, shown: string | null): string =>
+  `“${badTo}” is not a date. Write a date as 2026-01-31, in the years 1900 to 2199. ${shown ? `The balance sheet shows ${longDate(shown)} instead; ` : 'The default date is being chosen; '}use Change date to choose another.`;
+
+/**
+ * What a failed report offers first. A refusal of the request itself (status 400: a period too long, an end before its
+ * start, a date that is no date) is the user's to fix, and trying again can never help, so the screen offers to change
+ * the period. Anything else (no connection, 5xx, a busy server) may pass on a retry. `status` 0 or absent is a failure
+ * with no answer from the server.
+ */
+export const reportFailureAction = (failure: { status?: number } | null | undefined): 'change-period' | 'retry' =>
+  failure?.status === 400 ? 'change-period' : 'retry';
+
+/**
+ * The monthly summary's notice when its end was clipped to the end of the financial year: what was asked for and why
+ * the report ends earlier. Null when nothing was cut. The scope line shows the period actually shown.
+ */
+export function monthlyClipNotice(asked: ReportPeriod, shown: ReportPeriod): string | null {
+  if (shown.to === asked.to) return null;
+  return `You asked for ${periodText(asked)}. A monthly summary shows one financial year at a time, so it ends on ${longDate(shown.to)}, the end of the financial year that holds its start.`;
+}
+
+/** The server's defaults, as the screens read them (decimal strings and dates). */
+export type DefaultsText = { lastVoucherDate: string | null; period: ReportPeriod; dayBookDate: string };
+
+/**
+ * Words for the scope line when a report shows the period it opens on by default, so it is clear why that period and
+ * not the company home's financial year: statements open on the financial year to the last voucher date (or the date
+ * the books begin while there is none) and the day book on that day. `shown` is the period on screen; for an "as at"
+ * report (`asAt`) only its end counts. Null for any other period.
+ */
+export function defaultScopeNote(shown: ReportPeriod, kind: PeriodKind, asAt: boolean, defaults: DefaultsText): string | null {
+  const last = defaults.lastVoucherDate !== null;
+  if (kind === 'day') return shown.from === defaults.dayBookDate && shown.to === defaults.dayBookDate ? (last ? 'the day of the last voucher' : 'the date the books begin') : null;
+  if (kind !== 'statement') return null;
+  if (asAt) return shown.to === defaults.period.to ? (last ? 'the last voucher date' : 'the date the books begin') : null;
+  return shown.from === defaults.period.from && shown.to === defaults.period.to ? (last ? 'the financial year to the last voucher date' : 'the financial year to the date the books begin') : null;
+}
+
 /** A signed balance as an amount and its side: `{ amount: 5n, side: 'Cr' }` for -5n, side null for zero. */
 export function splitBalance(signed: bigint): OpeningDifference {
   return signed > 0n ? { amount: signed, side: 'Dr' } : signed < 0n ? { amount: -signed, side: 'Cr' } : { amount: 0n, side: null };
@@ -313,11 +370,26 @@ export function costBreakupSummary(report: Pick<Wire<CostCentreBreakup>, 'centre
   return `Category: ${report.centre.categoryName}.${ledgers ? ' A ledger’s figures here are this centre’s share; Enter on a ledger opens all of its vouchers for the period, for every centre.' : ''}`;
 }
 
+/**
+ * What Enter does on a report's chooser (the ledger list, the cost centre list). The first line is highlighted on
+ * screen from the start, but it was not chosen: Enter opens a line only once the user narrowed the list by typing or
+ * moved the highlight (arrows, a click, or coming back from the line), and otherwise asks for a choice.
+ */
+export const pickerEnter = ({ filter, highlight }: { filter: string; highlight: string | undefined }): 'open' | 'nothing-chosen' =>
+  filter.trim() !== '' || highlight !== undefined ? 'open' : 'nothing-chosen';
+
 /** The centres the break-up's chooser lists for the typed text: a part of the name or the second-language name, any case. */
 export function matchingCentres<T extends { name: string; secondLanguageName: string | null }>(centres: readonly T[], text: string): T[] {
   const words = text.trim().toLowerCase();
   return centres.filter(row => !words || row.name.toLowerCase().includes(words) || (row.secondLanguageName?.toLowerCase().includes(words) ?? false));
 }
+
+/**
+ * The masters cost list's notice while cost centres are switched off. Only someone who can write is told they can set
+ * categories and centres up; only an owner or admin has the switch, and everyone else is told whom to ask.
+ */
+export const costCentresOffNotice = ({ canWrite, canSwitch }: { canWrite: boolean; canSwitch: boolean }): string =>
+  `Vouchers do not ask for cost centres until they are switched on.${canWrite ? ' You can set up categories and centres now.' : ''}${canSwitch ? '' : ' Ask an owner or admin to switch them on.'}`;
 
 /** The notice on a ledger's vouchers reached from a cost centre break-up (`fromCentre`): they are not filtered by centre. */
 export const centreOriginNotice = (search: { fromCentre?: string }): string | null => search.fromCentre

@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
 import { buildCostRows, categoryDeleteReason, categoryUse, centrePath, type CostCategoryRow, type CostListRow } from '../../lib/cost-centre-forms'
 import { isolate } from '../../lib/masters'
+import { costCentresOffNotice } from '../../lib/reports'
 import { FailureAlert, useMasterRequest } from './entry'
 import { takeFlash } from './flash'
 import { ListScope, MasterList, type ListEntry } from './MasterList'
@@ -146,7 +147,7 @@ function ListBody() {
       </Inline> : undefined} />
     {enabled === false && <Alert tone='info' title='Cost centres are switched off for this company'
       actions={canSwitch ? <Button size='sm' onClick={() => void toggle()} disabled={busy}>Switch on <KeyHint command='list.switch' /></Button> : undefined}>
-      Vouchers do not ask for cost centres until they are switched on. You can set up categories and centres now.{canSwitch ? '' : ' Ask an owner or admin to switch them on.'}
+      {costCentresOffNotice({ canWrite, canSwitch })}
     </Alert>}
     {enabled === true && <Inline gap={2} align='center'>
       <Text tone='muted'>Cost centres are on: vouchers ask for them on ledgers that take them.</Text>

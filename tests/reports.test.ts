@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import type { AccountGroup } from '../src/lib/ledger.ts';
-import { centreOriginNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
+import { asAtPeriod, centreOriginNotice, costCentresOffNotice, defaultScopeNote, monthlyClipNotice, pickerEnter, reportFailureAction, unreadableDate, unreadableDateNotice, costBreakupKey, costBreakupSummary, costBreakupTarget, costSummaryLines, costSummaryTarget, dataForSubject, defaultPeriod, ledgerVouchersParent, matchingCentres, reportLevel, reportSubject, syncHighlight, voucherParent, formatAmount, formatBalance, isZeroNode, periodDays, periodText, popCursor, pushCursor, readCursorStack, recordPeriod, registerPageSize, registerRange, rememberedPeriod, reportPageQuery, reportPeriodQuery, splitBalance, writeCursorStack } from '../src/lib/reports.ts';
 import type { LedgerRow } from '../src/server/ledger/reports.ts';
 import { rollUp, statementTree, subtree } from '../src/server/reports/tree.ts';
 
@@ -177,4 +177,83 @@ test('report screens take their highlight through syncHighlight and their data p
   const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8');
   assert.ok(navigation.includes('data: dataForSubject(state, subject)'));
   assert.ok(navigation.includes('const levelOf = reportLevel'));
+});
+
+test('the balance sheet honours a lone to as its as-at date and says plainly when the date is unreadable', () => {
+  const january = { month: 1, day: 1 };
+  const april = { month: 4, day: 1 };
+  // to alone: the financial year's start is the period's start, whichever year start the company has.
+  assert.deepEqual(asAtPeriod({ to: '2026-01-31' }, january), { from: '2026-01-01', to: '2026-01-31' });
+  assert.deepEqual(asAtPeriod({ to: '2026-12-31' }, april), { from: '2026-04-01', to: '2026-12-31' });
+  assert.deepEqual(asAtPeriod({ to: '2026-03-31' }, april), { from: '2025-04-01', to: '2026-03-31' });
+  // Both given and ordered: the address's own start is kept, as before. A start after the date is replaced.
+  assert.deepEqual(asAtPeriod({ from: '2026-01-10', to: '2026-01-31' }, january), { from: '2026-01-10', to: '2026-01-31' });
+  assert.deepEqual(asAtPeriod({ from: '2026-02-10', to: '2026-01-31' }, january), { from: '2026-01-01', to: '2026-01-31' });
+  // No date: there is no period to give, so the screen fills in its default (a lone from stays ignored, as on every report).
+  assert.equal(asAtPeriod({}, january), null);
+  assert.equal(asAtPeriod({ from: '2026-01-10' }, january), null);
+  assert.equal(asAtPeriod({ badTo: 'soon' }, january), null);
+  // What counts as unreadable: not a date, an impossible day, outside 1900 to 2199; absent or empty is not a bad date.
+  assert.equal(unreadableDate('soon'), 'soon');
+  assert.equal(unreadableDate('2026-02-30'), '2026-02-30');
+  assert.equal(unreadableDate('1850-01-01'), '1850-01-01');
+  assert.equal(unreadableDate('2026-01-31'), undefined);
+  assert.equal(unreadableDate(''), undefined);
+  assert.equal(unreadableDate(undefined), undefined);
+  assert.equal(unreadableDate(['2026-01-31']), undefined);
+  assert.equal(unreadableDate('x'.repeat(100))?.length, 40);
+  const notice = unreadableDateNotice('2026-02-30', '2026-02-03');
+  assert.match(notice, /2026-02-30/);
+  assert.match(notice, /3 February 2026/);
+  assert.match(unreadableDateNotice('soon', null), /Change date/);
+});
+
+test('the cost list tells only those who can write that they can set up categories and centres', () => {
+  const viewer = costCentresOffNotice({ canWrite: false, canSwitch: false });
+  assert.doesNotMatch(viewer, /You can set up/);
+  assert.match(viewer, /Ask an owner or admin/);
+  const editor = costCentresOffNotice({ canWrite: true, canSwitch: false });
+  assert.match(editor, /You can set up categories and centres now./);
+  assert.match(editor, /Ask an owner or admin/);
+  const admin = costCentresOffNotice({ canWrite: true, canSwitch: true });
+  assert.match(admin, /You can set up/);
+  assert.doesNotMatch(admin, /Ask an owner/);
+});
+
+test('a refusal the user can fix by changing the period is told apart from a failure that may pass on a retry', () => {
+  assert.equal(reportFailureAction({ status: 400 }), 'change-period', 'a period or date the server refused');
+  for (const status of [0, 401, 403, 404, 409, 429, 500, 502, 503]) assert.equal(reportFailureAction({ status }), 'retry', String(status));
+  assert.equal(reportFailureAction({}), 'retry', 'no answer from the server');
+  assert.equal(reportFailureAction(null), 'retry');
+  assert.equal(reportFailureAction(undefined), 'retry');
+});
+
+test('the clipped monthly summary says what was asked for and why it ends earlier, and says nothing when nothing was cut', () => {
+  const asked = { from: '2026-01-01', to: '2027-02-27' };
+  const notice = monthlyClipNotice(asked, { from: '2026-01-01', to: '2026-12-31' });
+  assert.match(notice ?? '', /1 January 2026 to 27 February 2027/);
+  assert.match(notice ?? '', /ends on 31 December 2026/);
+  assert.match(notice ?? '', /one financial year/);
+  assert.equal(monthlyClipNotice({ from: '2026-01-01', to: '2026-06-30' }, { from: '2026-01-01', to: '2026-06-30' }), null);
+});
+
+test('the scope line names why a report opened on the period it did, only when it is the default', () => {
+  const defaults = { lastVoucherDate: '2027-02-27', period: { from: '2027-01-01', to: '2027-02-27' }, dayBookDate: '2027-02-27' };
+  assert.equal(defaultScopeNote(defaults.period, 'statement', false, defaults), 'the financial year to the last voucher date');
+  assert.equal(defaultScopeNote({ from: '2027-01-01', to: '2027-01-31' }, 'statement', false, defaults), null);
+  assert.equal(defaultScopeNote({ from: '2026-01-01', to: '2027-02-27' }, 'statement', false, defaults), null, 'another start is no default');
+  assert.equal(defaultScopeNote({ from: '2027-02-27', to: '2027-02-27' }, 'statement', true, defaults), 'the last voucher date', 'an as-at date counts by its end only');
+  assert.equal(defaultScopeNote({ from: '2027-02-27', to: '2027-02-27' }, 'day', false, defaults), 'the day of the last voucher');
+  assert.equal(defaultScopeNote({ from: '2027-02-26', to: '2027-02-26' }, 'day', false, defaults), null);
+  assert.equal(defaultScopeNote(defaults.period, 'none', false, defaults), null);
+  const empty = { lastVoucherDate: null, period: { from: '2026-01-01', to: '2026-01-01' }, dayBookDate: '2026-01-01' };
+  assert.equal(defaultScopeNote(empty.period, 'statement', false, empty), 'the financial year to the date the books begin');
+});
+
+test('Enter on a chooser opens a line only after the user narrowed the list or moved the highlight', () => {
+  assert.equal(pickerEnter({ filter: '', highlight: undefined }), 'nothing-chosen', 'the first line is shown highlighted but was not chosen');
+  assert.equal(pickerEnter({ filter: '   ', highlight: undefined }), 'nothing-chosen', 'spaces do not narrow the list');
+  assert.equal(pickerEnter({ filter: 'north', highlight: undefined }), 'open', 'narrowed by typing');
+  assert.equal(pickerEnter({ filter: '', highlight: 'c:1' }), 'open', 'moved with the arrows or a click, or came back from the line');
+  assert.equal(pickerEnter({ filter: 'north', highlight: 'c:2' }), 'open');
 });
