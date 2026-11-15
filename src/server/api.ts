@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { z } from 'zod';
-import { appMarker } from '../lib/api.ts';
+import { appMarkerHeader, appMarkerValue } from '../lib/app-marker.ts';
 import { FoundationError } from './auth.ts';
 import { getConfig } from './config.ts';
 import { assertSchema, getDatabase, migrationLedger } from './db.ts';
@@ -95,7 +95,7 @@ const signedInAreas: readonly SignedInArea[] = [teamApi, companiesApi, settingsA
 export async function handleApi(request: Request): Promise<Response> {
   const response = await answerApi(request);
   const headers = new Headers(response.headers);
-  headers.set(appMarker.header, appMarker.value);
+  headers.set(appMarkerHeader, appMarkerValue);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 

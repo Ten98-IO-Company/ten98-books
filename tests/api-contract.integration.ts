@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
-import { appMarker } from '../src/lib/api.ts';
+import { appMarkerHeader, appMarkerValue } from '../src/lib/app-marker.ts';
 import { handleApi } from '../src/server/api.ts';
 import { bucketsBodyBytes } from '../src/server/api/bills.ts';
 import { currencyBodyBytes } from '../src/server/api/currencies.ts';
@@ -31,7 +31,7 @@ async function send(member: Member | null, method: string, path: string, body?: 
   if (member?.browser.cookies.size) headers.set('cookie', [...member.browser.cookies].map(([name, value]) => `${name}=${value}`).join('; '));
   if (body !== undefined) headers.set('content-type', 'application/json');
   const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method, headers, ...(body === undefined ? {} : { body }) }));
-  return { status: response.status, allow: response.headers.get('allow'), marker: response.headers.get(appMarker.header), text: await response.text() };
+  return { status: response.status, allow: response.headers.get('allow'), marker: response.headers.get(appMarkerHeader), text: await response.text() };
 }
 const code = (answer: { status: number; text: string }) => [answer.status, answer.text ? JSON.parse(answer.text).code ?? null : null];
 /** A body over `limit` bytes that would otherwise be valid JSON. */
@@ -188,7 +188,7 @@ test('every answer of the API carries the application marker: signed out, outsid
   const record = (what: string, answer: { status: number; marker: string | null }) => { answers.push({ what, status: answer.status, marker: answer.marker }); };
   const raw = async (what: string, path: string, init: RequestInit) => {
     const response = await handleApi(new Request(new URL(path, getConfig().appUrl), init));
-    record(what, { status: response.status, marker: response.headers.get(appMarker.header) });
+    record(what, { status: response.status, marker: response.headers.get(appMarkerHeader) });
   };
   for (const path of writeRoutes(companyId, randomUUID())) {
     record(`signed out ${path}`, await send(null, 'POST', path, '{}'));
@@ -215,7 +215,7 @@ test('every answer of the API carries the application marker: signed out, outsid
   record('over a rate limit', await send(owner, 'POST', '/api/companies', JSON.stringify({ name: 'One Too Many' })));
   await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit WHERE key = $1', [`companies:${owner.userId}`]));
   record('sign-out (the identity library)', await send(outsider, 'POST', '/api/auth/sign-out', '{}'));
-  assert.deepEqual(answers.filter(answer => answer.marker !== appMarker.value), [], 'every answer is marked');
+  assert.deepEqual(answers.filter(answer => answer.marker !== appMarkerValue), [], 'every answer is marked');
   const statuses = new Set(answers.map(answer => answer.status));
   for (const status of [200, 201, 400, 401, 403, 404, 405, 409, 413, 415, 429]) assert.ok(statuses.has(status), `a ${status} was checked (${[...statuses].sort().join(', ')})`);
 });
