@@ -7,7 +7,7 @@ import pg, { type PoolClient } from 'pg';
 import { getDatabase, migrationFiles } from '../src/server/db.ts';
 import type { LedgerContext } from '../src/server/ledger/context.ts';
 import { alterUnit, deleteItem, deleteTree, deleteUnit } from '../src/server/ledger/stock-masters.ts';
-import { createVoucher } from '../src/server/ledger/vouchers.ts';
+import { cancelVoucher, createVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { accountingTables, assertDatabaseRoles, setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
@@ -43,9 +43,9 @@ async function asApp(run: (client: PoolClient) => Promise<unknown>): Promise<voi
   } catch (error) { await client.query('ROLLBACK').catch(() => undefined); throw error; } finally { client.release(); }
 }
 /** A raw transaction as the application role, held open: statements run on `client` until `end`. */
-async function openApp(): Promise<{ client: PoolClient; end: (how: 'COMMIT' | 'ROLLBACK') => Promise<void> }> {
+async function openApp(isolation: 'READ COMMITTED' | 'REPEATABLE READ' = 'READ COMMITTED'): Promise<{ client: PoolClient; end: (how: 'COMMIT' | 'ROLLBACK') => Promise<void> }> {
   const client = await getDatabase().pool.connect();
-  await client.query('BEGIN');
+  await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
   await setCompanyScope(client, [companyId]);
   let open = true;
   return { client, end: async how => { if (!open) return; open = false; try { await client.query(how); } finally { client.release(); } } };
@@ -208,6 +208,9 @@ test('the database refuses, as the application role inside the company scope, it
     ['a row on a line of the other side', client => writeVoucher(client, 'sales', [[ids.sales, 'Dr', 100], [ids.customer, 'Cr', 100]], [{ direction: 'out', quantity: '1', amount: 100 }]), code('23514', 'inventory_line_kind')],
     ['an invoice row without a line', sale([{ direction: 'out', quantity: '1', amount: 100, ledger: null, line: null }], 100), code('23514', 'inventory_line_kind')],
     ['items not adding up to their line', sale([{ direction: 'out', quantity: '1', amount: 100 }], 150), code('23514', 'inventory_line_total')],
+    ['items above their line', sale([{ direction: 'out', quantity: '1', amount: 150 }], 100), code('23514', 'inventory_line_total')],
+    ['a credit note row going out (on the right line and side)', client => writeVoucher(client, 'credit_note', [[ids.sales, 'Dr', 100], [ids.customer, 'Cr', 100]], [{ direction: 'out', quantity: '1', amount: 100 }]), code('23514', 'inventory_line_kind')],
+    ['a stock journal carrying ledger lines beside its rows', client => writeVoucher(client, 'stock_journal', [[ids.sales, 'Cr', 100], [ids.customer, 'Dr', 100]], journalRows([{ direction: 'in', quantity: '1', amount: 100 }])), code('23514', 'voucher_inventory_kind')],
     ['a stock journal row on a line', client => writeVoucher(client, 'stock_journal', [[ids.sales, 'Cr', 100], [ids.customer, 'Dr', 100]], [{ direction: 'out', quantity: '1', amount: 100 }]), kind],
     ['a stock journal without item rows', client => writeVoucher(client, 'stock_journal', [], []), code('23514', 'voucher_inventory_kind')],
     ['a discount on a stock journal row', client => writeVoucher(client, 'stock_journal', [], journalRows([{ direction: 'in', quantity: '1', amount: 100, discount: '5' }])), code('23514', 'inventory_line_kind')],
@@ -423,4 +426,106 @@ test('through the API: an item or location deleted while a posting waits on it a
   await assert.rejects(late, refusedWith('in_use'));
   const { second: lateStore } = await race(posting(kept.item, kept.location, '2'), context => deleteTree(context, 'stock-locations', kept.location, { revision: 1 }));
   await assert.rejects(lateStore, refusedWith('in_use'));
+});
+
+test('more refusals the database makes alone: a cancelled voucher\'s rows stay, a tampered scope is caught at commit, a type change into a stock journal with lines', async () => {
+  // A regular voucher, posted and cancelled through the API: its item rows are frozen.
+  const posted = await write(posting(ids.bolt, ids.main, '1'));
+  await write(context => cancelVoucher(context, posted.voucher.id, { revision: posted.voucher.revision }));
+  await assert.rejects(asApp(client => client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2', [companyId, posted.voucher.id])), code('23514', 'voucher_lines_frozen'));
+  // The check at commit asserts the scope: a scope changed after a delete would otherwise hide the voucher and skip it.
+  let journal = '';
+  await asApp(async client => { journal = await writeVoucher(client, 'stock_journal', [], journalRows([{ direction: 'in', quantity: '1', amount: 100 }, { direction: 'in', quantity: '1', amount: 100 }])); });
+  await assert.rejects(asApp(async client => {
+    await client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2 AND entry_no = 2', [companyId, journal]);
+    await client.query("SELECT set_config('app.company_ids', $1, true)", [other]);
+  }), code('42501', 'ledger_company_scope'));
+  // A voucher with ledger lines and no item rows moved into the stock journal kind.
+  let plain = '';
+  await asApp(async client => { plain = await writeVoucher(client, 'sales', [[ids.sales, 'Cr', 100], [ids.customer, 'Dr', 100]], []); });
+  await assert.rejects(asApp(client => client.query('UPDATE voucher SET voucher_type_id = $3, series = $4 WHERE company_id = $1 AND id = $2', [companyId, plain, types.stock_journal.id, types.stock_journal.series])),
+    code('23514', 'voucher_inventory_kind'));
+  // A stock journal may be entered as a void (cancelled, nothing in it), as any voucher may.
+  const voided = await write(context => createVoucher(context, { idempotencyKey: `void-${randomUUID()}`, voucherTypeId: types.stock_journal.id, date: '2026-02-10', status: 'cancelled', lines: [] }));
+  assert.deepEqual([voided.voucher.status, voided.voucher.number !== null, voided.voucher.inventory], ['cancelled', true, []]);
+});
+
+/** A sales voucher with its sales line and no item rows, so an item row of `amount` may be added to line 1 on its own. */
+const bareSale = async (amount = 100) => {
+  let voucher = '';
+  await asApp(async client => { voucher = await writeVoucher(client, 'sales', [[ids.sales, 'Cr', amount], [ids.customer, 'Dr', amount]], []); });
+  return voucher;
+};
+const addRow = (voucher: string, quantity = '1', amount = 100, entry = 1, item = ids.bolt) => (client: PoolClient) => client.query(
+  `INSERT INTO inventory_line (company_id, voucher_id, entry_no, item_id, location_id, direction, quantity, rate, amount, ledger_id, line_no)
+   VALUES ($1, $2, $3, $4, $5, 'out', $6, 1, $7, $8, 1)`, [companyId, voucher, entry, item, ids.main, quantity, amount, ids.sales]);
+const toJournal = (voucher: string) => (client: PoolClient) =>
+  client.query('UPDATE voucher SET voucher_type_id = $3, series = $4 WHERE company_id = $1 AND id = $2', [companyId, voucher, types.journal.id, types.journal.series]);
+
+test('in REPEATABLE READ, a type change, a unit\'s decimals lowered and an item\'s unit changed are refused: their checks would read an older snapshot', async () => {
+  // Each case: the first session takes its snapshot; a second inserts and commits a row the change must see; the change
+  // in the first session is refused at once, where it would otherwise pass against its snapshot.
+  const cases: [string, () => Promise<{ setup: (client: PoolClient) => Promise<unknown>; change: (client: PoolClient) => Promise<unknown> }>, string][] = [
+    ['a type change past an item row', async () => { const voucher = await bareSale(); return { setup: addRow(voucher), change: toJournal(voucher) }; }, 'voucher_inventory_kind'],
+    ['lowering decimals past an item row', async () => { const m = await masters('rr item row'); const voucher = await bareSale(150);
+      return { setup: addRow(voucher, '1.5', 150, 1, m.item), change: client => client.query('UPDATE stock_unit SET decimals = 0 WHERE company_id = $1 AND id = $2', [companyId, m.unit]) }; }, 'stock_unit_decimals'],
+    ['lowering decimals past an opening row', async () => { const m = await masters('rr opening row');
+      return { setup: client => client.query('INSERT INTO stock_opening (company_id, item_id, location_id, quantity, rate, value) VALUES ($1, $2, $3, 1.5, 2, 300)', [companyId, m.item, ids.main]),
+        change: client => client.query('UPDATE stock_unit SET decimals = 0 WHERE company_id = $1 AND id = $2', [companyId, m.unit]) }; }, 'stock_unit_decimals'],
+    ['changing the unit past an item row', async () => { const m = await masters('rr unit item'); const voucher = await bareSale(150);
+      return { setup: addRow(voucher, '1.5', 150, 1, m.item), change: client => client.query('UPDATE stock_item SET unit_id = $3 WHERE company_id = $1 AND id = $2', [companyId, m.item, ids.nos]) }; }, 'stock_item_unit_fixed'],
+    ['changing the unit past an opening row', async () => { const m = await masters('rr unit opening');
+      return { setup: client => client.query('INSERT INTO stock_opening (company_id, item_id, location_id, quantity, rate, value) VALUES ($1, $2, $3, 1.5, 2, 300)', [companyId, m.item, ids.main]),
+        change: client => client.query('UPDATE stock_item SET unit_id = $3 WHERE company_id = $1 AND id = $2', [companyId, m.item, ids.nos]) }; }, 'stock_item_unit_fixed'],
+  ];
+  for (const [what, prepare, constraint] of cases) {
+    const { setup, change } = await prepare();
+    const first = await openApp('REPEATABLE READ');
+    try {
+      await first.client.query('SELECT 1 FROM company');
+      await asApp(setup);
+      await assert.rejects(change(first.client), code('25001', constraint), what);
+    } finally { await first.end('ROLLBACK'); }
+  }
+});
+
+test('in READ COMMITTED, a type change and an item row inserted beside it wait for each other, in either order: the key index makes the change a key update', async () => {
+  for (const order of ['row first', 'type first'] as const) {
+    const voucher = await bareSale();
+    const first = await openApp();
+    let second: Promise<unknown> | undefined;
+    try {
+      await (order === 'row first' ? addRow(voucher) : toJournal(voucher))(first.client);
+      second = asApp(order === 'row first' ? toJournal(voucher) : addRow(voucher));
+      assert.equal(await state(second), 'waiting', `${order}: the second waits`);
+      await first.end('COMMIT');
+      await assert.rejects(second, code('23514', order === 'row first' ? 'voucher_inventory_kind' : 'inventory_line_kind'), `${order}: checked against the first`);
+    } finally { await first.end('ROLLBACK'); await second?.catch(() => undefined); }
+  }
+});
+
+test('two sessions deleting one row each of a two-row stock journal: the second waits for the first and is refused; in REPEATABLE READ the delete is refused', async () => {
+  let journal = '';
+  await asApp(async client => { journal = await writeVoucher(client, 'stock_journal', [], journalRows([{ direction: 'in', quantity: '1', amount: 100 }, { direction: 'in', quantity: '1', amount: 100 }])); });
+  const drop = (entry: number) => async (client: PoolClient) => {
+    await client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2 AND entry_no = $3', [companyId, journal, entry]);
+    // Both checks run before either session commits.
+    await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+  };
+  const first = await openApp();
+  let second: Promise<unknown> | undefined;
+  try {
+    await drop(1)(first.client);
+    second = asApp(drop(2));
+    assert.equal(await state(second), 'waiting', 'the second check waits for the first');
+    await first.end('COMMIT');
+    await assert.rejects(second, code('23514', 'inventory_line_kind'), 'and then sees the first delete');
+  } finally { await first.end('ROLLBACK'); await second?.catch(() => undefined); }
+  assert.equal(Number((await one('SELECT count(*) FROM inventory_line WHERE company_id = $1 AND voucher_id = $2', [companyId, journal])).count), 1);
+  const repeatable = await openApp('REPEATABLE READ');
+  try {
+    await repeatable.client.query('INSERT INTO inventory_line (company_id, voucher_id, entry_no, item_id, location_id, direction, quantity, rate, amount) VALUES ($1, $2, 3, $3, $4, \'in\', 1, 1, 100)', [companyId, journal, ids.rod, ids.main]);
+    await repeatable.client.query('DELETE FROM inventory_line WHERE company_id = $1 AND voucher_id = $2 AND entry_no = 2', [companyId, journal]);
+    await assert.rejects(repeatable.client.query('SET CONSTRAINTS ALL IMMEDIATE'), code('25001', 'inventory_line_kind'));
+  } finally { await repeatable.end('ROLLBACK'); }
 });

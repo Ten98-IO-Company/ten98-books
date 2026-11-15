@@ -108,3 +108,28 @@ test('the item rows the checks fetch for 500 items on one line: about n x n at p
     }, 'write');
   }
 });
+
+test('an alter that replaces a stock journal of 500 rows: each deleted row\'s check locks the voucher again, which the alter already holds', async t => {
+  const rows = (rate: number) => Array.from({ length: items }, (_, index) => ({ itemId: ids.item, locationId: ids.main, quantity: '1', rate: rate.toFixed(2), direction: index % 2 ? 'in' : 'out' }));
+  await inCompany(owner.userId, companyId, async context => {
+    const created = await createVoucher(context, { idempotencyKey: `journal-${randomUUID()}`, voucherTypeId: books.type('stock_journal'), date: '2026-02-10', lines: [], inventory: rows(1) });
+    await context.client.query('SET CONSTRAINTS ALL IMMEDIATE');
+    await context.client.query('SET CONSTRAINTS ALL DEFERRED');
+    const read = async (table: string) => (await context.client.query<{ idx_tup_fetch: string; seq_tup_read: string }>(
+      'SELECT idx_tup_fetch, seq_tup_read FROM pg_stat_xact_user_tables WHERE relname = $1', [table])).rows[0];
+    const [lines, vouchers] = [await read('inventory_line'), await read('voucher')];
+    const started = performance.now();
+    await alterVoucher(context, created.voucher.id, { date: '2026-02-10', narration: null, status: 'regular', postDated: false, reference: null, referenceDate: null, lines: [], inventory: rows(2), revision: created.voucher.revision });
+    await context.client.query('SET CONSTRAINTS ALL IMMEDIATE');
+    const elapsed = performance.now() - started;
+    const [linesAfter, vouchersAfter] = [await read('inventory_line'), await read('voucher')];
+    const fetched = { items: Number(linesAfter.idx_tup_fetch) - Number(lines.idx_tup_fetch), vouchers: Number(vouchersAfter.idx_tup_fetch) - Number(vouchers.idx_tup_fetch) };
+    t.diagnostic(`stock journal alter of ${items} rows: ${fetched.items} item-row and ${fetched.vouchers} voucher-row fetches, ${elapsed.toFixed(0)} ms`);
+    assert.equal(Number(linesAfter.seq_tup_read) - Number(lines.seq_tup_read), 0);
+    // Measured: 27,063 voucher-row fetches with the lock taken for every deleted row (2,507 without it): locking again a
+    // row this transaction already holds costs about 49 fetches a row, about 130 ms for 500 rows. Inside the budget, so
+    // the lock is taken unconditionally.
+    assert.ok(fetched.vouchers <= 60 * items, `voucher fetches ${fetched.vouchers}`);
+    assert.ok(elapsed < 5000, `${elapsed} ms`);
+  }, 'write');
+});

@@ -4,8 +4,8 @@
 -- through composite keys that include it and is under the forced company policy.
 --
 -- Locks (one transaction, held until it commits): voucher_type ACCESS EXCLUSIVE (its kind check is replaced), and
--- SHARE ROW EXCLUSIVE on voucher, voucher_line, ledger, stock_item and stock_location (the new table's foreign keys),
--- which blocks writes to them while it runs. Replacing a function takes no table lock.
+-- SHARE ROW EXCLUSIVE on company, voucher, voucher_line, ledger, stock_item and stock_location (the new table's foreign
+-- keys), which blocks writes to them while it runs. Replacing a function takes no table lock.
 
 -- ---- Voucher kind ----
 
@@ -70,8 +70,10 @@ $$;
 -- Item rows of a cancelled or deleted voucher are frozen, as its lines are. An inserted row's quantity carries no more
 -- places than its item's unit allows, checked against the item and then the unit as share-locked here (the posting's
 -- order: items, units, locations), so a unit's decimals lowered, or an item's unit changed, in a transaction still open
--- is waited for and its result checked. A writer of several items' rows takes the item locks and then the unit locks
--- itself, each in id order, before inserting: locked row by row here, two writers that do not could deadlock.
+-- is waited for and its result checked. Share locks do not conflict, so two writers of item rows never wait for each
+-- other here. A deadlock needs a master writer that updates a unit and then one of its items (no API path does) against
+-- an item-row writer, which locks the item and then the unit; PostgreSQL breaks it and the API answers retry. The API
+-- takes the item locks and then the unit locks, each in id order, before inserting, so this finds them held.
 CREATE FUNCTION inventory_line_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE v_row inventory_line; v_unit uuid; v_decimals smallint;
 BEGIN
@@ -117,9 +119,16 @@ BEGIN
       v_row.ledger_id, v_line.ledger_id, v_line.side) THEN
     RAISE EXCEPTION 'an item line of voucher % does not fit its kind %', v_row.voucher_id, v_kind USING ERRCODE = '23514', CONSTRAINT = 'inventory_line_kind';
   END IF;
-  IF TG_OP = 'DELETE' AND v_kind = 'stock_journal'
-    AND NOT EXISTS (SELECT 1 FROM inventory_line WHERE voucher_id = v_row.voucher_id AND company_id = v_row.company_id) THEN
-    RAISE EXCEPTION 'stock journal % keeps at least one item line', v_row.voucher_id USING ERRCODE = '23514', CONSTRAINT = 'inventory_line_kind';
+  IF TG_OP = 'DELETE' AND v_kind = 'stock_journal' THEN
+    -- Two sessions deleting one row each must not both see the other's row still there (a write skew): the check locks
+    -- the voucher, so the second waits for the first to commit and then reads afresh. That needs READ COMMITTED.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'stock journal rows are deleted in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'inventory_line_kind';
+    END IF;
+    PERFORM 1 FROM voucher WHERE company_id = v_row.company_id AND id = v_row.voucher_id FOR NO KEY UPDATE;
+    IF NOT EXISTS (SELECT 1 FROM inventory_line WHERE voucher_id = v_row.voucher_id AND company_id = v_row.company_id) THEN
+      RAISE EXCEPTION 'stock journal % keeps at least one item line', v_row.voucher_id USING ERRCODE = '23514', CONSTRAINT = 'inventory_line_kind';
+    END IF;
   END IF;
   IF v_row.line_no IS NOT NULL THEN
     -- Grouped by company, as in 0008: the line index is then the path; a row of another company with the same voucher id
@@ -193,15 +202,59 @@ BEGIN
   RETURN NULL;
 END $$;
 
+-- 0009's lifecycle rules, plus: a voucher changes type in READ COMMITTED transactions only. The check above re-reads
+-- the item rows when the type changes; from an older snapshot (REPEATABLE READ) it would miss a row committed meanwhile.
+-- In READ COMMITTED the type change and an item row inserted beside it wait for each other: voucher_type_id belongs to
+-- the unique index voucher_number_key, so changing it takes the row lock that conflicts with the item row's foreign
+-- key share, and whichever commits second is checked against the other. Dropping the column from that index (or making
+-- the index partial) would weaken this; the two-session test in tests/item-lines-guards.integration.ts would catch it.
+CREATE OR REPLACE FUNCTION voucher_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM ledger_assert_scope(NEW.company_id);
+  IF TG_OP = 'INSERT' THEN
+    NEW.created_cancelled := NEW.status = 'cancelled';
+  ELSE
+    NEW.created_cancelled := OLD.created_cancelled;
+    IF OLD.deleted_at IS NOT NULL THEN
+      RAISE EXCEPTION 'deleted voucher cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF OLD.number IS NOT NULL AND (NEW.number IS NULL OR (NEW.number_period IS NOT DISTINCT FROM OLD.number_period AND NEW.number <> OLD.number
+        AND NEW.voucher_type_id = OLD.voucher_type_id)) THEN
+      RAISE EXCEPTION 'voucher number cannot change' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF (OLD.status = 'cancelled' AND NEW.status <> 'cancelled') OR (OLD.status <> 'optional' AND NEW.status = 'optional') THEN
+      RAISE EXCEPTION 'voucher status cannot go back' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF OLD.status = 'cancelled' AND (NEW.voucher_type_id <> OLD.voucher_type_id OR NEW.series <> OLD.series) THEN
+      RAISE EXCEPTION 'a cancelled voucher keeps its type' USING ERRCODE = '23514', CONSTRAINT = 'voucher_lifecycle';
+    END IF;
+    IF NEW.voucher_type_id <> OLD.voucher_type_id AND current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'a voucher changes type in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'voucher_inventory_kind';
+    END IF;
+  END IF;
+  IF NEW.number IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.number IS NULL OR NEW.number_period IS DISTINCT FROM OLD.number_period
+      OR NEW.voucher_type_id <> OLD.voucher_type_id OR NEW.series <> OLD.series OR NEW.number <> OLD.number) AND (
+    NEW.number_period IS DISTINCT FROM ledger_numbering_period(NEW.company_id, NEW.voucher_type_id, NEW.date) OR NOT EXISTS (
+      SELECT 1 FROM voucher_counter c WHERE c.company_id = NEW.company_id AND c.voucher_type_id = NEW.voucher_type_id AND c.series = NEW.series
+        AND c.period_start = NEW.number_period AND c.last_number = NEW.number AND c.xmin = pg_current_xact_id()::xid)) THEN
+    RAISE EXCEPTION 'voucher number was not issued by its counter' USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbered';
+  END IF;
+  RETURN NEW;
+END $$;
+
 -- 0011's unit and item guards, now also counting item lines (through stock_item_unit_idx and the item index). An
 -- item-line write in flight share-locks the item and the unit (inventory_line_guard), so the update waits for it to
--- commit and these checks, reading afresh, see its rows.
+-- commit and these checks, reading afresh, see its rows. From an older snapshot (REPEATABLE READ) they would miss a row
+-- committed meanwhile, opening rows included, so a decimals decrease and a unit change run in READ COMMITTED only.
 CREATE OR REPLACE FUNCTION stock_unit_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE v_item uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN PERFORM ledger_assert_scope(OLD.company_id); RETURN OLD; END IF;
   PERFORM ledger_assert_scope(NEW.company_id);
   IF TG_OP = 'UPDATE' AND NEW.decimals < OLD.decimals THEN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'a unit''s decimals are lowered in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'stock_unit_decimals';
+    END IF;
     IF EXISTS (SELECT 1 FROM stock_item i JOIN stock_opening o ON o.company_id = i.company_id AND o.item_id = i.id
         WHERE i.unit_id = NEW.id AND i.company_id = NEW.company_id) THEN
       RAISE EXCEPTION 'the decimals of a unit in use cannot be lowered' USING ERRCODE = '23514', CONSTRAINT = 'stock_unit_decimals';
@@ -223,6 +276,9 @@ CREATE OR REPLACE FUNCTION stock_item_guard() RETURNS trigger LANGUAGE plpgsql S
 BEGIN
   IF TG_OP = 'DELETE' THEN PERFORM ledger_assert_scope(OLD.company_id); RETURN OLD; END IF;
   PERFORM ledger_assert_scope(NEW.company_id);
+  IF TG_OP = 'UPDATE' AND NEW.unit_id <> OLD.unit_id AND current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'an item changes unit in READ COMMITTED transactions only' USING ERRCODE = '25001', CONSTRAINT = 'stock_item_unit_fixed';
+  END IF;
   IF TG_OP = 'UPDATE' AND NEW.unit_id <> OLD.unit_id AND (
       EXISTS (SELECT 1 FROM stock_opening o WHERE o.company_id = NEW.company_id AND o.item_id = NEW.id)
       -- By item only, as in stock_unit_guard.
