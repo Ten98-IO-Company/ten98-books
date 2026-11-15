@@ -100,7 +100,7 @@ test('bill keys are posted with their kinds, credit days and opening bills; the 
   assert.equal(report.bills.rowsPosted, 7);
   assert.deepEqual(report.bills.skipped.map(text => text.replace(/;.*/, '')), [
     '2 bill rows on foreign-currency lines (bills are base currency only until currencies are built)',
-    '1 against rows settling a bill that no posted row creates (it belongs to a foreign-currency line, or to a voucher the dataset carries without lines)',
+    '1 against rows settling a bill that no posted row creates (it belongs to a foreign-currency line, or to a voucher the dataset carries without lines, whose rows it does not hold)',
   ]);
   assert.deepEqual(Object.fromEntries(Object.entries(report.bills.warnings)), { bill_attached: ['sales-2 line 1 bill "INV-1"'] }, 'the second INV-1 joins the first one, and the ledger module says so');
   const text = formatSeedReport(report).join('\n');
@@ -264,4 +264,16 @@ test('a company seeded before bill rows were sent is replayed as it was posted, 
   changed.vouchers[0].lines[0].amount = '1051.00';
   changed.vouchers[0].lines[1].amount = '1051.00';
   await assert.rejects(() => seedDataset(user.userId, changed), /already used for a different voucher/);
+});
+
+test('bills are matched under the name match key: an expected name spelled with other spaces, signs or case is the same bill', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  await seedDataset(user.userId, billsDataset(pendingDebtor));
+  // The books hold SI-9; the expected figure writes it "s i.9".
+  const respelled = await compareDataset(user.userId, billsDataset(pendingDebtor, { creditor: { 's i.9': { pending: '200.00', side: 'Cr', dueDate: '30-Mar-26' } } }));
+  const creditor = respelled.lines.filter(item => item.label.endsWith(' of Creditor'));
+  assert.deepEqual(creditor.map(item => [item.label, item.ok]), [['Pending bills of Creditor', true], ['Due dates of Creditor', true]]);
+  // A different digit is a different bill.
+  const other = await compareDataset(user.userId, billsDataset(pendingDebtor, { creditor: { 's i.8': { pending: '200.00', side: 'Cr', dueDate: '30-Mar-26' } } }));
+  assert.equal(other.lines.find(item => item.label === 'Pending bills of Creditor')!.ok, false);
 });

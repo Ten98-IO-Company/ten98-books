@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findChordConflicts, isPrintableChord, mergeKeymaps, parseChord, reservedChord, resolveShortcut, type ResolvedCommand, type ShortcutPlatform, type ShortcutTarget } from '@ten98/ui';
 import { readdirSync, readFileSync } from 'node:fs';
-import { ariaKeyShortcuts, backSource, commandIds, commands, keepsEscape, type CommandContext, type CommandId } from '../src/lib/commands.ts';
+import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drilledFrom, heldReturn, keepsEscape, type CommandContext, type CommandId, type GoToReturn, type HistoryMove } from '../src/lib/commands.ts';
+import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
 
@@ -402,18 +403,226 @@ test('rule 4: entry screens claim like lists and reports, F10 is claimed on repo
   assert.equal(resolveScreen('classic', 'Alt+D', ['list'], 'text', [], ['list.delete', 'list.create', 'list.history']), 'reserved.global');
 });
 
-test('go-to stacks and switch-to replaces: where Escape leads from the screen they opened', () => {
-  const dayBook = '/app/c/x/reports/day-book', trial = '/app/c/x/reports/trial-balance';
-  // Alt+G from the day book to the trial balance: Escape there returns to the day book, before the report's own back.
-  const fromDayBook = { from: `${dayBook}?from=2026-01-01&to=2026-01-31`, to: trial };
-  assert.equal(backSource(trial, fromDayBook, true, true), 'go-to');
-  assert.equal(backSource(trial.toUpperCase(), fromDayBook, true, true), 'go-to', 'an address in other letter case is the same screen');
-  // Once the user has moved on (a drill-down), that screen's own back applies again.
-  assert.equal(backSource('/app/c/x/reports/group-summary', fromDayBook, true, true), 'screen');
-  // Ctrl+G leaves no return: the screen goes back its usual way, and switch-to has put the company menu under it.
-  assert.equal(backSource(trial, null, true, true), 'screen');
-  assert.equal(backSource('/app/c/x/masters/chart-of-accounts', null, false, true), 'shell');
-  assert.equal(backSource('/app/c/x', null, false, false), 'none');
+/**
+ * The shell's back decision walked through key presses, over a model of the browser history:
+ * - a push drops the forward entries, and back, forward and go move along them;
+ * - the go-to returns follow every history change (afterHistory), as KeyboardShell's history subscription does;
+ * - the report trail (useReportNavigation) records a numbered step per drill-down, compares levels with reportLevel,
+ *   and on Escape pushes the level it came from;
+ * - a masters form's cancel goes back in history (useLeave), and other screens fall back to the company menu.
+ */
+function shellWalk(start: string) {
+  const home = '/app/c/x';
+  const entries = [start];
+  let cursor = 0, stack: readonly GoToReturn[] = [], drills = 0;
+  const trail: { child: string; parent: string; n: number }[] = [];
+  const level = () => entries[cursor];
+  const path = (at = level()) => at.split('?')[0];
+  const step = () => trail.findLast(entry => entry.child === reportLevel(level()))?.n ?? null;
+  const move = (type: HistoryMove['type'], trailBack = false) => { stack = afterHistory(stack, { type, index: cursor, path: path(), level: reportLevel(level()), trailBack }); };
+  const push = (to: string, trailBack = false) => { entries.splice(cursor + 1, Infinity, to); cursor++; move('PUSH', trailBack); };
+  const replace = (to: string) => { entries[cursor] = to; move('REPLACE'); };
+  const go = (delta: number) => { cursor += delta; move(delta === -1 ? 'BACK' : delta === 1 ? 'FORWARD' : 'GO'); };
+  const isForm = (at: string) => at.includes('/masters/new/') || at.includes('/masters/edit/');
+  return {
+    get level() { return level(); },
+    get returns() { return stack.length; },
+    goTo(to: string, { blocked = false } = {}) {
+      if (path(to).toLowerCase() === path().toLowerCase()) { replace(to); return; }
+      const entry: GoToReturn = { from: level(), to: path(to), level: '', index: -1, fromIndex: cursor, mark: drills, pending: true };
+      stack = [...stack, entry];
+      if (blocked) { stack = stack.filter(item => item !== entry); return; }
+      push(to);
+      stack = stack.map(item => item === entry ? { ...entry, level: reportLevel(level()), index: cursor, pending: undefined } : item);
+    },
+    switchTo(to: string) { replace(home); stack = []; push(to); },
+    drill(to: string) {
+      const child = reportLevel(to);
+      const existing = trail.findIndex(entry => entry.child === child);
+      if (existing >= 0) trail.splice(existing);
+      trail.push({ child, parent: level(), n: ++drills });
+      push(to);
+    },
+    open: (to: string) => push(to),
+    replace,
+    back: () => go(-1),
+    forward: () => go(1),
+    reload() { stack = []; },
+    escape() {
+      if (isForm(level())) { go(-1); return level(); }
+      const innermost = stack[stack.length - 1];
+      const source = backSource({ path: path(), index: cursor, step: step() }, stack, { screen: level().includes('/reports/'), shell: level() !== home });
+      const held = heldReturn({ path: path(), index: cursor }, stack);
+      if (source === 'go-to' && held) { stack = stack.filter(item => item !== held); go(held.fromIndex - cursor); }
+      else if (source === 'screen') {
+        const index = trail.findLastIndex(entry => entry.child === reportLevel(level()));
+        if (index >= 0) { const trailBack = drilledFrom(step(), innermost); push(trail.splice(index)[0].parent, trailBack); } else push(home);
+      } else if (source === 'shell') push(home);
+      return level();
+    },
+  };
+}
+
+const at = {
+  home: '/app/c/x', dayBook: '/app/c/x/reports/day-book?from=2026-01-31&to=2026-01-31', trial: '/app/c/x/reports/trial-balance?from=2026-01-01&to=2026-01-31',
+  groups: '/app/c/x/reports/group-summary?from=2026-01-01&to=2026-01-31', group: '/app/c/x/reports/group-summary?from=2026-01-01&to=2026-01-31&group=a',
+  monthly: '/app/c/x/reports/ledger-monthly?from=2026-01-01&to=2026-01-31&ledger=l', chart: '/app/c/x/masters/chart-of-accounts',
+  ledgerForm: '/app/c/x/masters/edit/ledger/l', newMaster: '/app/c/x/masters/new', newLedger: '/app/c/x/masters/new/ledger',
+  register: '/app/c/x/reports/ledger-vouchers?from=2026-01-01&to=2026-01-31&ledger=l',
+};
+
+test('go-to stacks: Escape on the screen it opened returns to the origin, and nested go-tos unwind one at a time', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.trial);
+  assert.equal(walk.escape(), at.dayBook);
+  assert.equal(walk.returns, 0, 'a used return is spent');
+  walk.goTo(at.trial); walk.goTo(at.chart);
+  assert.equal(walk.escape(), at.trial);
+  assert.equal(walk.escape(), at.dayBook);
+  assert.equal(walk.escape(), at.home, 'the day book itself goes back to the menu');
+  // An address in other letter case is the same screen.
+  const held: GoToReturn = { from: at.dayBook, to: '/app/c/x/reports/trial-balance', level: '', index: 1, fromIndex: 0, mark: 0 };
+  assert.equal(backSource({ path: '/APP/C/X/REPORTS/TRIAL-BALANCE', index: 1, step: null }, [held], { screen: true, shell: true }), 'go-to');
+});
+
+test('switch-to replaces: Escape on the screen it opened lands on the company menu, and earlier returns are gone', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.chart);
+  walk.switchTo(at.trial);
+  assert.equal(walk.returns, 0);
+  assert.equal(walk.escape(), at.home);
+});
+
+test('a level drilled into after a go-to goes up one level before the go-to return applies (scenario 1)', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.groups);
+  walk.drill(at.group);
+  assert.equal(walk.escape(), at.groups);
+  assert.equal(walk.escape(), at.dayBook);
+  // A drill into another path keeps the return too: trial balance, a group, a ledger's months, back up three times.
+  walk.goTo(at.trial); walk.drill(at.group); walk.drill(at.monthly);
+  assert.equal(walk.escape(), at.group);
+  assert.equal(walk.escape(), at.trial);
+  assert.equal(walk.escape(), at.dayBook);
+});
+
+test('a spent or abandoned go-to never applies to a later visit of the same screen (scenario 2)', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.groups); walk.drill(at.group); walk.escape(); walk.escape();
+  assert.equal(walk.escape(), at.home);
+  walk.open(at.trial); walk.drill(at.groups);
+  assert.equal(walk.escape(), at.trial, 'the old origin (the day book) must not come back');
+  // Left by a link to the menu and reached again by another push: another entry, so no return.
+  const left = shellWalk(at.dayBook);
+  left.goTo(at.groups); left.open(at.home); left.open(at.groups);
+  assert.equal(left.escape(), at.home, 'the group summary opened again goes back to the menu, not the day book');
+});
+
+test('a form opened from the go-to screen and closed again keeps the return (finding 1)', () => {
+  // Day book, go-to the chart of accounts, Enter on a ledger, Escape (the form goes back in history), Escape.
+  const edit = shellWalk(at.dayBook);
+  edit.goTo(at.chart); edit.open(at.ledgerForm);
+  assert.equal(edit.escape(), at.chart);
+  assert.equal(edit.escape(), at.dayBook);
+  // Go-to the new-master list, pick a ledger, Escape, Escape.
+  const create = shellWalk(at.dayBook);
+  create.goTo(at.newMaster); create.open(at.newLedger);
+  assert.equal(create.escape(), at.newMaster);
+  assert.equal(create.escape(), at.dayBook);
+});
+
+test('a period change or page turn on a drilled level keeps the trail and the return (finding 2)', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.trial);
+  walk.replace('/app/c/x/reports/trial-balance?from=2026-01-01&to=2026-03-31');
+  walk.drill('/app/c/x/reports/group-summary?from=2026-01-01&to=2026-03-31&group=a');
+  // The period changes on the drilled level (a replace with other dates and a highlight): still the same level.
+  walk.replace('/app/c/x/reports/group-summary?from=2026-02-01&to=2026-02-28&group=a&hl=g:b');
+  assert.equal(walk.escape(), '/app/c/x/reports/trial-balance?from=2026-01-01&to=2026-03-31');
+  assert.equal(walk.escape(), at.dayBook);
+  // A register's page turn (a replace adding the earlier pages) is the same level as well.
+  walk.goTo(at.trial); walk.drill(at.register);
+  walk.replace(`${at.register}&pages=abc`);
+  assert.equal(walk.escape(), at.trial);
+  assert.equal(walk.escape(), at.dayBook);
+});
+
+test('a go-to to the screen already shown records no return (finding 3)', () => {
+  const walk = shellWalk(at.trial);
+  walk.drill(at.groups);
+  walk.goTo(`${at.groups}&hl=g:a`);
+  assert.equal(walk.returns, 0);
+  assert.equal(walk.escape(), at.trial, 'the group summary goes back the usual way (its trail to the trial balance), not to itself');
+});
+
+test('browser back and forward keep a held return on its own entry; a reload or a push over it drops it', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.trial);
+  walk.back();
+  assert.equal(walk.level, at.dayBook);
+  walk.forward();
+  assert.equal(walk.escape(), at.dayBook, 'forward again: the trial balance still returns to the day book');
+  // Back, then a push from the origin overwrites the go-to's entry.
+  walk.goTo(at.trial); walk.back();
+  assert.equal(walk.escape(), at.home);
+  assert.equal(walk.returns, 0);
+  // A reload forgets every return: Escape falls back to the screen's own logical parent.
+  walk.open(at.dayBook); walk.goTo(at.trial); walk.reload();
+  assert.equal(walk.escape(), at.home);
+});
+
+test('a return held under a later go-to still applies on its own entry (browser back past the later go-to)', () => {
+  // Cost centres, go-to the chart of accounts, open a ledger form, go-to the trial balance from the form, browser back to
+  // the form, Escape (the form goes back to the chart), Escape: the chart's return still leads to cost centres.
+  const walk = shellWalk('/app/c/x/masters/cost-centres');
+  walk.goTo(at.chart); walk.open(at.ledgerForm); walk.goTo(at.trial);
+  walk.back();
+  assert.equal(walk.level, at.ledgerForm);
+  assert.equal(walk.escape(), at.chart);
+  assert.equal(walk.escape(), '/app/c/x/masters/cost-centres');
+  // The later go-to's return is still held on its own entry: forward three times reaches the trial balance, which
+  // returns to the form.
+  walk.forward(); walk.forward(); walk.forward();
+  assert.equal(walk.level, at.trial);
+  assert.equal(walk.escape(), at.ledgerForm);
+});
+
+test('a go-to to the screen already shown with another address replaces it in place and keeps its return', () => {
+  const walk = shellWalk(at.dayBook);
+  walk.goTo(at.trial);
+  walk.goTo('/app/c/x/reports/trial-balance?from=2026-01-01&to=2026-01-31&hl=g:a');
+  assert.equal(walk.returns, 1);
+  assert.equal(walk.escape(), at.dayBook);
+});
+
+test('a go-to the leave guard keeps from happening leaves no return', () => {
+  const walk = shellWalk(at.chart);
+  walk.goTo(at.trial, { blocked: true });
+  assert.equal(walk.returns, 0);
+  assert.equal(walk.level, at.chart);
+});
+
+test('a drill step older than the go-to does not take over the screen the go-to opened', () => {
+  const walk = shellWalk(at.trial);
+  walk.drill(at.groups);
+  walk.goTo(at.dayBook); walk.open(at.home); walk.open(at.dayBook);
+  walk.goTo(at.groups);
+  assert.equal(walk.escape(), at.dayBook);
+  assert.equal(backSource({ path: '/app/c/x/reports/group-summary', index: 3, step: 3 }, [], { screen: true, shell: true }), 'screen');
+  assert.equal(backSource({ path: '/app/c/x/masters/chart-of-accounts', index: 3, step: null }, [], { screen: false, shell: true }), 'shell');
+  assert.equal(backSource({ path: '/app/c/x', index: 0, step: null }, [], { screen: false, shell: false }), 'none');
+});
+
+test('afterHistory: pushes drop overwritten entries, replaces keep the same screen, pending returns stay', () => {
+  const held: GoToReturn = { from: at.dayBook, to: '/app/c/x/reports/trial-balance', level: 'l', index: 2, fromIndex: 1, mark: 0 };
+  const pending: GoToReturn = { ...held, index: -1, pending: true };
+  const stack = [held, pending];
+  assert.equal(afterHistory(stack, { type: 'PUSH', index: 3, path: '/x', level: 'x' }), stack);
+  assert.deepEqual(afterHistory(stack, { type: 'PUSH', index: 2, path: '/x', level: 'x' }), [pending]);
+  assert.equal(afterHistory(stack, { type: 'REPLACE', index: 2, path: '/app/c/x/reports/TRIAL-BALANCE', level: 'l' }), stack);
+  assert.deepEqual(afterHistory(stack, { type: 'REPLACE', index: 2, path: '/app/c/x', level: 'h' }), [pending]);
+  assert.equal(afterHistory(stack, { type: 'BACK', index: 1, path: '/x', level: 'x' }), stack);
+  assert.deepEqual(afterHistory([held], { type: 'PUSH', index: 5, path: held.to, level: 'l', trailBack: true }), [{ ...held, index: 5 }]);
   // Both open the same list, on different keys, in classic.
   const merged = mergeKeymaps(keymaps.classic);
   assert.deepEqual([merged['nav.go-to'], merged['nav.switch-to']], [['Alt+G'], ['Ctrl+G']]);

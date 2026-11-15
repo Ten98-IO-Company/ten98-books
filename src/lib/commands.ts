@@ -131,17 +131,77 @@ export function barCommands<T extends { id: string; enabled: boolean; keys: read
   return eligible.filter(command => !eligible.some(other => other !== command && rank(other) > rank(command) && other.keys.some(key => command.keys.includes(key))))
 }
 
-/** The screen a go-to opened (`to`, a path) and the address it was opened from (`from`). */
-export type GoToReturn = { readonly from: string; readonly to: string }
+/**
+ * One go-to still open, tied to the history entry of the screen it opened:
+ * - `to` and `level` are that screen's path and report level (`reportLevel`: the highlight, page, period and view do
+ *   not count, so the period fill-in on arrival changes neither);
+ * - `index` is that history entry's position, and `fromIndex` the position of the entry it was opened from, which
+ *   Escape goes back to (pushes above it never move it);
+ * - `mark` is the report trail's mark when it opened: only drill-downs taken after it lead back towards it;
+ * - `pending` holds while its navigation is under way (`index` and `level` are not known yet).
+ */
+export type GoToReturn = {
+  readonly from: string; readonly to: string; readonly level: string
+  readonly index: number; readonly fromIndex: number; readonly mark: number; readonly pending?: boolean
+}
+
+/** A history change as the router's history reports it, with the new location's position, path and report level. */
+export type HistoryMove = {
+  readonly type: 'PUSH' | 'REPLACE' | 'BACK' | 'FORWARD' | 'GO'
+  readonly index: number; readonly path: string; readonly level: string
+  /** A push that goes back up the report trail from a level drilled into after the innermost go-to. */
+  readonly trailBack?: boolean
+}
+
+const samePath = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+/** Whether the trail step of this level (its number, or null) was taken after the go-to's mark. */
+export const drilledFrom = (step: number | null, goTo: GoToReturn | undefined): boolean => step !== null && (!goTo || step > goTo.mark)
 
 /**
- * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take: on the screen a go-to opened, back to where the go-to was
- * opened from (it stacked); otherwise the screen's own back (a report's drill-down level), else the shell's (the
- * company menu). A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes
- * back the usual way, and that ends at the menu.
+ * The go-to returns after a history change, innermost last, following what the browser keeps:
+ * - A push drops the returns whose entry it overwrote (at or above the new position), since forward history is gone.
+ *   A push up the report trail that lands on the innermost return's level moves the return onto the new entry, so a
+ *   drill-down and back keeps it.
+ * - A replace drops a return whose entry now holds another screen. The period fill-in and view switches keep the
+ *   path, so they keep it.
+ * - Back, forward and go keep every return: their entries are still there, and a return applies again on its own entry.
+ *
+ * Pending returns are kept. The same array comes back when nothing changes.
  */
-export function backSource(path: string, goTo: GoToReturn | null, screen: boolean, shell: boolean): 'go-to' | 'screen' | 'shell' | 'none' {
-  if (goTo && goTo.to.toLowerCase() === path.toLowerCase()) return 'go-to'
+export function afterHistory(stack: readonly GoToReturn[], move: HistoryMove): readonly GoToReturn[] {
+  if (move.type === 'PUSH') {
+    const kept = stack.filter(goTo => goTo.pending || goTo.index < move.index)
+    const innermost = kept[kept.length - 1]
+    if (move.trailBack && innermost && !innermost.pending && innermost.level === move.level)
+      return [...kept.slice(0, -1), { ...innermost, index: move.index }]
+    return kept.length === stack.length ? stack : kept
+  }
+  if (move.type === 'REPLACE') {
+    const kept = stack.filter(goTo => goTo.pending || goTo.index !== move.index || samePath(goTo.to, move.path))
+    return kept.length === stack.length ? stack : kept
+  }
+  return stack
+}
+
+/** The go-to return held on the current history entry (its position and path), the latest if several; the one Escape spends. */
+export const heldReturn = (at: { path: string; index: number }, stack: readonly GoToReturn[]): GoToReturn | undefined =>
+  stack.findLast(goTo => !goTo.pending && goTo.index === at.index && samePath(goTo.to, at.path))
+
+/**
+ * Which back Escape (nav.back) and Ctrl+Q (nav.quit) take at a location (its path, history position and report trail
+ * step number), in this order:
+ * 1. A level drilled into after the innermost go-to takes the screen's own back, one level up.
+ * 2. The very entry a go-to opened returns to where that go-to was opened from (heldReturn: the latest return held on
+ *    this entry, innermost or not). Go-to stacks, so the next one out applies there. A form opened from it and closed
+ *    again, or the browser's back past a later go-to, is back on that entry.
+ * 3. Otherwise the screen's own back, else the shell's (the company menu).
+ *
+ * A switch-to leaves no return and puts the company menu under the screen it opens, so its screen goes back the usual
+ * way, and that ends at the menu.
+ */
+export function backSource(at: { path: string; index: number; step: number | null }, stack: readonly GoToReturn[], { screen, shell }: { screen: boolean; shell: boolean }): 'go-to' | 'screen' | 'shell' | 'none' {
+  if (screen && drilledFrom(at.step, stack[stack.length - 1])) return 'screen'
+  if (heldReturn(at, stack)) return 'go-to'
   return screen ? 'screen' : shell ? 'shell' : 'none'
 }
 

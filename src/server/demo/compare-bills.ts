@@ -1,5 +1,6 @@
 import { addMoney, formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime';
 import type { LedgerContext } from '../ledger/context.ts';
+import { nameMatchKey } from '../../lib/names.ts';
 import { listLedgers } from '../ledger/masters.ts';
 import { billsOutstandingReport, partyBillsReport } from '../reports/bills.ts';
 import { parseDueDate, readLineBills } from './bill-rows.ts';
@@ -10,7 +11,7 @@ import { dispositionOf, toMinor, type Dataset } from './dataset.ts';
 /**
  * The bill figures of expected.json (pending bills per party at the end of the period, the count and total of pending
  * receivable and payable bills) and of the scenario checkpoints, compared with the bill reports of the seeded company.
- * Pending bills are read per party (`partyBillsReport`) at each date; a bill is compared by name, ignoring case, on its
+ * Pending bills are read per party (`partyBillsReport`) at each date; a bill is compared by its name match key (the product's name key: case, spaces and some signs ignored) on its
  * pending amount and side and on its due date. The seeder leaves some rows out (see bills.ts), so some bills cannot be
  * reproduced; those are listed as not yet comparable, each with its reason, never dropped and never counted as a match.
  */
@@ -20,8 +21,8 @@ type Expected = { asOf: string; block: string; ledgers: Record<string, Record<st
 
 const reasons = {
   foreign: 'a bill of a party with foreign-currency lines: ten98-books keeps bills in the base currency only, so those rows were left out of the postings (the reference also shows such bills restated at the report date)',
-  unknown: 'a settlement of this bill was left out because the bill is created by a foreign-currency line or by a voucher the dataset carries without lines, which ten98-books cannot post',
-  uncreated: 'no voucher ten98-books posts creates this bill, and the party has a voucher the dataset carries without lines (cancelled or with no accounting effect), which ten98-books cannot post',
+  unknown: 'a settlement of this bill was left out because the bill is created by a foreign-currency line or by a voucher the dataset carries without lines, whose rows it does not hold',
+  uncreated: 'no voucher ten98-books posts creates this bill, and the party has a voucher the dataset carries without lines (cancelled or with no accounting effect), whose bill rows it does not hold',
 } as const;
 
 /** Every date the dataset states pending bills for, with the figures, the end of the period first. */
@@ -48,7 +49,7 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
   const stored = await listLedgers(context);
   const appLedger = (key: string) => {
     const entry = dataset.ledgers.find(ledger => ledger.key === key)!;
-    return { entry, ledger: stored.find(item => entry.standard ? item.systemKey === entry.standard : item.name.toLowerCase() === entry.name.toLowerCase()) };
+    return { entry, ledger: stored.find(item => entry.standard ? item.systemKey === entry.standard : nameMatchKey(item.name) === nameMatchKey(entry.name)) };
   };
 
   for (const { asOf, block, ledgers } of expectedBills(dataset)) {
@@ -56,10 +57,10 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
       const { entry, ledger } = appLedger(key);
       const label = (what: string) => `${what} of ${entry.name}`;
       const wanted = new Map(Object.entries(bills).map(([name, figure]): [string, { name: string; pending: bigint; dueDate: string }] =>
-        [name.toLowerCase(), { name, pending: figure.side === 'Dr' ? toMinor(figure.pending, exponent) : subtractMoney(0n, toMinor(figure.pending, exponent)), dueDate: parseDueDate(figure.dueDate)! }]));
+        [nameMatchKey(name), { name, pending: figure.side === 'Dr' ? toMinor(figure.pending, exponent) : subtractMoney(0n, toMinor(figure.pending, exponent)), dueDate: parseDueDate(figure.dueDate)! }]));
       if (!ledger) { lines.push({ block, label: label('Pending bills'), expected: `${wanted.size} bill(s)`, actual: 'ledger missing', difference: 'n/a', ok: false }); continue; }
       const report = await partyBillsReport(context, ledger.id, { asOf });
-      const actual = new Map(report.bills.map(bill => [bill.name.toLowerCase(), bill]));
+      const actual = new Map(report.bills.map(bill => [nameMatchKey(bill.name), bill]));
       // A bill is left out of the comparison only for a reason the dataset itself shows. Bills the books hold that
       // expected.json does not list are always compared, also on a party with foreign-currency lines.
       const unposted = dataset.vouchers.some(voucher => dispositionOf(voucher) !== 'post' && voucher.extras?.party === key);
@@ -129,7 +130,7 @@ export async function compareBills(context: LedgerContext, dataset: Dataset, pla
       if (!ledger) continue;
       for (const bill of (await partyBillsReport(context, ledger.id, { asOf: to })).bills) {
         if (side === 'payable' ? bill.pending >= 0n : bill.pending <= 0n) continue;
-        const keys = dataset.vouchers.filter(voucher => voucher.lines.some(line => line.ledger === entry.key && readLineBills(line.extras).found.some(row => row.name?.toLowerCase() === bill.name.toLowerCase() && (row.method === 'advance' || row.method === 'new_ref')))).map(voucher => voucher.key);
+        const keys = dataset.vouchers.filter(voucher => voucher.lines.some(line => line.ledger === entry.key && readLineBills(line.extras).found.some(row => row.name !== undefined && nameMatchKey(row.name) === nameMatchKey(bill.name) && (row.method === 'advance' || row.method === 'new_ref')))).map(voucher => voucher.key);
         other.count++;
         other.total = addMoney(other.total, bill.pending < 0n ? subtractMoney(0n, bill.pending) : bill.pending);
         other.which.push(`${bill.name} on ${entry.name} (${keys.join(', ')})`);

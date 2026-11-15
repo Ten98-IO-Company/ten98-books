@@ -130,11 +130,18 @@ export type ReportRoute = keyof typeof reportRoutes
 export type ReportLink = { report: ReportRoute; search: ReportSearch }
 
 /** One drill-down step: the level left (with its highlight) and the level opened, as addresses without the highlight. */
-type Step = { child: string; parent: string }
+type Step = { child: string; parent: string; n: number }
 const trail: Step[] = []
+/** Drill-downs counted in this tab, so a step can be told newer than a mark (`trailMark`). */
+let drills = 0
 
 /** A level of the trail: see reportLevel (the period, page, view and highlight do not make another level). */
 const levelOf = reportLevel
+
+/** The drill-downs so far; a step numbered above a mark was taken after it. */
+export const trailMark = (): number => drills
+/** The number of the trail step going back from this address follows (a level reached by drilling down), or null. */
+export const trailStepOf = (href: string): number | null => trail.findLast(step => step.child === levelOf(href))?.n ?? null
 
 /**
  * Drill-down and back for report screens. `open` goes down one level, recording where it came from and the line that
@@ -154,7 +161,7 @@ export function useReportNavigation(companyId: string) {
     const child = levelOf(target)
     const existing = trail.findIndex(step => step.child === child)
     if (existing >= 0) trail.splice(existing)
-    trail.push({ child, parent: `${here.pathname}${here.search}` })
+    trail.push({ child, parent: `${here.pathname}${here.search}`, n: ++drills })
     void router.navigate({ href: target })
   }, [href, hrefOf, router])
 
