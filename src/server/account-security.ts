@@ -165,6 +165,9 @@ async function requireFactorProof(client: PoolClient, request: Request, userId: 
   if (details.code) await rememberCode(client, userId, details.code);
 }
 
+/** The paths a duplicate challenge cookie is expired on: the library's own (`/`) and each one above the challenge route. */
+const challengeCookiePaths = ['/', '/api', '/api/auth', '/api/auth/two-factor'];
+
 export async function handleAccountSecurity(request: Request, limit: Limit): Promise<Response | null> {
   const url = new URL(request.url), path = url.pathname.replace(/\/$/, '');
   // Exact public routes only; the upstream callback/token and proof APIs stay private.
@@ -263,10 +266,15 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // ambiguous is refused before the library runs, in the same words, so nothing tells whether a challenge existed.
     const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
     const cookie = challengeCookie(request);
-    // The exact name twice: refused, and the name expired with the library's attributes, so signing in again recovers.
+    // The exact name twice: refused, and the name expired with the library's attributes on each path from the root to the
+    // challenge route. A browser keeps two cookies of one name only when their path or domain differs, so this removes the
+    // real one and a copy set on one of those paths of this host; signing in again then recovers. A copy set with a parent
+    // Domain cannot be expired from here (only a host-only cookie name would close that), and the sign-in stays refused.
     if (cookie === 'duplicate') {
       const response = refused();
-      response.headers.append('set-cookie', `${challengeCookieName()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`);
+      for (const path of challengeCookiePaths) {
+        response.headers.append('set-cookie', `${challengeCookieName()}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`);
+      }
       return response;
     }
     if (!cookie) return refused();
@@ -355,13 +363,15 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // recovery codes would otherwise satisfy the factor proof that turning it off asks for. The password is checked first,
     // so a refused password never consumes a recovery code or an authenticator window.
     const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
-    // With two-factor on, a request without a code is refused first, the same way whatever the password, so the answer
-    // never tells whether the password was right. Then the password (a wrong one never spends a code), then the code.
+    // With two-factor on, a request without a code, or with both kinds, is refused first, the same way whatever the
+    // password, so the answer never tells whether the password was right. Then the password (a wrong one never spends a
+    // code), then the code.
     if (current.user.twoFactorEnabled && !details.code && !details.backupCode) {
       throw path === '/api/account/two-factor/recovery-codes'
         ? new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required')
         : new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
     }
+    if (current.user.twoFactorEnabled && details.code && details.backupCode) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
     const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
     if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, proofRefused);
     if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);

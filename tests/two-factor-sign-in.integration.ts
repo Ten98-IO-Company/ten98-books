@@ -6,7 +6,7 @@ import { authCookiePrefix } from '../src/server/auth.ts';
 import { getConfig } from '../src/server/config.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, browser, invite, password, setupOwner, type Member } from './helpers/ledger.ts';
-import { challenged as challengedIn, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, step, totp, verifyWith } from './helpers/two-factor.ts';
+import { challenged as challengedIn, challengeSetCookie, cookieScope, duplicateRefusal, enableFactor, plantedThenSignIn, step, totp, verifyWith } from './helpers/two-factor.ts';
 
 /**
  * The second step of sign-in, through the real handler and the real auth preset (its own cookie prefix, as in
@@ -279,7 +279,7 @@ test('a challenge value with no dot (an identifier plus one character) is refuse
   assert.equal(buckets, 0, 'the real challenge\'s bucket is not spent');
 });
 
-test('without a code the answer does not depend on the password; a wrong password never spends the code', async () => {
+test('without a code, or with both kinds, the answer does not depend on the password; a wrong password never spends the code', async () => {
   await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
   const wrong = 'wrong horse battery staple';
   for (const [path, noCode] of [
@@ -290,6 +290,10 @@ test('without a code the answer does not depend on the password; a wrong passwor
     assert.deepEqual([right.status, right.body], [400, noCode], `${path}: no code, right password`);
     assert.deepEqual([bad.status, bad.body], [right.status, right.body], `${path}: no code, wrong password answers the same`);
     const code = totp(secrets.get(second.userId)!, step());
+    const both = { code, backupCode: backupCodes.get(second.userId)![0] };
+    const bothRight = await second.browser.call(path, { password, ...both }), bothWrong = await second.browser.call(path, { password: wrong, ...both });
+    assert.deepEqual([bothRight.status, bothRight.body], [400, { error: 'Enter an authenticator code or a recovery code to verify this action.' }], `${path}: both codes, right password`);
+    assert.deepEqual([bothWrong.status, bothWrong.body], [bothRight.status, bothRight.body], `${path}: both codes, wrong password answers the same`);
     assert.deepEqual((await second.browser.call(path, { password: wrong, code })).body, { error: 'The password or the code was not accepted.' }, `${path}: a code, wrong password`);
     if (path === '/api/account/two-factor/recovery-codes') {
       const done = await second.browser.call(path, { password, code });
@@ -407,6 +411,15 @@ test('an expired challenge is refused before the library, byte for byte as no ch
   // Passed on, the library would refuse it too, but with a Set-Cookie that clears the challenge.
   assert.deepEqual(expired.setCookie, [], 'no cookie set');
   assert.deepEqual(expired, await raw(), 'the same answer as without a challenge');
+});
+
+test('a copy of the challenge cookie planted on a path of this host is cleared, and the next sign-in completes', async () => {
+  const host = new URL(getConfig().appUrl).hostname;
+  for (const path of ['/api', '/api/auth', '/api/auth/two-factor']) {
+    await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+    const result = await plantedThenSignIn(database.adminUrl, owner, totp(secrets.get(owner.userId)!, step()), challengeName(), { domain: host, hostOnly: true, path });
+    assert.deepEqual([result.first, result.second, result.signedIn], [401, 200, true], `planted at ${path}; between: ${result.between.join(', ')}`);
+  }
 });
 
 test('the duplicate case clears the challenge cookie with the scope the library set it with', async () => {

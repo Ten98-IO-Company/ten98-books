@@ -62,6 +62,82 @@ export async function duplicateRefusal(name: string, value: string) {
   return { status: response.status, cleared: response.headers.getSetCookie().find(line => line.startsWith(`${name}=;`)) };
 }
 
+type StoredCookie = { name: string; value: string; domain: string; hostOnly: boolean; path: string; secure: boolean };
+
+/**
+ * A browser's cookie store (RFC 6265, the parts a challenge cookie meets), over handleApi: a cookie is identified by name,
+ * domain and path, so two of one name live side by side when their path or domain differs; a Set-Cookie that expires one
+ * removes only the cookie with its name, domain and path; requests carry the cookies whose domain and path match, longer
+ * paths first; a `__Secure-` name is stored only with `Secure`, and a `Secure` cookie goes over https only.
+ */
+export class CookieJar {
+  readonly stored: StoredCookie[] = [];
+  private readonly url: URL;
+  constructor(appUrl = getConfig().appUrl) { this.url = new URL(appUrl); }
+
+  /** Puts a cookie in the store directly, as another page or subdomain could. */
+  plant(cookie: Omit<StoredCookie, 'secure' | 'hostOnly'> & { hostOnly?: boolean }): void {
+    this.stored.push({ hostOnly: true, ...cookie, secure: this.url.protocol === 'https:' });
+  }
+
+  /** POST with a JSON body (GET without one) from the application's own origin. */
+  async call(path: string, body?: unknown): Promise<{ status: number; body: any }> {
+    const target = new URL(path, this.url);
+    const headers = new Headers({ origin: getConfig().appUrl });
+    const cookies = this.matching(target);
+    if (cookies.length) headers.set('cookie', cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '));
+    if (body !== undefined) headers.set('content-type', 'application/json');
+    const response = await handleApi(new Request(target, { method: body === undefined ? 'GET' : 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+    for (const line of response.headers.getSetCookie()) this.receive(line, target);
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
+  }
+
+  names(): string[] { return this.stored.map(cookie => `${cookie.name} ${cookie.hostOnly ? '' : '.'}${cookie.domain}${cookie.path}`); }
+
+  private matching(target: URL): StoredCookie[] {
+    const host = target.hostname;
+    return this.stored
+      .filter(cookie => (cookie.hostOnly ? host === cookie.domain : host === cookie.domain || host.endsWith(`.${cookie.domain}`))
+        && (target.pathname === cookie.path || target.pathname.startsWith(cookie.path.endsWith('/') ? cookie.path : `${cookie.path}/`))
+        && (!cookie.secure || target.protocol === 'https:'))
+      .sort((a, b) => b.path.length - a.path.length);
+  }
+
+  private receive(line: string, target: URL): void {
+    const [pair, ...parts] = line.split(';').map(part => part.trim());
+    const attributes = new Map(parts.map(part => { const [key, ...value] = part.split('='); return [key.toLowerCase(), value.join('=')] as const; }));
+    const name = pair.slice(0, pair.indexOf('=')), value = pair.slice(pair.indexOf('=') + 1);
+    const secure = attributes.has('secure');
+    if ((name.startsWith('__Secure-') || secure) && (!secure || target.protocol !== 'https:')) return;
+    const domainAttribute = attributes.get('domain')?.replace(/^\./, '').toLowerCase();
+    const domain = domainAttribute ?? target.hostname;
+    const path = attributes.get('path')?.startsWith('/') ? attributes.get('path')! : (target.pathname.slice(0, target.pathname.lastIndexOf('/')) || '/');
+    const index = this.stored.findIndex(cookie => cookie.name === name && cookie.domain === domain && cookie.path === path);
+    if (index >= 0) this.stored.splice(index, 1);
+    if (attributes.get('max-age') === '0' || value === '') return;
+    this.stored.push({ name, value, domain, hostOnly: domainAttribute === undefined, path, secure });
+  }
+}
+
+/**
+ * Plants a second challenge cookie of the name the server reads (as `plant` places it), signs `member` in, and verifies
+ * with `code` twice: the first verify meets the duplicate (401, with the server's clearing cookies), the second follows a
+ * new sign-in in the same store. Returns both answers and the store's cookies in between.
+ */
+export async function plantedThenSignIn(adminUrl: string, member: Member, code: string, name: string, plant: { domain: string; hostOnly: boolean; path: string }) {
+  const email = await asAdmin(adminUrl, async admin => (await admin.query('SELECT email FROM "user" WHERE id = $1', [member.userId])).rows[0].email as string);
+  const jar = new CookieJar();
+  jar.plant({ name, value: `2fa-${'p'.repeat(20)}.planted`, ...plant });
+  assert.deepEqual((await jar.call('/api/auth/sign-in/email', { email, password })).body, { twoFactorRedirect: true });
+  const first = await jar.call('/api/auth/two-factor/verify-totp', { code });
+  const between = jar.names();
+  assert.deepEqual((await jar.call('/api/auth/sign-in/email', { email, password })).body, { twoFactorRedirect: true });
+  const second = await jar.call('/api/auth/two-factor/verify-totp', { code });
+  const me = await jar.call('/api/me');
+  return { first: first.status, second: second.status, signedIn: me.status === 200, between };
+}
+
 /** A verify with a Cookie header written by hand. */
 export async function verifyWith(cookie: string, code: string, path = '/api/auth/two-factor/verify-totp') {
   const response = await handleApi(new Request(new URL(path, getConfig().appUrl), { method: 'POST',

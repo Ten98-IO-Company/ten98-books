@@ -42,12 +42,14 @@ test('ready while the database is there', async () => {
   assert.deepEqual((await probe()).body, { status: 'ready' });
 });
 
-test('503 within the bound for a refused connection, a database that never answers and a refused role, never 500', async () => {
+test('503 within the bound for a refused connection, a database that never answers, a role or database that does not exist, never 500', async () => {
   const bound = 2 * readinessStepMs + 1500;
   const cases: [string, (url: URL) => void][] = [
     ['connection refused', url => { url.hostname = '127.0.0.1'; url.port = '1'; }],
     ['a port that accepts and never answers', url => { url.hostname = '127.0.0.1'; url.port = String(silentPort); }],
-    ['the application role refused', url => { url.password = 'not-the-password'; }],
+    // Refused the same way under password and trust authentication (a wrong password is not: trust lets it in).
+    ['a role that does not exist', url => { url.username = 'books_no_such_role'; }],
+    ['a database that does not exist', url => { url.pathname = '/books_no_such_database'; }],
   ];
   for (const [what, change] of cases) {
     const answer = await withDatabaseUrl(change);
