@@ -5,6 +5,7 @@ import { multiplyMoney, parseMoney, type MoneyExponent } from '@ten98/runtime';
 import { z } from 'zod';
 import { daysInMonth, financialYearOf, isCalendarDate } from '../../lib/company.ts';
 import { natures, sides, voucherKinds } from '../../lib/ledger.ts';
+import { nameMatchKey } from '../../lib/names.ts';
 import { isForeignLine, parseDueDate, readLedgerBills, readLineBills } from './bill-rows.ts';
 
 /**
@@ -46,6 +47,8 @@ const date = z.string().refine(isCalendarDate, 'must be a real date written YYYY
 const side = z.enum(sides);
 const extras = z.record(z.string(), z.unknown());
 const count = z.number().int().min(0);
+/** A cost centre's period figures as expected.json and checkpoints.json write them. */
+const costFigures = z.looseObject({ debit: amount, credit: amount });
 const isPlain = (value: string) => amount.safeParse(value).success;
 
 const companyFile = z.strictObject({
@@ -95,6 +98,8 @@ const expectedFile = z.looseObject({
   /** Pending bills at `asOf` per party ledger (`ledgers[key].bills.bills[name]`), and the count and total per side. */
   outstanding: z.looseObject({ asOf: date, ledgers: pendingByLedger(true) }).optional(),
   receivables: pendingSummary.optional(), payables: pendingSummary.optional(),
+  /** Cost centre totals of the period (`centres` by centre key), from the cost category summary. */
+  costCentres: z.looseObject({ from: date, to: date, centres: z.record(z.string(), costFigures) }).optional(),
   exchangeDifferences: z.looseObject({
     realised: z.looseObject({ amount, side }).optional(), unrealised: z.looseObject({ amount, side }).optional(),
   }).optional(),
@@ -118,13 +123,14 @@ export type ItemsFile = z.infer<typeof itemsFile>;
  * Further feature files whose shape and references are checked and whose content is kept as it is, because ten98-books
  * does not model them yet: cost categories and centres, currencies with their rates, and checkpoint figures.
  */
-const costCategoriesFile = z.array(z.looseObject({ key: slug, name: text }));
-const costCentresFile = z.array(z.looseObject({ key: slug, name: text, category: z.string().min(1) }));
+const costCategoriesFile = z.array(z.looseObject({ key: slug, name: text, allocateRevenue: z.boolean().optional(), allocateNonRevenue: z.boolean().optional() }));
+/** A centre may name the centre it sits under in `parent` (a centre key; it then sits in that centre's category). */
+const costCentresFile = z.array(z.looseObject({ key: slug, name: text, category: z.string().min(1), parent: z.string().min(1).optional() }));
 const currenciesFile = z.array(z.looseObject({
   code: z.string().regex(/^[A-Z]{3}$/, 'must be a three-letter currency code'), name: text,
   rates: z.array(z.looseObject({ kind: z.string().min(1), date, rate: amount })).optional(),
 }));
-const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({ outstanding: pendingByLedger(false).optional() })).optional() });
+const checkpointsFile = z.looseObject({ dates: z.record(z.string(), z.looseObject({ outstanding: pendingByLedger(false).optional(), costCentres: z.record(z.string(), costFigures).optional() })).optional() });
 const extraFileSchemas: Record<string, z.ZodType> = {
   'items.json': itemsFile, 'costCategories.json': costCategoriesFile, 'costCentres.json': costCentresFile, 'currencies.json': currenciesFile, 'checkpoints.json': checkpointsFile,
 };
@@ -159,13 +165,15 @@ export const numbersKind = (dataset: Pick<Dataset, 'expected'>) =>
 
 /**
  * What ten98-books can do with a voucher: `post` it through the ledger module, skip it because its type is not one of the
- * seeded eight (`unsupported-type`), or skip it because it has no lines to post (`no-entries`: a cancelled voucher or one
- * with no accounting effect; a voucher needs two lines here, so it cannot be represented yet). Seeder and comparison
- * share this so what is skipped is also what is left out of the figures compared.
+ * seeded eight (`unsupported-type`), post it as a void (`void`: a cancelled voucher without lines, which the ledger module
+ * posts as cancelled without lines so that it takes its number), or skip it because it has no lines and is not cancelled
+ * (`no-entries`: no accounting effect; a regular voucher needs two lines here). Seeder and comparison share this so what
+ * is skipped is also what is left out of the figures compared.
  */
-export function dispositionOf(voucher: VoucherEntry): 'post' | 'unsupported-type' | 'no-entries' {
+export function dispositionOf(voucher: VoucherEntry): 'post' | 'void' | 'unsupported-type' | 'no-entries' {
   if (!seededVoucherTypeKeys.includes(voucher.type)) return 'unsupported-type';
-  return voucher.lines.length === 0 ? 'no-entries' : 'post';
+  if (voucher.lines.length > 0) return 'post';
+  return voucher.status === 'cancelled' ? 'void' : 'no-entries';
 }
 
 /** `year` is the first day of the company's financial year that holds the voucher's date (numbers restart there). */
@@ -176,7 +184,7 @@ export type NumberCheck = { checked: number; matched: number; unnumbered: number
  * Compares the numbers ten98-books assigned (`assigned`: dataset voucher key to number, null for an optional voucher; a
  * posted-kind voucher missing from the map is not in the books) with `expectedNumber`. A difference is `explained` when
  * earlier vouchers of the same type and financial year (numbers restart each year, D-04) hold numbers in the dataset but
- * none here (cancelled without lines, optional, refused or absent) and their count accounts for the whole gap; otherwise
+ * none here (no lines and not cancelled, optional, refused or absent) and their count accounts for the whole gap; otherwise
  * it is a real difference. Shared by the seeder,
  * which knows which vouchers were refused, and the comparison, which reads the numbers back from the books.
  */
@@ -270,6 +278,15 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
       seen.add(key);
     }
   };
+  /** Master names equal under the product's name match key are one name: both spellings are named, so the dataset is fixed before a seed fails midway. */
+  const duplicateNames = (file: string, what: string, names: string[]) => {
+    const seen = new Map<string, string>();
+    for (const name of names) {
+      const first = seen.get(nameMatchKey(name));
+      if (first === undefined) { seen.set(nameMatchKey(name), name); continue; }
+      problem(file, `${what} "${name}": `, first === name ? 'the name is used more than once' : `is the same name as "${first}" under the name match key (names are compared without spaces and - . / , ( ) + * ; = ~ ? { } &, and in lower case)`);
+    }
+  };
 
   // Groups.
   duplicates('groups', 'group', groups.map(group => group.key));
@@ -285,12 +302,11 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
       path.add(up);
     }
   }
-  const lower = (names: string[]) => names.map(name => name.toLowerCase());
-  duplicates('groups', 'group name', lower(groups.map(group => group.name)));
+  duplicateNames('groups', 'group name', groups.map(group => group.name));
 
   // Ledgers.
   duplicates('ledgers', 'ledger', ledgers.map(ledger => ledger.key));
-  duplicates('ledgers', 'ledger name', lower(ledgers.map(ledger => ledger.name)));
+  duplicateNames('ledgers', 'ledger name', ledgers.map(ledger => ledger.name));
   duplicates('ledgers', 'standard ledger', ledgers.flatMap(ledger => ledger.standard ? [ledger.standard] : []));
   const ledgerKeys = new Set(ledgers.map(ledger => ledger.key));
   for (const ledger of ledgers) {
@@ -348,12 +364,27 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
   }
 
   // Cost categories and centres, currencies and checkpoints: references, and the lines that use them.
-  const categories = extras['costCategories.json'] as { key: string }[] | undefined;
-  const centres = extras['costCentres.json'] as { key: string; category: string }[] | undefined;
+  const categories = extras['costCategories.json'] as { key: string; name: string }[] | undefined;
+  const centres = extras['costCentres.json'] as { key: string; name: string; category: string; parent?: string }[] | undefined;
   const currencies = extras['currencies.json'] as { code: string }[] | undefined;
-  if (categories) duplicates('costCategories', 'cost category', categories.map(category => category.key));
+  if (categories) {
+    duplicates('costCategories', 'cost category', categories.map(category => category.key));
+    duplicateNames('costCategories', 'cost category name', categories.map(category => category.name));
+  }
   if (centres) {
     duplicates('costCentres', 'cost centre', centres.map(centre => centre.key));
+    // Centre names are unique across all of a company's centres, whatever their category.
+    duplicateNames('costCentres', 'cost centre name', centres.map(centre => centre.name));
+    const parentOf = new Map(centres.map(centre => [centre.key, centre.parent]));
+    for (const centre of centres) {
+      if (centre.parent === undefined) continue;
+      if (!parentOf.has(centre.parent)) { problem('costCentres', `centre "${centre.key}": `, `parent "${centre.parent}" is not a centre key in costCentres.json`); continue; }
+      const path = new Set([centre.key]);
+      for (let up: string | undefined = centre.parent; up !== undefined; up = parentOf.get(up)) {
+        if (path.has(up)) { problem('costCentres', `centre "${centre.key}": `, 'the centres form a cycle through "parent"'); break; }
+        path.add(up);
+      }
+    }
     const categoryKeys = new Set((categories ?? []).map(category => category.key));
     for (const centre of centres) if (!categoryKeys.has(centre.category)) problem('costCentres', `centre "${centre.key}": `, `category "${centre.category}" is not a cost category key in costCategories.json`);
   }
@@ -366,6 +397,8 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     const at = `ledger "${entry.key}": `;
     const { found, problems } = readLedgerBills(entry.extras);
     for (const message of problems) problem('ledgers', at, message);
+    const costSetting = (entry.extras as { costCentres?: unknown } | undefined)?.costCentres;
+    if (costSetting !== undefined && typeof costSetting !== 'boolean') problem('ledgers', at, 'extras.costCentres must be true or false (whether the ledger takes cost centres)');
     if (!found.openingBills.length) continue;
     if (!entry.opening) { problem('ledgers', at, 'has opening bills but no opening balance'); continue; }
     let total = 0n;
@@ -459,6 +492,17 @@ export function parseDataset(raw: RawDataset, label = 'dataset'): Dataset {
     if (figures.outstanding) billAmounts('checkpoints', `dates "${day}" outstanding`, figures.outstanding);
   }
   for (const name of ['receivables', 'payables'] as const) if (expected[name]) fits('expected', `${name}.pendingTotal: `, expected[name]!.pendingTotal);
+  // Cost centre figures name centres by key and hold amounts the company's currency can write.
+  const costFigureCheck = (file: string, where: string, byCentre: Record<string, { debit: string; credit: string }>) => {
+    for (const [key, figure] of Object.entries(byCentre)) {
+      if (!centreKeys.has(key)) problem(file, `${where} "${key}": `, 'not a centre key in costCentres.json');
+      for (const side of ['debit', 'credit'] as const) fits(file, `${where} "${key}", ${side}: `, figure[side]);
+    }
+  };
+  if (expected.costCentres) costFigureCheck('expected', 'costCentres.centres', expected.costCentres.centres);
+  for (const [day, figures] of Object.entries((extras['checkpoints.json'] as { dates?: Record<string, { costCentres?: Record<string, { debit: string; credit: string }> }> } | undefined)?.dates ?? {})) {
+    if (figures.costCentres) costFigureCheck('checkpoints', `dates "${day}" costCentres`, figures.costCentres);
+  }
   if (expected.balanceSheet) {
     fits('expected', 'balanceSheet.total: ', expected.balanceSheet.total);
     if (expected.balanceSheet.closingStockInAssets !== undefined) fits('expected', 'balanceSheet.closingStockInAssets: ', expected.balanceSheet.closingStockInAssets);
