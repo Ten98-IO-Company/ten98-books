@@ -92,7 +92,7 @@ test('the migration backfills the default chart for a company created before it'
   assert.equal(chart.groups.length, 28);
   assert.deepEqual(chart.groups, expected);
   assert.deepEqual(chart.ledgers, ['cash:cash_in_hand', 'profit_and_loss:']);
-  assert.deepEqual(chart.types, ['contra:contra', 'credit_note:credit_note', 'debit_note:debit_note', 'journal:journal', 'payment:payment', 'purchase:purchase', 'receipt:receipt', 'sales:sales']);
+  assert.deepEqual(chart.types, ['contra:contra', 'credit_note:credit_note', 'debit_note:debit_note', 'journal:journal', 'payment:payment', 'purchase:purchase', 'receipt:receipt', 'sales:sales', 'stock_journal:stock_journal']);
 });
 
 test('company creation seeds the same chart, and seeding again changes nothing', async () => {
