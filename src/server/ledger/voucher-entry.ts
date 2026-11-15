@@ -46,7 +46,7 @@ export async function nextNumber(context: LedgerContext, voucherTypeId: string, 
  * unbalanced or break a voucher type's rule, because it is not posted.
  */
 export async function balancePreview(context: LedgerContext, value: unknown): Promise<BalancePreview> {
-  const input = parseInput(balancePreviewInput, value, path => path[0] === 'date' ? 'the date' : path[0] === 'voucherId' ? 'the voucher' : path[0] === 'lines' ? `line ${Number(path[1] ?? 0) + 1}`
+  const input = parseInput(balancePreviewInput, value, path => path[0] === 'date' ? 'the date' : path[0] === 'voucherId' ? 'the voucher' : path[0] === 'lines' ? (path[1] === undefined ? 'the lines' : `line ${Number(path[1]) + 1}`)
     : path[0] === 'ledgers' ? (path[1] === undefined ? 'the ledgers' : `ledger ${Number(path[1]) + 1} of the ledgers`) : 'the preview');
   const { client, company } = context;
   const lines = input.lines.map((line, index) => {

@@ -5,7 +5,7 @@ import { errMsg } from '../../lib/api'
 import { longDate } from '../../lib/reports'
 import type { Side, VoucherKind } from '../../lib/ledger'
 import {
-  againstAmount, allocated, billDueDate, billKindOf, billKindOrder, billKindTitles, billsCover, nextBillRow, sideOf,
+  againstAmount, allocated, allocationProblem, billDueDate, billKindOf, billKindOrder, billKindTitles, billsCover, nextBillRow, sideOf,
   parseCreditPeriod, parseEntryAmount, settleable, type BillDraft, type PendingChoice,
 } from '../../lib/voucher-entry'
 import { DialogKeys } from '../KeyboardShell'
@@ -87,11 +87,7 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
 
   const [over, setOver] = useState('')
   /** Rows above the line's amount (or netting to its other side) are refused here, before the server would. */
-  function overProblem(rows: readonly BillDraft[]): string {
-    const taken = allocated(rows, line.side, exponent)
-    return taken > line.amount ? `The rows add up to ${formatMoney(taken, exponent)}, more than the line's ${formatMoney(line.amount, exponent)}: lower a row's amount.`
-      : taken < 0n ? 'The rows add up to the other side of the line: change a row\'s side or amount.' : ''
-  }
+  const overProblem = (rows: readonly BillDraft[]): string => allocationProblem(rows, line.side, line.amount, exponent)
 
   function accept(rows: BillDraft[] = latest.current): boolean {
     const kept = rows.filter(row => row.method !== '' && row.amount !== '')
@@ -126,7 +122,8 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
 
   const title = `Bills of the line, up to ${formatMoney(line.amount, exponent)} ${line.side}`
   return <DialogKeys name='Bills' open onAccept={() => accept()}>
-    <Stack gap={3}>
+    {/* A row being corrected takes the refusal away while it is typed; the check runs again when it commits. */}
+    <Stack gap={3} onInput={() => setOver('')}>
       {error ? <Alert tone='danger'>The pending bills could not be loaded: {error}</Alert>
         : !pending ? <StatusLine busy>Loading the pending bills…</StatusLine>
         : <>

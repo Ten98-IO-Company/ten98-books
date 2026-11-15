@@ -5,7 +5,7 @@ import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtim
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { accountSide, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
+import { accountSide, createSaver, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
 import { join } from 'node:path';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
 import { seedDataset } from '../src/server/demo/seed.ts';
@@ -388,4 +388,28 @@ test('round 2, item 12: the balance preview also reports the ledgers named in `l
   assert.deepEqual((await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, viewer)).body, { balances: [{ ledgerId: bank, balance: '750.00' }] });
   const intruder = await invite(owner.browser, other.id, 'admin');
   assert.deepEqual(await preview({ date: '2026-01-31', lines: [], ledgers: [bank] }, intruder), { status: 404, body: { error: companyNotFound, code: 'not_found' } });
+});
+
+test('round 3, item 1: a refused body, changed, saved with its answer lost after the commit, then retried, is ONE voucher', async () => {
+  const c = await company('Entry Duplicate Guard');
+  const rent = await c.ledger('Guard Rent', 'indirect_expenses');
+  const cash = c.books.ledger('Cash');
+  let made = 0;
+  const saver = createSaver<any>(() => `guard-${randomUUID()}-${++made}`, error => (error as { status?: number }).status);
+  const body = (date: string) => ({ voucherTypeId: c.books.type('payment'), date, lines: [{ ledgerId: rent, side: 'Dr', amount: '10' }, { ledgerId: cash, side: 'Cr', amount: '10' }] });
+  // The real server answers; `lose` throws a gateway error after the server committed, as a lost answer would.
+  const send = (date: string, lose = false) => async (key: string) => {
+    const answer = await owner.browser.call(`${c.base}/vouchers`, { idempotencyKey: key, ...body(date) });
+    if (lose || answer.status >= 300) throw Object.assign(new Error('failed'), { status: lose ? 502 : answer.status });
+    return answer.body;
+  };
+  const refused = await saver.save(JSON.stringify(body('2025-12-31')), send('2025-12-31'));
+  assert.deepEqual([refused?.outcome, refused?.outcome !== 'saved' && refused?.status], ['refused', 400], 'before the books begin: a definite refusal');
+  const lost = await saver.save(JSON.stringify(body('2026-01-05')), send('2026-01-05', true));
+  assert.equal(lost?.outcome, 'unknown');
+  const retried = await saver.save(JSON.stringify(body('2026-01-05')), send('2026-01-05'));
+  assert.equal(retried?.outcome, 'saved');
+  assert.equal(retried?.outcome === 'saved' && retried.answer.replayed, true, 'the server replays the committed voucher');
+  const listed = (await ok(owner.browser.call(`${c.base}/vouchers?from=2026-01-01&to=2026-12-31`))).vouchers;
+  assert.equal(listed.length, 1, 'one voucher, not two');
 });

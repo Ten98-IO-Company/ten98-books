@@ -71,6 +71,13 @@ export function againstAmount(bill: PendingChoice, unallocated: bigint, exponent
   return amount > 0n ? formatMoney(amount, exponent) : '';
 }
 
+/** Why the rows cannot stand for the line: they add up to more than it, or to its other side; '' when they can. */
+export function allocationProblem(rows: readonly BillDraft[], lineSide: Side, lineAmount: bigint, exponent: MoneyExponent): string {
+  const taken = allocated(rows, lineSide, exponent);
+  if (taken > lineAmount) return `The rows add up to ${formatMoney(taken, exponent)}, more than the line's ${formatMoney(lineAmount, exponent)}: lower a row's amount.`;
+  return taken < 0n ? 'The rows add up to the other side of the line: change a row\'s side or amount.' : '';
+}
+
 /** Whether the rows cover the whole line: the panel then closes by itself (observed). */
 export const billsCover = (rows: readonly BillDraft[], lineSide: Side, lineAmount: bigint, exponent: MoneyExponent): boolean =>
   rows.length > 0 && allocated(rows, lineSide, exponent) === lineAmount && rows.every(row => row.method !== '' && row.amount !== '');

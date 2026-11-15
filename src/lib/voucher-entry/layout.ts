@@ -125,7 +125,7 @@ export function relayLines(from: EntryDraft & { bills: Readonly<Record<string, r
   if (from.account === '' && !kept.length) return { kind: to.kind, layout: to.layout, account: '', lines: [blank(to.layout === 'single' ? particularsSide(to.kind) : firstLineSide(to.kind))] };
   if (from.layout === 'single') {
     const total = particularsTotal(kept, exponent);
-    const sided = kept.map(line => ({ ...line, side: particularsSide(from.kind) as Side | '' }));
+    const sided: EntryLine[] = kept.map(line => ({ ...line, side: particularsSide(from.kind) }));
     const accountLine = (side: Side): EntryLine[] => from.account === '' ? [] : [{ key: key(), side, ledger: from.account, amount: total === 0n ? '' : formatMoney(total, exponent) }];
     const sameSides = accountSide(from.kind) === accountSide(to.kind);
     if (to.layout === 'single' && sameSides) return { kind: to.kind, layout: 'single', account: from.account, lines: sided.length ? sided : [blank(particularsSide(to.kind))] };

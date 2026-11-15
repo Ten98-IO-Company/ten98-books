@@ -92,6 +92,20 @@ export type DraftAction =
   /** The draft kept in the tab before a sign-in, taken back as it was. */
   | { type: 'restore'; state: DraftState };
 
+/**
+ * What may change the draft while a save runs or its outcome is unknown: only the save's own steps (the next voucher
+ * after a save, a draft restored after a sign-in). Every edit, switch and line command waits, so "Check and retry" sends
+ * exactly the voucher that may already be in the books.
+ */
+export const allowedWhileLocked = (action: DraftAction): boolean => action.type === 'next' || action.type === 'restore';
+
+/**
+ * The commands that change the draft, each switched off while it is locked (the screen registers each with
+ * `enabled: !locked`, checked by a test). Moving the cursor, the leave keys and "Check and retry" stay on.
+ */
+export const draftCommands = ['entry.accept', 'entry.voucher.date', 'entry.voucher.list', 'entry.voucher.mode', 'entry.voucher.payment',
+  'entry.voucher.receipt', 'entry.voucher.contra', 'entry.voucher.journal', 'entry.line.remove'] as const;
+
 export const lineKey = (serial: number): string => `line-${serial}`;
 const serialOf = (lines: readonly EntryLine[], serial: number) => lines.reduce((top, line) => Math.max(top, Number(/^line-(\d+)$/.exec(line.key)?.[1] ?? 0) + 1), serial);
 /** Bill rows of the lines that are still there. */

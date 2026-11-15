@@ -37,6 +37,12 @@ export function writeWorkingDate(source: StoreSource, userId: string, companyId:
   if (isCalendarDate(date)) writeStored(source, workingDateKey(userId, companyId), date);
 }
 
+/**
+ * The working date a day book period gives: its day when the user chose one day there (a range gives none). The day the
+ * day book opens on by default is never written: it is the last voucher date already.
+ */
+export const workingDateFromPeriod = (period: { from: string; to: string }): string | null => period.from === period.to ? period.from : null;
+
 /** The tab's session storage, or null where the browser blocks it. */
 export const sessionStore: StoreSource = () => (typeof window === 'undefined' ? null : window.sessionStorage);
 /** The browser's local storage, or null where it is blocked. */

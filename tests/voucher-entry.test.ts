@@ -5,12 +5,13 @@ import { balancePreviewInput, counterLedgerQuery, ledgerErrorCodes, nextNumberQu
 import {
   afterDate, afterDeclinedAccept, againstAmount, allocated, appendedLine, billDueDate, billRowBody, billsCover,
   blankDraft, cashModeKey, cashRuleProblem, creditPeriodText, defaultBillMethod, detailSteps, differenceText, draftDirty, draftReducer,
-  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, keyForSave, saveOutcome, negativeCashWarning,
+  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, keyForSend, saveOutcome, createSaver, allowedWhileLocked, draftCommands, allocationProblem, lineColumns, type DraftAction, negativeCashWarning,
   nextBillRow, openBills, parseCreditPeriod, parseEntryAmount, parseEntryDate, proposedAmount, readLayout, refusalPlace, refusalPlaces,
   relayLines, toVoucherBody, writeLayout, bodyProblems, billRowProblem, cashInHandIds, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
 } from '../src/lib/voucher-entry/index.ts';
 import { MONEY_MAX, formatMoney } from '@ten98/runtime';
-import { readWorkingDate, startingWorkingDate, workingDateKey, writeWorkingDate, type KeyStore } from '../src/lib/working-date.ts';
+import { readWorkingDate, startingWorkingDate, workingDateFromPeriod, workingDateKey, writeWorkingDate, type KeyStore } from '../src/lib/working-date.ts';
+import { readFileSync } from 'node:fs';
 
 const line = { ledgerId: randomUUID().toUpperCase(), side: 'Dr', amount: '12.50' };
 
@@ -460,7 +461,98 @@ test('round 2, item 4: no answer, a server or gateway error is an unknown outcom
   assert.equal(saveOutcome(401), 'signed-out');
   let made = 0;
   const make = () => `key-new-${++made}`;
-  assert.equal(keyForSave({ key: 'key-1', refusedBody: null }, 'body-a', make), 'key-1', 'nothing refused: the voucher\'s key (an unknown outcome resends with it)');
-  assert.equal(keyForSave({ key: 'key-1', refusedBody: 'body-a' }, 'body-a', make), 'key-1', 'the same refused body again: the same key');
-  assert.equal(keyForSave({ key: 'key-1', refusedBody: 'body-a' }, 'body-b', make), 'key-new-1', 'a changed body after a refusal: a new key');
+  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: null }, 'body-a', make), { key: 'key-1', refusedBody: null }, 'nothing refused: the same key');
+  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: 'body-a' }, 'body-a', make), { key: 'key-1', refusedBody: 'body-a' }, 'the refused body again: the same key');
+  assert.deepEqual(keyForSend({ key: 'key-1', refusedBody: 'body-a' }, 'body-b', make), { key: 'key-new-1', refusedBody: null }, 'a changed body: a new key, and the refusal is forgotten');
+});
+
+/** A failure with an HTTP status, as the api helper throws it. */
+const failure = (status: number | undefined) => Object.assign(new Error(`status ${status}`), { status });
+const statusOf = (error: unknown) => error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+
+test('round 3, item 1: refuse, change, unknown, retry sends the same key twice; only a changed body after a refusal gets a new one', async () => {
+  let made = 0;
+  const saver = createSaver<string>(() => `key-${++made}`, statusOf);
+  const sent: string[] = [];
+  const answer = (outcome: number | 'ok') => async (key: string) => { sent.push(key); if (outcome === 'ok') return key; throw failure(outcome); };
+  assert.equal((await saver.save('body-a', answer(400)))?.outcome, 'refused', 'a locked period, say');
+  assert.equal((await saver.save('body-b', answer(502)))?.outcome, 'unknown', 'changed, then the answer is lost after the commit');
+  assert.equal((await saver.save('body-b', answer('ok')))?.outcome, 'saved', 'Check and retry');
+  assert.deepEqual(sent, ['key-1', 'key-2', 'key-2'], 'the retry goes under the same key, so the server replays it');
+  assert.equal(saver.key(), 'key-3', 'the next voucher has a new key');
+  // An unknown outcome never renews the key, whatever the body; a 401 keeps it for the restored draft.
+  const second = createSaver<string>(() => `k-${++made}`, statusOf);
+  const before = second.key();
+  for (const status of [undefined, 500, 503, 401]) await second.save('body', answer(status ?? 0));
+  assert.equal(second.key(), before);
+});
+
+test('round 3, items 1 and 3: a second press while a save runs is dropped and renews nothing (the single flight)', async () => {
+  let made = 0;
+  const saver = createSaver<string>(() => `key-${++made}`, statusOf);
+  await saver.save('body-a', async () => { throw failure(400); });
+  let release = () => {};
+  const sent: string[] = [];
+  const first = saver.save('body-b', key => new Promise(resolve => { sent.push(key); release = () => resolve(key); }));
+  const second = await saver.save('body-c', async key => { sent.push(key); return key; });
+  assert.equal(second, undefined, 'dropped while the first runs');
+  release();
+  assert.equal((await first)?.outcome, 'saved');
+  assert.deepEqual(sent, ['key-2'], 'one send, under the key of the changed body; the dropped press made no key');
+  assert.equal(made, 3, 'key-1, key-2 for the changed body, key-3 for the next voucher: nothing for the dropped press');
+});
+
+test('round 3, item 2: while locked nothing changes the draft: only the save\'s own steps pass, and every draft command is off', () => {
+  const actions: DraftAction[] = [
+    { type: 'date', date: '2026-01-01' }, { type: 'account', ledger: 'l' }, { type: 'lines', lines: [] }, { type: 'narration', text: 'n' },
+    { type: 'bills', row: 'r', rows: [] }, { type: 'relaid', relaid: { kind: 'payment', layout: 'single', account: '', lines: [] } },
+    { type: 'next' }, { type: 'restore', state: blankDraft('payment', 'single', '2026-01-01') },
+  ];
+  assert.deepEqual(actions.filter(allowedWhileLocked).map(action => action.type), ['next', 'restore']);
+  // Every command the voucher screen registers is either a draft command, registered with `enabled: !locked`, or one
+  // that only moves the cursor, leaves, or is off for good.
+  const screens = ['VoucherEntryScreen.tsx', 'LinesGrid.tsx', 'BillPanel.tsx'].map(name => readFileSync(new URL(`../src/components/vouchers/${name}`, import.meta.url), 'utf8')).join('\n');
+  const calls = [...screens.matchAll(/useAppCommand\('([a-z.-]+)'([^\n]*)/g)].map(match => ({ id: match[1], rest: match[2] }));
+  const harmless = ['entry.next-field', 'entry.previous-field', 'entry.skip-account', 'entry.cancel'];
+  for (const call of calls) {
+    if ((draftCommands as readonly string[]).includes(call.id)) assert.match(call.rest, /enabled: !locked/, `${call.id} is off while locked`);
+    else if (!harmless.includes(call.id)) assert.match(call.rest, /enabled: false/, `${call.id} is off for good`);
+  }
+  for (const id of draftCommands) assert.ok(calls.some(call => call.id === id), `${id} is registered`);
+  const screen = readFileSync(new URL('../src/components/vouchers/VoucherEntryScreen.tsx', import.meta.url), 'utf8');
+  assert.match(screen, /const setLines = \(lines: EntryLine\[\]\) => \{\n\s+if \(draft\.isLocked\(\)\) return/, 'line changes wait while locked');
+  assert.match(screen, /setFailure\(previous => previous\?\.unknown \? previous : null\)/, 'a line change never clears an unknown outcome');
+  assert.match(screen, /if \(!quit && !draft\.isLocked\(\)\)/, 'Escape empties nothing while locked');
+});
+
+test('round 3, mutation gaps: the panel\'s over-allocation, the amount\'s required, both working-date fixes, both viewer hides', async () => {
+  const row = (amount: string, side: 'Dr' | 'Cr' = 'Cr'): BillDraft => ({ key: amount + side, method: 'on_account', bill: '', name: '', credit: '', amount, side });
+  assert.match(allocationProblem([row('150.00')], 'Cr', 10000n, 2), /150\.00, more than the line's 100\.00/);
+  assert.match(allocationProblem([row('20.00'), row('50.00', 'Dr')], 'Cr', 10000n, 2), /other side/);
+  assert.equal(allocationProblem([row('60.00'), row('40.00')], 'Cr', 10000n, 2), '');
+  const bills = readFileSync(new URL('../src/components/vouchers/BillPanel.tsx', import.meta.url), 'utf8');
+  assert.match(bills, /if \(problem\) return context\.column === 'side' \? problem : undefined/, 'the row\'s last cell holds on an over-allocation');
+  assert.match(bills, /const problem = overProblem\(kept\)\n\s+setOver\(problem\)\n\s+if \(problem\) return false/, 'accept refuses it too');
+  const lists = Object.fromEntries((['', 'Dr', 'Cr'] as const).map(side => [side, { defaults: [], all: [], closed: false }])) as unknown as Parameters<typeof lineColumns>[0]['lists'];
+  const columns = lineColumns({ kind: 'journal', layout: 'double', locked: false, firstKey: 'line-1', lists, exponent: 2 });
+  assert.equal(columns.find(column => column.id === 'amount')?.required, true, 'an amount that rounds to zero keeps the cursor in its cell');
+  const side = columns.find(column => column.id === 'side')?.readOnly;
+  assert.ok(typeof side === 'function' && side({ key: 'line-1', values: { side: 'Dr' } }) && !side({ key: 'line-1', values: { side: 'Cr' } }) && !side({ key: 'line-2', values: { side: 'Dr' } }));
+  assert.ok(lineColumns({ kind: 'payment', layout: 'single', locked: true, firstKey: 'line-1', lists, exponent: 2 }).every(column => column.readOnly === true), 'locked: every cell read-only');
+  assert.equal(workingDateFromPeriod({ from: '2026-01-05', to: '2026-01-05' }), '2026-01-05');
+  assert.equal(workingDateFromPeriod({ from: '2026-01-01', to: '2026-01-31' }), null);
+  const dayBook = readFileSync(new URL('../src/routes/app/c.$companyId.reports_.day-book.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(dayBook, /useEffect/, 'the day book writes no working date when it opens');
+  assert.match(dayBook, /const choosePeriod = \(period: ReportPeriod\) => \{\n\s+const day = workingDateFromPeriod\(period\)\n\s+if \(day\) writeWorkingDate/);
+  assert.match(dayBook, /onChange: choosePeriod/);
+  // The cached report defaults are dropped after a save (navigation.ts cannot be imported here: extension-less imports).
+  const navigation = readFileSync(new URL('../src/components/reports/navigation.ts', import.meta.url), 'utf8');
+  assert.match(navigation, /export const forgetDefaults = \(companyId: string\): void => \{ defaults\.delete\(companyId\) \}/);
+  assert.match(navigation, /let pending = defaults\.get\(companyId\)/, 'loadDefaults reads that cache');
+  assert.match(readFileSync(new URL('../src/components/vouchers/VoucherEntryScreen.tsx', import.meta.url), 'utf8'), /onWorkingDate\(voucher\.date\)\n\s+\/\/ The reports' cached[^\n]*\n\s+forgetDefaults\(company\.id\)/, 'a save drops them');
+  const shell = readFileSync(new URL('../src/components/KeyboardShell.tsx', import.meta.url), 'utf8');
+  assert.match(shell, /\.\.\.canWrite \? \[\{ id: 'transactions'/, 'go-to: no Vouchers for viewers');
+  const app = readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8');
+  assert.match(app, /sections\.filter\(section => section\.id !== 'vouchers' \|\| company\?\.role !== 'viewer'\)/, 'sidebar: no Vouchers for viewers');
+  assert.match(app, /items: offered\.map\(/);
 });

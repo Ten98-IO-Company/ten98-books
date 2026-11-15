@@ -13,9 +13,9 @@ export type BodyInput = EntryDraft & {
 
 /** The complete lines in body order with their sides; single entry adds the Account line, for the total, last. */
 export function bodyLines(draft: EntryDraft, exponent: MoneyExponent): { key: string | null; side: Side; ledger: string; amount: string }[] {
-  if (draft.layout === 'double') return draft.lines.filter(isCompleteLine).map(line => ({ key: line.key, side: line.side as Side, ledger: line.ledger, amount: line.amount }));
-  const particulars = draft.lines.filter(line => line.ledger !== '' && line.amount !== '')
-    .map(line => ({ key: line.key as string | null, side: particularsSide(draft.kind), ledger: line.ledger, amount: line.amount }));
+  if (draft.layout === 'double') return draft.lines.flatMap(line => isCompleteLine(line) && line.side !== '' ? [{ key: line.key, side: line.side, ledger: line.ledger, amount: line.amount }] : []);
+  const particulars: { key: string | null; side: Side; ledger: string; amount: string }[] = draft.lines.filter(line => line.ledger !== '' && line.amount !== '')
+    .map(line => ({ key: line.key, side: particularsSide(draft.kind), ledger: line.ledger, amount: line.amount }));
   const total = particularsTotal(draft.lines, exponent);
   return draft.account === '' || total === 0n ? particulars
     : [...particulars, { key: null, side: accountSide(draft.kind), ledger: draft.account, amount: formatMoney(total, exponent) }];

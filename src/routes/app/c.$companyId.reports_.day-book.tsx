@@ -7,7 +7,7 @@ import { ReportTable } from '../../components/reports/ReportTable'
 import { useCursorPages, useReportScreen } from '../../components/reports/useReportScreen'
 import type { Wire } from '../../lib/money'
 import { registerRange, type DayBookReport, type DayBookRow, type ReportPeriod } from '../../lib/reports'
-import { sessionStore, writeWorkingDate } from '../../lib/working-date'
+import { sessionStore, workingDateFromPeriod, writeWorkingDate } from '../../lib/working-date'
 import { useApp } from '../../lib/app-context'
 
 /**
@@ -37,7 +37,8 @@ function DayBookScreen() {
   const userId = useApp().me.user.id
   // A day the user chooses here becomes the tab's working date (observed); the default day the screen opens on does not.
   const choosePeriod = (period: ReportPeriod) => {
-    if (period.from === period.to) writeWorkingDate(sessionStore, userId, screen.company.id, period.from)
+    const day = workingDateFromPeriod(period)
+    if (day) writeWorkingDate(sessionStore, userId, screen.company.id, day)
     screen.setPeriod(period)
   }
   return <ReportScreen title='Day book' search={search} periodKind='day' status={screen.status} error={screen.error} onRetry={screen.report.reload}

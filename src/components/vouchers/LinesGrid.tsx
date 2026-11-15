@@ -3,18 +3,19 @@ import { useMemo, type Ref } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { useAppCommand } from '../KeyboardShell'
 import {
-  amountText, balanceText, firstLineSide, kindTitles, sideOf, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
+  amountText, balanceText, kindTitles, lineColumns, sideOf, ledgerOptions, lineTotals, minorOf, particularsTotal,
   type EntryKind, type EntryLayout, type EntryLedger, type EntryLine, type LedgerLists,
 } from '../../lib/voucher-entry'
 import type { Side } from '../../lib/ledger'
 
+const balanceOf = (ledger: string, balances: ReadonlyMap<string, bigint>, exponent: MoneyExponent): string => { const balance = ledger ? balances.get(ledger) : undefined; return balance === undefined ? '' : balanceText(balance, exponent) }
+
 /** Lines as the grid holds them, with each line's resulting balance as a read-only cell. */
 export const toGridRows = (lines: readonly EntryLine[], balances: ReadonlyMap<string, bigint>, exponent: MoneyExponent): EntryGridRow[] =>
-  lines.map(line => ({ key: line.key, values: { side: line.side, ledger: line.ledger, amount: line.amount, balance: line.ledger && balances.has(line.ledger) ? balanceText(balances.get(line.ledger)!, exponent) : '' } }))
+  lines.map(line => ({ key: line.key, values: { side: line.side, ledger: line.ledger, amount: line.amount, balance: balanceOf(line.ledger, balances, exponent) } }))
 export const fromGridRows = (rows: readonly EntryGridRow[]): EntryLine[] =>
   rows.map(row => ({ key: row.key, side: sideOf(row.values.side), ledger: row.values.ledger ?? '', amount: row.values.amount ?? '' }))
 
-const sides = [{ value: 'Dr', label: 'Dr', keys: ['B', 'D'] }, { value: 'Cr', label: 'Cr', keys: ['T', 'C'] }] as const
 
 /**
  * The voucher's lines in the design system's entry grid: a side (double entry; the first line's is fixed by the type),
@@ -41,17 +42,7 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
     const byside: Record<Side | '', LedgerLists> = { '': of(''), Dr: of('Dr'), Cr: of('Cr') }
     return byside
   }, [kind, layout, ledgers])
-  const listOf = (row: EntryGridRow) => lists[layout === 'double' ? sideOf(row.values.side) : '']
-  const columns = useMemo<EntryGridColumn[]>(() => [
-    ...layout === 'double' ? [{ id: 'side', label: 'Dr or Cr', type: 'side' as const, sides, required: true,
-      // Fixed by the type on the first line (observed); a line that became first another way keeps its side editable.
-      readOnly: (row: EntryGridRow) => locked || (row.key === lines[0]?.key && row.values.side === firstLineSide(kind)) }] : [],
-    { id: 'ledger', label: 'Ledger', type: 'lookup', readOnly: locked,
-      options: (row: EntryGridRow) => listOf(row).defaults, allOptions: (row: EntryGridRow) => listOf(row).all, showAllLabel: 'Show all ledgers' },
-    // Required: an amount that rounds to zero empties the cell, and the cursor stays there instead of moving on (observed: no line).
-    { id: 'amount', label: 'Amount', type: 'amount', readOnly: locked, required: true, parse: (text: string) => parseEntryAmount(text, exponent) },
-    { id: 'balance', label: 'Resulting balance', type: 'text', readOnly: true },
-  ], [layout, locked, lines[0]?.key, lists, exponent])
+  const columns = useMemo<EntryGridColumn[]>(() => lineColumns({ kind, layout, locked, firstKey: lines[0]?.key, lists, exponent }), [kind, layout, locked, lines[0]?.key, lists, exponent])
   const rows = useMemo(() => toGridRows(lines, balances, exponent), [lines, balances, exponent])
   const footer = useMemo(() => {
     if (layout === 'single') return { amount: amountText(particularsTotal(lines, exponent), exponent) }
@@ -63,15 +54,15 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
     footer={footer} footerLabel='Total' panel={panel} apiRef={apiRef} onEnd={onEnd} onCellCommit={onCellCommit} announce={announce}
     editKey={null} openListOnAppend escapeMode='clear'
     labels={{ cell: (column, row) => `${column}, line ${row}`, required: 'Enter an amount above zero.' }}>
-    <LineCommands />
+    <LineCommands locked={locked} />
   </EntryGrid>
 }
 
 /** Ctrl+D removes the line with the cursor in its ledger cell, and does nothing in an amount cell (observed). */
-function LineCommands() {
+function LineCommands({ locked }: { locked: boolean }) {
   const grid = useEntryGrid()
-  // From the bar, focus comes back to the cell either way.
-  useAppCommand('entry.line.remove', () => { if (grid.activeColumn === 'ledger') grid.removeRow(); else if (grid.activeRow) grid.focusCell(grid.activeRow) })
+  // From the bar, focus comes back to the cell either way; while the draft is locked it changes nothing.
+  useAppCommand('entry.line.remove', () => { if (grid.activeColumn === 'ledger') grid.removeRow(); else if (grid.activeRow) grid.focusCell(grid.activeRow) }, { enabled: !locked })
   return null
 }
 

@@ -34,8 +34,12 @@ export const lastTypeKey = (userId: string, companyId: string) => `voucherType:$
 
 const controlOf = (root: HTMLElement | null, field: Field) =>
   root?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-voucher-field="${field}"] input:not([type="hidden"]), [data-voucher-field="${field}"] textarea`) ?? null
-const fieldOf = (root: HTMLElement | null, element: Element | null): Field | null =>
-  (element && root?.contains(element) ? element.closest<HTMLElement>('[data-voucher-field]')?.dataset.voucherField as Field | undefined : undefined) ?? null
+const fields: readonly Field[] = ['date', 'account', 'total', 'narration']
+const isField = (value: string | undefined): value is Field => fields.some(field => field === value)
+const fieldOf = (root: HTMLElement | null, element: Element | null): Field | null => {
+  const name = element && root?.contains(element) ? element.closest<HTMLElement>('[data-voucher-field]')?.dataset.voucherField : undefined
+  return isField(name) ? name : null
+}
 
 /**
  * Voucher entry, create (docs/VOUCHERS.md): payment, receipt, contra and journal, in single or double entry, with the
@@ -86,6 +90,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const dateOrigin = useRef<FocusOrigin>({ field: 'account' })
   const [accountError, setAccountError] = useState<string>()
   const [prompt, setPrompt] = useState(false)
+  const promptHolder = useRef<HTMLElement>(null)
   const [announced, setAnnounced] = useState('')
   // The screen's own notices (a refused switch) live apart from the grid's announcements, so a commit does not overwrite them.
   const [notice, setNotice] = useState('')
@@ -100,12 +105,18 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const [confirm, dialog] = useConfirm()
   const dirty = draftDirty(state) || typing
   const leave = useLeave({ to: '/app/c/$companyId', params: { companyId: company.id } })
+  // In an unknown outcome the voucher may already be in the books: the question says so, since leaving forgets its key.
+  const unknownRef = useRef(false)
+  unknownRef.current = draft.unknown !== null
   const askToLeave = useCallback(async () => {
     // Text still in a cell's editor is committed first, then what was entered decides (a guard call with nothing entered passes).
     grid.current?.commit()
     // Text the grid dropped as focus left the cell (it named no ledger) counts too: it was typed (the guard asks).
-    if (!draftDirty(latest.current) && !typingRef.current) return true
-    const yes = await confirm({ title: `Leave this ${kindTitles[latest.current.kind].toLowerCase()} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' })
+    if (!draftDirty(latest.current) && !typingRef.current && !unknownRef.current) return true
+    const kind = kindTitles[latest.current.kind].toLowerCase()
+    const yes = await confirm(unknownRef.current
+      ? { title: `Leave this ${kind}? It may already be saved`, description: 'No definite answer came for its save, so it may be in the books. Leaving forgets its key: entering it again could save it twice. Check and retry first, or look in the day book after leaving.', confirmLabel: 'Leave', cancelLabel: 'Stay' }
+      : { title: `Leave this ${kind} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' })
     // Kept: back to where the cursor was, also when the question came from a link or a key outside the voucher.
     if (!yes) window.setTimeout(() => focus(afterDate(lastOrigin.current)), 0)
     return yes
@@ -114,21 +125,26 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Focus ----
 
-  const focus = useCallback((target: EntryFocus, attempt = 0) => {
+  const mounted = useRef(true)
+  // Set again on every mount: development mode mounts effects twice, running the cleanup in between.
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  /** Moves the cursor; a retry stops once the screen is gone or the user has put focus somewhere else meanwhile. */
+  const focus = useCallback((target: EntryFocus, attempt = 0, from: Element | null = document.activeElement) => {
+    if (!mounted.current || (attempt > 0 && document.activeElement !== from && document.activeElement !== document.body)) return
     if ('field' in target) {
       const control = controlOf(root.current, target.field)
       // A field the layout no longer has (the Account after a switch to double entry): the layout's first field.
-      if (!control) { if (attempt === 0 && target.field !== 'date') focus(firstField(), 1); return }
+      if (!control) { if (attempt === 0 && target.field !== 'date') focus(firstField(), 1, from); return }
       control.focus(); control.select?.()
       return
     }
     const { row, column, open, edit } = target.cell
     // A line that went away (a type switch re-laid the lines) returns to the layout's first field instead.
-    if (!latest.current.lines.some(line => line.key === row)) { if (attempt === 0) window.setTimeout(() => focus(firstField(), 1), 0); return }
+    if (!latest.current.lines.some(line => line.key === row)) { if (attempt === 0) window.setTimeout(() => focus(firstField(), 1, from), 0); return }
     const done = grid.current?.focusCell(row, column, { open, edit }) ?? false
     // A line the screen has just added renders on the next frame.
     // (A timer, not an animation frame: frames do not run in a hidden or background tab.)
-    if (!done && attempt < 5) window.setTimeout(() => focus(target, attempt + 1), 16)
+    if (!done && attempt < 5) window.setTimeout(() => focus(target, attempt + 1, from), 16)
   }, [])
   const focusSoon = (target: EntryFocus) => window.setTimeout(() => focus(target), 0)
   const firstField = (from = latest.current): EntryFocus => from.layout === 'single' ? { field: 'account' } : { cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } }
@@ -160,7 +176,12 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Lines ----
 
-  const setLines = (lines: EntryLine[]) => { latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved(''); setFailure(null); setTyping(false) }
+  const setLines = (lines: EntryLine[]) => {
+    if (draft.isLocked()) return
+    latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved(''); setTyping(false)
+    // A refusal is answered by the change; an unknown outcome is not (only "Check and retry" answers it).
+    setFailure(previous => previous?.unknown ? previous : null)
+  }
   // A line appended before its counter-ledger read answered takes the answer while it is still empty (observed timing aside).
   const awaiting = useRef(new Map<string, string>())
   const counters = useCounterLedgers(company.id, voucherType?.id ?? null, (ledgerId, side, counter) => {
@@ -239,7 +260,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
           dispatch({ type: 'bills', row: row.key, rows })
           continuing.current = row.key
           // Should the grid not give focus back (nothing to restore), move on anyway.
-          window.setTimeout(() => { if (continuing.current === row.key) { continuing.current = null; continueAfter(row.key) } }, 800)
+          window.setTimeout(() => { if (mounted.current && continuing.current === row.key) { continuing.current = null; continueAfter(row.key) } }, 800)
         }} close={close} />
     },
   }
@@ -247,7 +268,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   // ---- Header ----
 
   const accountOptions = useMemo(() => ledgerOptions(state.kind, 'single', 'account', '', entryLedgers).all, [state.kind, entryLedgers])
-  const setAccount = (ledgerId: string) => { latest.current = { ...latest.current, account: ledgerId }; dispatch({ type: 'account', ledger: ledgerId }); setAccountError(undefined); setSaved(''); setFailure(null) }
+  const setAccount = (ledgerId: string) => { if (draft.isLocked()) return; latest.current = { ...latest.current, account: ledgerId }; dispatch({ type: 'account', ledger: ledgerId }); setAccountError(undefined); setSaved(''); setFailure(null) }
   function accountTyped(text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
     const result = resolveTyped(accountOptions, text, latest.current.account)
     if ('error' in result) { setAccountError(result.error); return 'error' }
@@ -339,6 +360,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     // Locked by an unknown outcome, the only save is "Check and retry" (the same voucher, the same key); never two at once.
     if (!voucherType || draft.busy) return
     if (grid.current?.commit() === false) return
+    // Saving from the question: the cursor moves to the narration before the question (and its focused button) goes.
+    if (promptHolder.current?.contains(document.activeElement)) controlOf(root.current, 'narration')?.focus()
     setPrompt(false)
     const problem = problemBeforeSave()
     if (problem) { showProblem(problem); return }
@@ -444,7 +467,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   async function cancel(press?: CommandPress) {
     if (prompt) { declineAccept(); return }
     const quit = press !== undefined && press.event.key.toLowerCase() === 'q'
-    if (!quit) {
+    if (!quit && !draft.isLocked()) {
       // The Escape ladder (escapeStep): a focused value is emptied first, prefilled ones included.
       const active = document.activeElement
       const field = fieldOf(root.current, active)
@@ -458,7 +481,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       }
     }
     grid.current?.commit()
-    if (escapeStep('', draftDirty(latest.current) || typingRef.current) === 'leave') { guard.pass(leave); return }
+    if (escapeStep('', draftDirty(latest.current) || typingRef.current || unknownRef.current) === 'leave') { guard.pass(leave); return }
     if (await askToLeave()) guard.pass(leave)
   }
 
@@ -496,7 +519,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       if (!(input instanceof HTMLInputElement) || event.key !== 'ArrowUp' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || state.layout !== 'single') return
       if (grid.current?.activeRow !== state.lines[0]?.key || (input.getAttribute('aria-expanded') === 'true' && input.value !== '')) return
       event.preventDefault(); event.stopPropagation(); focus({ field: 'account' })
-    }} onInput={event => { if (event.target instanceof HTMLInputElement && event.target.value) setTyping(true) }}>
+    }} onInput={event => { if (event.target instanceof HTMLInputElement) setTyping(event.target.value !== '') }}
+      onKeyUp={event => { if (event.key === 'Escape' && event.target instanceof HTMLInputElement && event.target.value === '') setTyping(false) }}>
       <LinesGrid kind={state.kind} layout={state.layout} number={number} lines={state.lines} ledgers={entryLedgers} balances={balances} exponent={exponent}
         locked={locked} apiRef={grid} panel={panel} onLines={setLines} createRow={createRow} onEnd={onEnd} onCellCommit={onCellCommit} announce={setAnnounced} />
     </Stack>
@@ -508,9 +532,10 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
         <Textarea value={state.narration} readOnly={locked} rows={2} dir='auto' maxLength={2000} onChange={event => { dispatch({ type: 'narration', text: event.target.value }); setSaved('') }} />
       </Field>
     </Stack>
-    {prompt && <AcceptPrompt title={`Save this ${title.toLowerCase()}?`} summary={summary} onYes={() => void save()} onNo={declineAccept} />}
-    {notice && <StatusLine tone='warning' live='polite'>{notice}</StatusLine>}
-    {difference && <StatusLine live='polite'>{difference}</StatusLine>}
+    {prompt && <AcceptPrompt holder={promptHolder} title={`Save this ${title.toLowerCase()}?`} summary={summary} onYes={() => void save()} onNo={declineAccept} />}
+    {/* Mounted while empty, so a screen reader announces each new text. */}
+    <StatusLine tone='warning' live='polite'>{notice}</StatusLine>
+    <StatusLine live='polite'>{difference ?? ''}</StatusLine>
     <StatusLine live='polite' busy={draft.busy}>{draft.busy ? 'Saving…' : announced || ' '}</StatusLine>
     <TypeList open={typeList} current={state.kind} onPick={switchType} onClose={() => setTypeList(false)} />
     {layoutsOf(state.kind).length > 1 && <ModeList open={modeList} current={state.layout} onPick={switchLayout} onClose={() => setModeList(false)} />}
