@@ -3,9 +3,10 @@ import { test } from 'node:test';
 import {
   actorLabel, amountExample, amountProblem, buildChartRows, cashFamilyIds, defaultSide, describeChanges, describeFailure, displayAmount, effectiveSide, emptyGroupForm, emptyLedgerForm,
   groupChoices, groupDeleteReason, groupFields, groupFormReducer, groupPayload, ledgerDeleteReason, ledgerFormReducer, ledgerGroupReason, ledgerPayload,
-  isChoice, natureLockReason, nextFieldAfter, openingLocked, parentReason, plainAmount, primaryChoice, resolveLookup, singleFlight, validateGroupForm, validateLedgerForm,
+  isChoice, natureLockReason, nextFieldAfter, openingLocked, parentReason, plainAmount, primaryChoice, singleFlight, validateGroupForm, validateLedgerForm,
   type GroupRow, type LedgerRow, type RevisionRow,
 } from '../src/lib/masters.ts';
+import { resolveTyped } from '../src/lib/lookup-entry.ts';
 
 const group = (id: string, name: string, parentId: string | null, nature: GroupRow['nature'], systemKey: string | null = null): GroupRow =>
   ({ id, name, parentId, nature, grossProfit: false, systemKey, secondLanguageName: null, revision: 1 });
@@ -191,21 +192,21 @@ const groupOptions = [
 ];
 
 test('lookup text never becomes a value: a unique prefix picks the choice, anything else is an error and picks nothing', () => {
-  assert.deepEqual(resolveLookup(choices, 'cre', 'Dr'), { value: 'Cr' });
-  assert.deepEqual(resolveLookup(choices, 'CR', 'Dr'), { value: 'Cr' });
-  assert.deepEqual(resolveLookup(choices, 'Dr · Debit', 'Dr'), { value: 'Dr' });
-  assert.deepEqual(resolveLookup(groupOptions, 'fix', ''), { value: 'fixed' });
-  assert.deepEqual(resolveLookup(groupOptions, 'assets', ''), { value: 'fixed' }, 'the start of a later word of the label also names it');
-  assert.deepEqual(resolveLookup(groupOptions, 'cash on', ''), { value: 'cash' });
+  assert.deepEqual(resolveTyped(choices, 'cre', 'Dr'), { value: 'Cr' });
+  assert.deepEqual(resolveTyped(choices, 'CR', 'Dr'), { value: 'Cr' });
+  assert.deepEqual(resolveTyped(choices, 'Dr · Debit', 'Dr'), { value: 'Dr' });
+  assert.deepEqual(resolveTyped(groupOptions, 'fix', ''), { value: 'fixed' });
+  assert.deepEqual(resolveTyped(groupOptions, 'assets', ''), { value: 'fixed' }, 'the start of a later word of the label also names it');
+  assert.deepEqual(resolveTyped(groupOptions, 'cash on', ''), { value: 'cash' });
   // "fi" is the start of one word only in Fixed Assets, but "f" fits Fixed Assets and Fund Reserve.
-  assert.deepEqual(resolveLookup(groupOptions, 'fi', ''), { value: 'fixed' });
-  const many = resolveLookup(groupOptions, 'f', '');
+  assert.deepEqual(resolveTyped(groupOptions, 'fi', ''), { value: 'fixed' });
+  const many = resolveTyped(groupOptions, 'f', '');
   assert.ok('error' in many && /more than one choice/.test(many.error));
-  const none = resolveLookup(groupOptions, 'zzz', 'fixed');
+  const none = resolveTyped(groupOptions, 'zzz', 'fixed');
   assert.ok('error' in none && /is not one of the choices/.test(none.error));
-  const blocked = resolveLookup(groupOptions, 'lock', '');
+  const blocked = resolveTyped(groupOptions, 'lock', '');
   assert.deepEqual(blocked, { error: 'This group is held by a rule.' });
-  assert.deepEqual(resolveLookup(choices, '   ', 'Dr'), { value: '' }, 'cleared text clears the value instead of keeping the old one');
+  assert.deepEqual(resolveTyped(choices, '   ', 'Dr'), { value: '' }, 'cleared text clears the value instead of keeping the old one');
   assert.equal(isChoice(groupOptions, 'fixed'), true);
   assert.equal(isChoice(groupOptions, 'fi'), false, 'text is not a value');
   assert.equal(isChoice(groupOptions, 'locked'), false, 'a disabled option is not a value');

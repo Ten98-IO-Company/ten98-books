@@ -1,4 +1,4 @@
-import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,type AccountProfileValues,type AuthNotice,type SelectOption} from '@ten98/ui';
+import {AccountProfileFlow,Alert,Button,DescriptionList,Stack,StatusLine,Text,useConfirmDialog,type AccountProfileValues,type AuthNotice,type SelectOption} from '@ten98/ui';
 import {useCallback,useEffect,useId,useRef,useState} from 'react';
 import {useBlocker} from '@tanstack/react-router';
 import {ApiError,errMsg} from '../lib/api';
@@ -25,7 +25,8 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
   const blocked=!data||!draft||!!account?.loading||!!account?.error||busy;
   const saved=data?savedDraft(data):null;
   const changed=!!saved&&!!draft&&!sameDraft(draft,saved);
-  useBlocker({shouldBlockFn:()=>changed&&!window.confirm('Discard your unsaved preferences?'),enableBeforeUnload:()=>changed});
+  const [confirm,dialog]=useConfirmDialog();
+  useBlocker({shouldBlockFn:async()=>changed&&!await confirm({title:'Discard your unsaved preferences?',description:'The changes you made on this page are not saved.',confirmLabel:'Discard',cancelLabel:'Keep editing',danger:true}),enableBeforeUnload:()=>changed});
   const zones=Array.from(new Set(['UTC',...(data?[data.preferences.timeZone]:[]),...Intl.supportedValuesOf('timeZone')])).sort();
   const onValuesChange=useCallback((values:AccountProfileValues)=>setDraft(asDraft(values)),[]);
   const fallback={name:'',...accountPreferencesDefaults};
@@ -74,5 +75,6 @@ export function AccountPreferencesPanel({expectedUserId,onUnauthorized}:{expecte
     {/* Reload stays outside the flow's fieldset: it is the recovery action while the form is disabled after a failed read, a 409 or an unconfirmed save. */}
     <Button type="button" variant="secondary" disabled={busy||!!account?.loading} onClick={()=>{acknowledged.current=null;setNotice(undefined);void account?.reload();}}>Reload saved preferences</Button>
     <Text tone="muted" size="sm">Reload replaces unsaved edits. Preferences do not change financial values, exports or saved report evidence.</Text>
+    {dialog}
   </Stack>;
 }

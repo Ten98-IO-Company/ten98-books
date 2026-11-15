@@ -171,7 +171,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/ledger/$ledgerId', params: { companyId: company.id, ledgerId: existing.id } }) : undefined,
   })
 
-  const set = (field: 'name' | 'secondLanguageName' | 'amount') => (event: { target: { value: string } }) => dispatch({ type: 'set', field, value: event.target.value })
+  const set = (field: 'name' | 'secondLanguageName' | 'amount') => (event: { target: { value: string } }) => { dispatch({ type: 'set', field, value: event.target.value }); setErrors(previous => ({ ...previous, [field]: undefined })) }
   const choose = (field: LookupName) => (value: string) => { for (const action of lookups[field].actions(value, values)) dispatch(action); setErrors(previous => ({ ...previous, [field]: undefined })) }
   const lockNote = `Opening balances are locked: the books are locked through ${company.lockedThrough}.`
   const costValue = effectiveCostSetting(values.costCentres, group?.nature)
