@@ -38,6 +38,13 @@ test('the company rename is the shared workspace rename flow, with a field error
   assert.match(settings, /notice=\{notice \? \{ tone: 'success', text: notice \} : undefined\}/);
   assert.match(settings, /if \(cause instanceof ApiError && cause\.status === 401\) \{ unauthorized\(\); return \}/, 'a lost session is handled here');
   assert.doesNotMatch(settings, /<Form /, 'the hand-built form is gone');
+  // The notice crosses the remount after a rename on this page's own history entry, named by company, and is taken off
+  // the entry once shown: no state outside React that could outlive the entry, the company or the user.
+  assert.match(settings, /interface HistoryState \{ companyRenamed\?: string \}/);
+  assert.match(settings, /const handedOver = \(\) => router\.history\.location\.state\.companyRenamed === company\.id/);
+  assert.match(settings, /if \(!handedOver\(\)\) return\n\s+markEntry\(undefined\)/, 'shown once: the entry is cleared');
+  assert.match(settings, /if \(name !== company\.name\) markEntry\(company\.id\)/);
+  assert.doesNotMatch(settings, /new (Set|Map)\(/, 'no module-level hand-over');
 });
 
 /** The props a component passes to the shared state screen, read from its source: one JSX element, attribute by attribute. */

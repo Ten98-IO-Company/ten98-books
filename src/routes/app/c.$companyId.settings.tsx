@@ -1,5 +1,5 @@
 import { DescriptionList, PageHeader, SettingsSection, Stack, WorkspaceCreateFlow } from '@ten98/ui'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, errMsg } from '../../lib/api'
 import { useApp, useCompany } from '../../lib/app-context'
@@ -14,10 +14,14 @@ import { baseCurrencies } from '../../lib/company'
 export const Route = createFileRoute('/app/c/$companyId/settings')({ component: CompanySettings })
 
 /**
- * A rename reloads the company list, and the company layout then reloads the company and mounts this page again, so
- * the success notice is handed across that remount here (per company, read once), with focus back on the name.
+ * A rename reloads the company list, and the company layout then reloads the company and mounts this page again. The
+ * success notice crosses that remount in the state of this page's own history entry, naming the company renamed: the
+ * new page shows it once, with focus back on the name, and takes it off the entry, so a reload, another entry or
+ * another company never shows it.
  */
-const renamed = new Set<string>()
+declare module '@tanstack/react-router' {
+  interface HistoryState { companyRenamed?: string }
+}
 const renamedNotice = 'The company name was changed.'
 
 const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -28,16 +32,24 @@ function CompanySettings() {
   const manager = current?.id === company.id && (current.role === 'owner' || current.role === 'admin')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState(() => renamed.delete(company.id) ? renamedNotice : '')
+  const router = useRouter()
+  const handedOver = () => router.history.location.state.companyRenamed === company.id
+  const [notice, setNotice] = useState(() => handedOver() ? renamedNotice : '')
   const nameField = useRef<HTMLElement>(null)
-  useEffect(() => { if (notice) nameField.current?.querySelector<HTMLInputElement>('input[name="name"]')?.focus() }, [])
+  /** Writes the hand-over onto the current history entry, or takes it off. */
+  const markEntry = (companyRenamed: string | undefined) => router.history.replace(router.history.location.href, { ...router.history.location.state, companyRenamed })
+  useEffect(() => {
+    if (!handedOver()) return
+    markEntry(undefined)
+    nameField.current?.querySelector<HTMLInputElement>('input[name="name"]')?.focus()
+  }, [])
 
   async function rename({ name }: { name: string }) {
     setBusy(true); setError(''); setNotice('')
     try {
       await api(`/api/workspaces/${company.id}/rename`, { method: 'POST', body: { name } })
       // Only a changed name reloads the company and remounts this page; otherwise the notice is set below directly.
-      if (name !== company.name) renamed.add(company.id)
+      if (name !== company.name) markEntry(company.id)
       await reloadCompanies()
       setNotice(renamedNotice)
     } catch (cause) {
