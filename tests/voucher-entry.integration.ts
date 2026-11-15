@@ -5,6 +5,7 @@ import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtim
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
+import { toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry.ts';
 
 /**
  * The voucher entry reads (docs/LEDGER.md, "Voucher entry reads"): the previewed next number, the balance preview and the
@@ -254,4 +255,54 @@ test('viewers read all three; another company\'s company, voucher type, ledger a
 
   const stranger = browser();
   for (const [path, body] of paths(c.base, c.books.type('payment'), rent)) assert.equal((await stranger.call(path, body)).status, 401, path);
+});
+
+// ---- What the entry screen sends (src/lib/voucher-entry.ts) and the pending list it shows ----
+
+const entry = (key: string, side: 'Dr' | 'Cr' | '', ledger: string, amount: string): EntryLine => ({ key, side, ledger, amount });
+
+test('the entry screen\'s bodies post as built and read back line for line: single entry with the Account last, the contra Account receiving, bills on their lines', async () => {
+  const c = await company('Entry Bodies');
+  const bank = await c.ledger('Harbour Bank', 'bank_accounts', { amount: '10000', side: 'Dr' });
+  const cash = c.books.ledger('Cash');
+  const rent = await c.ledger('Premises Rent', 'indirect_expenses');
+  const customer = await c.ledger('Customer North', 'receivables');
+  const send = async (input: Omit<BodyInput, 'idempotencyKey' | 'voucherTypeId'>) => {
+    const body = toVoucherBody({ ...input, idempotencyKey: `entry-${randomUUID()}`, voucherTypeId: c.books.type(input.kind) }, 2);
+    const answer = await owner.browser.call(`${c.base}/vouchers`, body);
+    assert.equal(answer.status, 201, JSON.stringify(answer.body));
+    const read = (await ok(owner.browser.call(`${c.base}/vouchers/${answer.body.voucher.id}`))).voucher;
+    return read.lines.map((line: any) => [line.ledgerId, line.side, line.amount, line.bills.map((bill: any) => [bill.kind, bill.billName, bill.amount, bill.side])]);
+  };
+  const base = { narration: '', bills: {} };
+  assert.deepEqual(await send({ ...base, kind: 'payment', layout: 'single', account: bank, date: '2026-01-01', lines: [entry('line-1', 'Dr', rent, '4000.00'), entry('line-2', 'Dr', '', '')] }),
+    [[rent, 'Dr', '4000.00', []], [bank, 'Cr', '4000.00', []]], 'particulars, then the Account for the total (the blank line is left out)');
+  assert.deepEqual(await send({ ...base, kind: 'contra', layout: 'single', account: bank, date: '2026-01-04', lines: [entry('line-1', 'Cr', cash, '500.00')] }),
+    [[cash, 'Cr', '500.00', []], [bank, 'Dr', '500.00', []]], 'the contra Account is debited, as the starter dataset');
+  const journal: BillDraft[] = [{ key: 'b1', method: 'new_ref', bill: '', name: 'INV-1', credit: '30', amount: '300.00', side: 'Dr' }];
+  assert.deepEqual(await send({ ...base, kind: 'journal', layout: 'double', account: '', date: '2026-01-07', bills: { 'line-1': journal },
+    lines: [entry('line-1', 'Dr', customer, '300.00'), entry('line-2', 'Cr', rent, '300.00'), entry('line-3', 'Dr', '', '')] }),
+    [[customer, 'Dr', '300.00', [['new_ref', 'INV-1', '300.00', 'Dr']]], [rent, 'Cr', '300.00', []]]);
+  const pending = (await ok(owner.browser.call(`${c.base}/ledgers/${customer}/bills?asOf=2026-01-12&scope=pending&sort=name`))).bills;
+  const receipt: BillDraft[] = [{ key: 'b1', method: 'against_ref', bill: pending[0].billId, name: '', credit: '', amount: '200.00', side: 'Cr' },
+    { key: 'b2', method: 'on_account', bill: '', name: '', credit: '', amount: '50.00', side: 'Cr' }];
+  assert.deepEqual(await send({ ...base, kind: 'receipt', layout: 'single', account: bank, date: '2026-01-12', bills: { 'line-1': receipt }, lines: [entry('line-1', 'Cr', customer, '250.00')] }),
+    [[customer, 'Cr', '250.00', [['against_ref', 'INV-1', '200.00', 'Cr'], ['on_account', null, '50.00', 'Cr']]], [bank, 'Dr', '250.00', []]]);
+  assert.deepEqual(await send({ ...base, kind: 'payment', layout: 'double', account: '', date: '2026-01-15', lines: [entry('line-1', 'Dr', rent, '100.00'), entry('line-2', 'Cr', cash, '100.00')] }),
+    [[rent, 'Dr', '100.00', []], [cash, 'Cr', '100.00', []]]);
+});
+
+test('the pending list for entry is in the observed name order: case and hyphens ignored, text not numbers', async () => {
+  const c = await company('Pending Order');
+  const party = await c.ledger('Order Party', 'receivables');
+  const income = await c.ledger('Order Income', 'indirect_income');
+  // Entered in another order than listed, one voucher each, as the observation's bills were.
+  const names = ['B-300', 'a2', '10', 'C-200', 'b3', 'A-100', '9', 'B1', 'A-020', 'B-050'];
+  for (const name of names) {
+    const answer = await owner.browser.call(`${c.base}/vouchers`, { idempotencyKey: `order-${randomUUID()}`, voucherTypeId: c.books.type('journal'), date: '2026-07-01',
+      lines: [{ ledgerId: party, side: 'Dr', amount: '1', bills: [{ kind: 'new_ref', name, amount: '1' }] }, { ledgerId: income, side: 'Cr', amount: '1' }] });
+    assert.equal(answer.status, 201, JSON.stringify(answer.body));
+  }
+  const listed = (await ok(owner.browser.call(`${c.base}/ledgers/${party}/bills?asOf=2026-07-01&scope=pending&sort=name`))).bills.map((bill: any) => bill.name);
+  assert.deepEqual(listed, ['10', '9', 'A-020', 'A-100', 'a2', 'B-050', 'B1', 'b3', 'B-300', 'C-200']);
 });

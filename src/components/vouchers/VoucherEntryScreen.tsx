@@ -77,7 +77,10 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const others = useMemo(() => [state.account, ...state.lines.map(line => line.ledger)].filter(Boolean), [state.account, state.lines])
   const balances = useResultingBalances(company.id, state.date, preview, others, company.financialYearStart, exponent)
 
-  const [dateText, setDateText] = useState<string | null>(null)
+  const [dateText, setDateTextState] = useState<string | null>(null)
+  // Commands read the date text from here: keys pressed faster than React renders still see the latest text.
+  const dateRef = useRef<string | null>(null)
+  const setDateText = (text: string | null) => { dateRef.current = text; setDateTextState(text) }
   const [dateError, setDateError] = useState<string>()
   const dateOrigin = useRef<FocusOrigin>({ field: 'account' })
   const [accountError, setAccountError] = useState<string>()
@@ -98,11 +101,14 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const focus = useCallback((target: EntryFocus, attempt = 0) => {
     if ('field' in target) {
       const control = controlOf(root.current, target.field)
-      if (!control) return
+      // A field the layout no longer has (the Account after a switch to double entry): the layout's first field.
+      if (!control) { if (attempt === 0 && target.field !== 'date') focus(firstField(), 1); return }
       control.focus(); control.select?.()
       return
     }
     const { row, column, open, edit } = target.cell
+    // A line that went away (a type switch re-laid the lines) returns to the layout's first field instead.
+    if (!latest.current.lines.some(line => line.key === row)) { if (attempt === 0) window.setTimeout(() => focus(firstField(), 1), 0); return }
     const done = grid.current?.focusCell(row, column, { open, edit }) ?? false
     // A line the screen has just added renders on the next frame.
     if (!done && attempt < 5) window.requestAnimationFrame(() => focus(target, attempt + 1))
@@ -221,11 +227,13 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (inGrid) grid.current?.commit()
     setDateError(undefined)
     setDateText(entryDateText(latest.current.date))
-    window.setTimeout(() => { const control = controlOf(root.current, 'date'); control?.focus(); control?.select() }, 0)
+    const control = controlOf(root.current, 'date')
+    control?.focus()
+    window.setTimeout(() => control?.select(), 0)
   }
   function closeDate() { setDateText(null); setDateError(undefined); focusSoon(afterDate(dateOrigin.current)) }
   function applyDate() {
-    const parsed = parseEntryDate(dateText ?? '', latest.current.date)
+    const parsed = parseEntryDate(dateRef.current ?? '', latest.current.date)
     if ('error' in parsed) { setDateError(parsed.error); return }
     const problem = entryDateProblem(parsed.value, company, workingDate)
     if (problem) { setDateError(problem); return }
@@ -363,7 +371,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     if (!quit) {
       const active = document.activeElement as HTMLInputElement | null
       const field = fieldOf(root.current, active)
-      if (field === 'date') { if ((dateText ?? '') !== '') setDateText(''); else closeDate(); return }
+      if (field === 'date') { if ((dateRef.current ?? '') !== '') setDateText(''); else closeDate(); return }
       if (field === 'account' && (latest.current.account !== '' || (active?.value ?? '') !== '')) { setAccount(''); if (active) active.value = ''; return }
       if (field === 'narration' && latest.current.narration !== '') { dispatch({ type: 'narration', text: '' }); return }
       const row = grid.current?.activeRow, column = grid.current?.activeColumn

@@ -382,8 +382,9 @@ test('only the app confirmation hook imports the package confirmation pieces, so
     if (name !== 'src/components/useConfirm.ts' && /\buseConfirm\(\)/.test(source)) questions +=source.match(/\bconfirm\(/g)?.length ?? 0;
   }
   assert.deepEqual(importers, ['src/components/useConfirm.ts']);
-  // Six deletes, switching cost centres off, four "Leave without saving?" and the preferences page's question.
-  assert.equal(questions, 12, 'every question is asked through useConfirm');
+  // Six deletes, switching cost centres off, four "Leave without saving?", the preferences page's question and the
+  // voucher screen's leave question (its save question is the inline Y/N panel, not a confirmation).
+  assert.equal(questions, 13, 'every question is asked through useConfirm');
   // The hook forwards each request through its merge rule, not as the caller wrote it.
   const hook = readFileSync(new URL('../src/components/useConfirm.ts', import.meta.url), 'utf8');
   assert.match(hook, /=>\s*confirm\(confirmRequest\(request\)\)/);
