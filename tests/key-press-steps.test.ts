@@ -38,12 +38,50 @@ test('with nothing to do after the change (an error on the field, or a key that 
   assert.deepEqual(timers, []);
 });
 
-test('the lookups use it: Enter on typed text and the accept chord after a pick run in the key press, with React committing in between', () => {
-  // The order itself is tested above; this only ties the two call sites to it.
-  const lookups = readFileSync(new URL('../src/components/masters/useEntryLookups.ts', import.meta.url), 'utf8');
-  const field = readFileSync(new URL('../src/components/masters/LookupField.tsx', import.meta.url), 'utf8');
-  assert.match(lookups, /inOnePress\(\{ commit: flushSync, change: \(\) => \{ settle\(field, text, values\) \},\n\s+then: [^\n]*\(\) => advance\(field\)/);
-  assert.match(field, /inOnePress\(\{ commit: flushSync, change: \(\) => \{ if \(highlighted\) document\.getElementById\(highlighted\)\?\.click\(\) \}, then: \(\) => accept\?\.run\(\) \}\)/);
+/** A source file without its comments, so a commented-out call or a note cannot satisfy a check. */
+const code = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+
+/** The text of the `inOnePress({ ... })` call that starts at `from` in `source`. */
+function pressCall(source: string, from: number): string {
+  const then = source.indexOf('then:', from);
+  return source.slice(from, source.indexOf('})', then === -1 ? from : then) + 2);
+}
+
+/** Asserts that `parts` appear in `text` in this order, each once. */
+function inOrder(text: string, parts: readonly string[], where: string) {
+  let last = -1;
+  for (const part of parts) {
+    assert.equal(text.split(part).length - 1, 1, `${where}: "${part}" appears once`);
+    const at = text.indexOf(part);
+    assert.ok(at > last, `${where}: "${part}" comes after the step before it`);
+    last = at;
+  }
+}
+
+test('the lookups use it: the pick is committed before focus moves or the save starts, in the key press', () => {
+  // A source check, because the repository has no DOM test runner; the behaviour is proved by the real-key walk in
+  // docs/KEYBOARD.md (ledger, group, cost category and cost centre lookups, text typed straight after Enter or the accept
+  // chord, in both keymaps). The order of the helper itself is run in the tests above.
+  const lookups = code('../src/components/masters/useEntryLookups.ts');
+  const typedEnter = lookups.slice(lookups.indexOf('function typedEnter('), lookups.indexOf('function settleAll('));
+  const enter = typedEnter.indexOf('inOnePress({');
+  assert.ok(enter >= 0, 'Enter on typed text goes through inOnePress');
+  const enterCall = pressCall(typedEnter, enter);
+  inOrder(enterCall, ['commit: flushSync', 'settle(field, text, values)', 'then:', 'advance(field)'], 'typedEnter');
+  for (const step of ['settle(field, text, values)', 'advance(field)'])
+    assert.equal(typedEnter.split(step).length - 1, 1, `typedEnter calls ${step} only inside the key press`);
+
+  const field = code('../src/components/masters/LookupField.tsx');
+  const handler = field.slice(field.indexOf('onKeyDownCapture='), field.indexOf('<Combobox {'));
+  const pick = handler.indexOf('inOnePress({');
+  assert.ok(pick >= 0, 'the accept chord after a highlighted row goes through inOnePress');
+  const pickCall = pressCall(handler, pick);
+  inOrder(pickCall, ['commit: flushSync', '.click()', 'then:', 'accept?.run()'], 'accept after a pick');
+  assert.equal(handler.split('.click()').length - 1, 1, 'the row is picked only inside the key press');
+  // Typed text with no row: onTypedEnter commits its own pick (typedEnter above), then accept runs at once.
+  const rest = handler.slice(pick + pickCall.length);
+  inOrder(rest, ['onTypedEnter?.(input.value, false)', 'accept?.run()'], 'accept after typed text');
   for (const [name, source] of [['useEntryLookups.ts', lookups], ['LookupField.tsx', field]] as const)
     assert.doesNotMatch(source, /setTimeout|requestAnimationFrame/, `${name} defers nothing to a timer`);
 });
