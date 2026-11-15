@@ -1,4 +1,5 @@
-import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useReducer, useRef, useState } from 'react'
@@ -42,7 +43,7 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
   const refocus = useRef(false)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
   // A name another category already has is an error on the Name field, found by the server's code.
   useEffect(() => {
@@ -55,7 +56,7 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
   const deleteReason = existing ? categoryDeleteReason(existing) : null
   // A new entry is dirty once something is typed (the kept settings after a save are not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing', initialFocus: 'cancel' }))
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
 
   const specs: Record<LookupName, LookupSpec<CategoryFormValues, CategoryFormAction>> = {
@@ -94,7 +95,7 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
 
   async function remove() {
     if (!existing || readOnly || deleteReason) return
-    if (!await confirm({ title: `Delete the cost category “${existing.name}”?`, description: 'The category is removed. Its history stays available. A category that holds cost centres or is used in vouchers cannot be deleted.', confirmLabel: 'Delete category', danger: true, initialFocus: 'cancel' })) return
+    if (!await confirm({ title: `Delete the cost category “${existing.name}”?`, description: 'The category is removed. Its history stays available. A category that holds cost centres or is used in vouchers cannot be deleted.', confirmLabel: 'Delete category', danger: true })) return
     const done = await run(() => api(`/api/companies/${company.id}/cost-categories/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
     if (done) { setFlash(`Deleted cost category “${existing.name}”.`); guard.pass(leave) }
   }

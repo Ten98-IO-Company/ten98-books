@@ -1,4 +1,5 @@
-import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Card, DescriptionList, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
@@ -73,7 +74,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
   const refocus = useRef(false)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const openings = useOpeningTotals(company.id, company.booksBeginning)
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
   // A name another master already has is an error on the Name field, found by the server's code.
@@ -93,7 +94,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
   const side = effectiveSide(values, groups)
   // A new entry is dirty once something is typed (the kept group after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== '' || values.amount.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing', initialFocus: 'cancel' }))
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const where = group ? groupPath(groups, group.id).join(' › ') : 'no group'
 
@@ -142,7 +143,7 @@ function LedgerFormBody({ groups, existing, initialGroupId, reloadData }: Master
 
   async function remove() {
     if (!existing || readOnly || deleteReason) return
-    if (!await confirm({ title: `Delete the ledger “${existing.name}”?`, description: 'The ledger is removed from the chart. Its history stays available. A ledger used in vouchers cannot be deleted.', confirmLabel: 'Delete ledger', danger: true, initialFocus: 'cancel' })) return
+    if (!await confirm({ title: `Delete the ledger “${existing.name}”?`, description: 'The ledger is removed from the chart. Its history stays available. A ledger used in vouchers cannot be deleted.', confirmLabel: 'Delete ledger', danger: true })) return
     const done = await run(() => api(`/api/companies/${company.id}/ledgers/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
     if (done) { setFlash(`Deleted ledger “${existing.name}”.`); guard.pass(leave) }
   }

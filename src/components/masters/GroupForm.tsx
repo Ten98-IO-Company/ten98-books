@@ -1,4 +1,5 @@
-import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Button, Field, Form, FormActions, Input, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAriaKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
@@ -52,7 +53,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   // The form locks its fields while a request runs; focus returns to Name once it lifts, ready for the next entry.
   const refocus = useRef(false)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   useEffect(() => { if (!busy && refocus.current) { refocus.current = false; focusEntryField(form.current, 'name') } }, [busy])
   // A name another master already has is an error on the Name field, found by the server's code.
   useEffect(() => {
@@ -69,7 +70,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
   const fields = groupFields(values)
   // A new entry is dirty once something is typed (the kept parent after a save is not an edit); an alter once it differs.
   const dirty = existing ? JSON.stringify(values) !== JSON.stringify(initial.current) : values.name.trim() !== '' || values.secondLanguageName.trim() !== ''
-  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing', initialFocus: 'cancel' }))
+  const guard = useLeaveGuard(dirty && !readOnly, () => confirm({ title: 'Leave without saving?', description: 'What you entered on this screen is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep editing' }))
   const acceptKeys = useAriaKeys('entry.accept'), deleteKeys = useAriaKeys('entry.delete')
   const parent = groups.find(group => group.id === values.parentId)
   const parentName = parent ? groupPath(groups, parent.id).join(' › ') : 'Primary'
@@ -120,7 +121,7 @@ function GroupFormBody({ groups, ledgers, existing, initialGroupId, reloadData }
 
   async function remove() {
     if (!existing || readOnly || deleteReason) return
-    if (!await confirm({ title: `Delete the group “${existing.name}”?`, description: 'The group is removed from the chart. Its history stays available.', confirmLabel: 'Delete group', danger: true, initialFocus: 'cancel' })) return
+    if (!await confirm({ title: `Delete the group “${existing.name}”?`, description: 'The group is removed from the chart. Its history stays available.', confirmLabel: 'Delete group', danger: true })) return
     const done = await run(() => api(`/api/companies/${company.id}/groups/${existing.id}/delete`, { method: 'POST', body: { revision: existing.revision } }))
     if (done) { setFlash(`Deleted group “${existing.name}”.`); guard.pass(leave) }
   }

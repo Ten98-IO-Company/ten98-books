@@ -1,4 +1,5 @@
-import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Badge, Button, EmptyState, Inline, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
@@ -66,7 +67,7 @@ function ChartBody() {
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const rows = useMemo(() => groups && ledgers ? buildChartRows(groups, ledgers) : [], [groups, ledgers])
   const entries = useMemo(() => { const byId = new Map((groups ?? []).map(group => [group.id, group])); return rows.map(row => entryOf(row, exponent, byId)) }, [rows, groups, exponent])
   const cursors = rows.filter(isCursorRow)
@@ -96,7 +97,7 @@ function ChartBody() {
     if (!row || !canWrite || busy || reason) return
     const name = row.kind === 'group' ? row.group.name : row.ledger.name
     const revision = row.kind === 'group' ? row.group.revision : row.ledger.revision
-    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true, initialFocus: 'cancel' })) { focusList(); return }
+    if (!await confirm({ title: `Delete the ${row.kind} “${name}”?`, description: `The ${row.kind} is removed from the chart. Its history stays available.${row.kind === 'ledger' ? ' A ledger used in vouchers cannot be deleted.' : ''}`, confirmLabel: `Delete ${row.kind}`, danger: true })) { focusList(); return }
     const next = cursors[cursors.indexOf(row) + 1] ?? cursors[cursors.indexOf(row) - 1]
     const done = await run(() => api(`/api/companies/${company.id}/${row.kind === 'group' ? 'groups' : 'ledgers'}/${row.id}/delete`, { method: 'POST', body: { revision } }))
     focusList()

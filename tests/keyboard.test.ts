@@ -6,6 +6,7 @@ import { afterHistory, ariaKeyShortcuts, backSource, commandIds, commands, drill
 import { reportLevel } from '../src/lib/reports.ts';
 import { browserReservedChords, claimable, classicOnly, classicParity, classicReserved, defaultKeymap, dialogClaims, disabledClaims, habitChords, keymapNames, neverClaimed, keymaps, reservedClaims, reservedShadows, type KeymapName } from '../src/lib/keymaps.ts';
 import { lookupKeyAction } from '../src/lib/masters.ts';
+import { confirmRequest, type AppConfirmRequest } from '../src/components/useConfirm.ts';
 
 const platforms: readonly ShortcutPlatform[] = ['other', 'apple'];
 
@@ -354,13 +355,34 @@ test('every entry screen guards typed work against leaving: route changes ask fi
   }
 });
 
-test('every confirmation starts on its cancel button, so Enter never deletes, switches off or discards typed work', () => {
-  const requests = sources(new URL('../src/', import.meta.url)).flatMap(file => {
+test('only the app confirmation hook imports the package confirmation pieces, so every question goes through it', () => {
+  const files = (dir: URL): URL[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(new URL(`${entry.name}/`, dir)) : /\.tsx?$/.test(entry.name) ? [new URL(entry.name, dir)] : []);
+  const importers: string[] = [];
+  let callers = 0;
+  for (const file of files(new URL('../src/', import.meta.url))) {
     const source = readFileSync(file, 'utf8');
-    return [...source.matchAll(/\bconfirm\(\{/g)].map(start => ({ file: file.pathname, call: callAt(source, start.index + 'confirm'.length) }));
-  });
-  assert.ok(requests.filter(request => /danger: true/.test(request.call)).length >= 7, 'six deletes and switching cost centres off');
-  for (const { file, call } of requests) assert.match(call, /initialFocus: 'cancel'/, `${file}: ${call.slice(0, 60)}`);
+    const name = file.pathname.slice(file.pathname.indexOf('/src/') + 1);
+    assert.doesNotMatch(source, /import\s*\*\s*as\s+\w+\s+from\s*'@ten98\/ui'/, `${name} imports the whole package`);
+    for (const statement of source.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@ten98\/ui'/g)) {
+      if (/\b(?:useConfirmDialog|ConfirmDialog|ConfirmDialogProps)\b/.test(statement[1])) importers.push(name);
+    }
+    if (/\buseConfirm\(\)/.test(source)) callers++;
+  }
+  assert.deepEqual(importers, ['src/components/useConfirm.ts']);
+  assert.ok(callers >= 7, 'the masters screens and the preferences page ask through useConfirm');
+});
+
+test('a confirmation opens on Cancel unless the caller names the confirm button; a spread cannot change that', () => {
+  const base = { title: 'Delete?', description: 'Gone for good.' };
+  assert.equal(confirmRequest(base).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, danger: true }).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, startOnConfirmButton: true }).initialFocus, 'confirm');
+  // A request built elsewhere with the package's own option keeps the application's rule.
+  const smuggled = { ...base, initialFocus: 'confirm' } as unknown as AppConfirmRequest;
+  assert.equal(confirmRequest({ ...smuggled }).initialFocus, 'cancel');
+  assert.equal(confirmRequest({ ...base, startOnConfirmButton: 'yes' } as unknown as AppConfirmRequest).initialFocus, 'cancel');
+  assert.equal('startOnConfirmButton' in confirmRequest({ ...base, startOnConfirmButton: true }), false, 'the app option does not reach the package');
+  assert.deepEqual(confirmRequest({ ...base, confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true }), { ...base, confirmLabel: 'Delete', cancelLabel: 'Keep', danger: true, initialFocus: 'cancel' });
 });
 
 test('menu letters also run by key position on a layout that types another script, still only while the menu has focus', () => {

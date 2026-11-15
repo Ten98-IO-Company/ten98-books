@@ -1,4 +1,5 @@
-import { Alert, Badge, Button, Inline, KeyHint, PageHeader, Stack, StatusLine, Text, useConfirmDialog } from '@ten98/ui'
+import { Alert, Badge, Button, Inline, KeyHint, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { useConfirm } from '../useConfirm'
 import { DialogKeys, useAppCommand } from '../KeyboardShell'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useRef, useState } from 'react'
@@ -65,7 +66,7 @@ function ListBody() {
   const [active, setActive] = useState<string | null>(() => lastCursor.get(company.id) ?? null)
   const [message, setMessage] = useState(takeFlash)
   const { busy, failure, run } = useMasterRequest()
-  const [confirm, dialog] = useConfirmDialog()
+  const [confirm, dialog] = useConfirm()
   const rows = useMemo(() => categories && centres ? buildCostRows(categories, centres) : [], [categories, centres])
   const entries = useMemo(() => rows.map(row => entryOf(row, centres ?? [])), [rows, centres])
   // After a refused delete the row can be gone on reload: the cursor then goes to the neighbour it would have gone to.
@@ -105,7 +106,7 @@ function ListBody() {
     const name = centre ? target.centre.name : target.category.name
     const revision = centre ? target.centre.revision : target.category.revision
     const noun = centre ? 'cost centre' : 'cost category'
-    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true, initialFocus: 'cancel' })) { focusList(); return }
+    if (!await confirm({ title: `Delete the ${noun} “${name}”?`, description: `The ${noun} is removed. Its history stays available. ${centre ? 'A centre that holds sub-centres or is used in vouchers' : 'A category that holds centres or is used in vouchers'} cannot be deleted.`, confirmLabel: `Delete ${noun}`, danger: true })) { focusList(); return }
     const next = rows[rows.indexOf(target) + 1] ?? rows[rows.indexOf(target) - 1]
     setMessage('')
     neighbour.current = next?.key ?? null
@@ -121,7 +122,7 @@ function ListBody() {
   async function toggle() {
     if (!canSwitch || busy || enabled === null) return
     const next = !enabled
-    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true, initialFocus: 'cancel' })) { focusList(); return }
+    if (!next && !await confirm({ title: 'Switch cost centres off?', description: 'Vouchers stop asking for cost centres and new allocations are dropped. What is already saved stays, and the reports still count it.', confirmLabel: 'Switch off', danger: true })) { focusList(); return }
     setMessage('')
     const done = await run(() => api(`/api/companies/${company.id}/cost-centres-setting`, { method: 'POST', body: { enabled: next } }))
     focusList()
