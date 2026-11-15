@@ -50,6 +50,7 @@ The account's saved theme (light, dark or system, set on the account page) is ap
 - Every accounting table forces row-level security with the one company policy on `app.company_ids`; the application role (`books_app`) owns nothing and cannot bypass it, and the boot assertion refuses to start otherwise. SQL as `books_app` without a company context sees and changes nothing.
 - The boot assertion checks the role's attributes, that it owns no table, and row-level security on the accounting tables; it does not check grants. The application role's privileges on non-accounting tables (no access to `project`, read and insert only on `company_creation`) are covered by `tests/company-model-migration.integration.ts`.
 - The two-factor rule is checked per company before every company and team route.
+- With two-factor on, replacing the recovery codes takes an authenticator or recovery code as well as the password (as turning two-factor off does); the account screen cannot ask for that code until the design-system release that adds it, so new recovery codes can be issued over the API only for now.
 
 ## Migration 0005
 

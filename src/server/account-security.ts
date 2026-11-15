@@ -115,20 +115,24 @@ async function keepResponseSession(client: PoolClient, auth: Auth, request: Requ
 /**
  * The sign-in challenge cookie exactly as the library verifies it: one exact name (the auth prefix, with `__Secure-`
  * when the app URL is https, as Better Auth decides from the base URL the preset passes it). The raw Cookie header is
- * parsed here, not by either library parser (they disagree on duplicate names and prefixes): exactly one pair whose name
- * ends in `two_factor` (any prefix, either separator), with that exact name, and an identifier of the library's shape
- * (`2fa-` and 20 random characters); anything else answers null.
+ * parsed here, not by either library parser (they disagree on duplicate names and prefixes): exactly one pair with that
+ * name, no other name under our prefix that a parser could read as the challenge (the `__Secure-` or plain counterpart,
+ * the dash form), and an identifier of the library's shape (`2fa-` and 20 random characters, everything before the
+ * last `.` as the library signs it). Cookies under any other prefix (another app on the same host) are ignored.
+ * Anything else answers null.
  */
-function challengeCookie(request: Request): { value: string; identifier: string } | null {
-  const name = `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${authCookiePrefix()}.two_factor`;
+function challengeCookie(request: Request): { identifier: string } | null {
+  const prefix = authCookiePrefix();
+  const name = `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${prefix}.two_factor`;
+  const variants = new Set([`${prefix}.two_factor`, `__Secure-${prefix}.two_factor`, `${prefix}-two_factor`, `__Secure-${prefix}-two_factor`]);
   const pairs = (request.headers.get('cookie') ?? '').split(';').map(pair => pair.trim()).filter(Boolean)
     .map(pair => { const at = pair.indexOf('='); return at < 0 ? [pair, ''] : [pair.slice(0, at).trim(), pair.slice(at + 1).trim()]; })
-    .filter(([pairName]) => pairName.endsWith('two_factor'));
+    .filter(([pairName]) => variants.has(pairName));
   if (pairs.length !== 1 || pairs[0][0] !== name || !pairs[0][1]) return null;
   let decoded: string;
   try { decoded = decodeURIComponent(pairs[0][1]); } catch { return null; }
-  const identifier = decoded.split('.')[0];
-  return /^2fa-[A-Za-z0-9_-]{20}$/.test(identifier) ? { value: pairs[0][1], identifier } : null;
+  const identifier = decoded.slice(0, decoded.lastIndexOf('.'));
+  return /^2fa-[A-Za-z0-9_-]{20}$/.test(identifier) ? { identifier } : null;
 }
 
 // Single use of an authenticator code, interim: removed when the shared preset's own single-use guard is adopted.
@@ -146,11 +150,14 @@ async function rememberCode(client: PoolClient, userId: string, code: string) {
     [randomUUID(), `totp-used:${userId}:${createHash('sha256').update(code).digest('hex')}`]);
 }
 
+/** One refusal for a wrong password and a wrong code, on the actions that take both: it does not tell which was wrong. */
+const proofRefused = 'The password or the code was not accepted.';
+
 async function requireFactorProof(client: PoolClient, request: Request, userId: string, details: { code?: string; backupCode?: string }) {
   if ((!details.code && !details.backupCode) || (details.code && details.backupCode)) throw new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
   if (details.code && await isRepeatedCode(client, userId, details.code)) throw new FoundationError(409, 'Wait for the next authenticator code, then try again.');
   const response = await invoke(getAuth(client), request, details.code ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', { code: details.code ?? details.backupCode });
-  if (!response.ok) throw new FoundationError(400, 'The verification code was not accepted.');
+  if (!response.ok) throw new FoundationError(400, proofRefused);
   if (details.code) await rememberCode(client, userId, details.code);
 }
 
@@ -250,7 +257,7 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
     const cookie = challengeCookie(request);
     if (!cookie) return refused();
-    await limit(`two-factor:${createHash('sha256').update(cookie.value).digest('hex')}`, limits.twoFactorPerChallenge);
+    await limit(`two-factor:${createHash('sha256').update(cookie.identifier).digest('hex')}`, limits.twoFactorPerChallenge);
     return transaction(async (client, auth) => {
       if (await auth.api.getSession({ headers: request.headers, query: { disableRefresh: true } })) {
         return json({ error: 'This sign-in is already complete.' }, 409);
@@ -267,6 +274,8 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
       const response = await invoke(auth, request, totp ? '/two-factor/verify-totp' : '/two-factor/verify-backup-code', details);
       if (!response.ok) return rejected(response, 'The code was not accepted. Try another code or sign in again.');
       // The session the library created must be that user's; otherwise the transaction rolls back and nothing is signed in.
+      // Not reachable while the cookie checked above is the one the library reads (no test can make them differ): kept as
+      // defence in depth.
       const verified = await response.clone().json().catch(() => null) as { user?: { id?: unknown } } | null;
       if (verified?.user?.id !== userId) throw new FoundationError(401, 'The code was not accepted. Try another code or sign in again.');
       if (totp) await rememberCode(client, userId, details.code);
@@ -333,7 +342,10 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // so a refused password never consumes a recovery code or an authenticator window.
     const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
     const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
-    if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, 'The current password was not accepted.');
+    if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, proofRefused);
+    if (current.user.twoFactorEnabled && path === '/api/account/two-factor/recovery-codes' && !details.code && !details.backupCode) {
+      throw new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required');
+    }
     if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
     if (path === '/api/account/two-factor/disable') {
       const response = await invoke(auth, request, '/two-factor/disable', { password: details.password });
