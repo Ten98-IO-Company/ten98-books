@@ -70,3 +70,44 @@ test('text made only of ignored characters is empty text', () => {
   assert.deepEqual(typedOutcome(names, '-', 'id-1', blank), { kind: 'error', message: blank }, 'what an emptied field says');
   assert.deepEqual(typedOutcome(names, '', 'id-1', blank), typedOutcome(names, '-', 'id-1', blank));
 });
+
+test('Enter takes the one choice the list shows: exact key, then a start of the label or a word (split at ignored characters too), then a key held anywhere', () => {
+  const list: Choice[] = [{ value: 'a', label: 'Cash at Bank' }, { value: 'b', label: 'Misc.Income' }, { value: 'c', label: 'Sales' }];
+  assert.deepEqual(resolveTyped(list, 'at bank', ''), { value: 'a' }, 'the list shows one choice, so Enter takes it');
+  assert.deepEqual(resolveTyped(list, 'income', ''), { value: 'b' }, 'a word that starts after an ignored character');
+  assert.deepEqual(resolveTyped(list, 'isc.inc', ''), { value: 'b' }, 'held anywhere, as the list shows');
+  assert.deepEqual(filterChoices(list, 'at bank').map(option => option.value), ['a']);
+  const several = resolveTyped([...list, { value: 'd', label: 'Bank Account' }], 'ba', '');
+  assert.ok('error' in several && /more than one choice/.test(several.error));
+  const none = resolveTyped(list, 'zzz', '');
+  assert.deepEqual(none, { error: '“zzz” is not one of the choices. Pick one from the list.' });
+});
+
+test('a choice a rule disables is never taken: its exact name answers with its reason instead of picking a longer name', () => {
+  const list: Choice[] = [{ value: 'a', label: 'Cash', disabled: true, disabledReason: 'Not under itself.' }, { value: 'b', label: 'Cash at Bank' }];
+  assert.deepEqual(resolveTyped(list, 'cash', ''), { error: 'Not under itself.' });
+  assert.deepEqual(typedOutcome(list, 'Cash', 'b', blank), { kind: 'error', message: 'Not under itself.' });
+  assert.deepEqual(resolveTyped(list, 'cash a', ''), { value: 'b' }, 'a longer name that is not the disabled one is still taken');
+});
+
+test('a built-in choice wins over a name of a user with the same key', () => {
+  const list: Choice[] = [{ value: 'u1', label: 'Primary' }, { value: primaryChoice, label: 'Primary', builtIn: true }];
+  assert.deepEqual(resolveTyped(list, 'primary', ''), { value: primaryChoice });
+  assert.deepEqual(resolveTyped(list, 'prim.ary', 'u1'), { value: 'u1' }, 'the held value is kept as before');
+  const top: Choice[] = [{ value: 'c1', label: 'Top-level' }, { value: 'top', label: 'Top level', builtIn: true }];
+  assert.deepEqual(resolveTyped(top, 'TOP LEVEL', ''), { value: 'top' });
+});
+
+test('the choice already held is kept when its key equals the text, even where another choice has the same key', () => {
+  const list: Choice[] = [{ value: 'a', label: 'Main Cash' }, { value: 'b', label: 'Main-Cash' }];
+  assert.deepEqual(resolveTyped(list, 'main cash', 'b'), { value: 'b' });
+  const ambiguous = resolveTyped(list, 'main cash', '');
+  assert.ok('error' in ambiguous && /more than one choice/.test(ambiguous.error), 'with nothing held the two are ambiguous');
+});
+
+test('text of only a non-breaking space gives a message without an empty quotation', () => {
+  const result = resolveTyped(names, ' ', '');
+  assert.ok('error' in result);
+  assert.doesNotMatch(result.error, /“”/);
+  assert.match(result.error, /not one of the choices/);
+});
