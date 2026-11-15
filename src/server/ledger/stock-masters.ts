@@ -241,6 +241,10 @@ const itemRefusals = {
   stock_opening_quantity_places: ledgerError(400, 'An opening quantity has more decimal places than the item\'s unit allows.', 'validation'),
   stock_opening_locked: ledgerError(409, 'Opening stock is locked: the books are locked through the books beginning.', 'locked_period'),
   stock_unit_decimals: unitRefusals.stock_unit_decimals,
+  // A unit, group or category deleted while this write waited on its foreign key check.
+  stock_item_company_id_unit_id_fkey: ledgerError(400, 'The unit was not found.', 'not_found'),
+  stock_item_company_id_group_id_fkey: ledgerError(400, 'The stock group was not found.', 'not_found'),
+  stock_item_company_id_category_id_fkey: ledgerError(400, 'The stock category was not found.', 'not_found'),
 };
 
 type ItemRow = Omit<StockItem, 'openings' | 'openingValue'>;
@@ -364,8 +368,10 @@ export async function createItem(context: LedgerContext, value: unknown): Promis
 
 /** A decimal string without leading or trailing zeros, so equal quantities compare equal as text. */
 const decimalKey = (text: string) => text.replace(/^0+(?=\d)/, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+/** The same rows: location, quantity and value, and the rate too when one is sent (a value sent derives the same rate). */
 const sameOpenings = (before: StockOpening[], after: OpeningPlan[]) => before.length === after.length
-  && before.every(row => after.some(plan => plan.locationId === row.locationId && plan.value === row.value && decimalKey(plan.quantity) === decimalKey(row.quantity)));
+  && before.every(row => after.some(plan => plan.locationId === row.locationId && plan.value === row.value && decimalKey(plan.quantity) === decimalKey(row.quantity)
+    && (plan.rate === null || decimalKey(plan.rate) === decimalKey(row.rate))));
 
 /**
  * Alters an item. `openings`, when sent, replaces its rows whole (refused while the lock reaches the books beginning,

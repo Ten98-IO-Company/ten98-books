@@ -141,8 +141,18 @@ test('opening stock by rate or by value: rounding, a derived rate, zero cost, ro
   const emptied = await call(`/stock-items/${box.id}`, { name: 'Box set renamed', unitId: kg.id, openings: [], revision: kept.body.stockItem.revision });
   assert.equal(emptied.status, 200, 'an item without rows may change its unit');
 
+  // A rate sent is compared with the stored one: another spelling is no change, a new rate with the same value is one.
+  const rated = await made('/stock-items', { name: 'Rated', unitId: kg.id, openings: [{ locationId: main.id, quantity: '0.5', rate: '2.01' }] }, 'stockItem');
+  assert.equal(rated.openings[0].value, '1.01');
+  const spelled = await call(`/stock-items/${rated.id}`, { name: 'Rated', unitId: kg.id, openings: [{ locationId: main.id, quantity: '00.5', rate: '02.01' }], revision: rated.revision });
+  assert.deepEqual(spelled.body.stockItem.openings.map((row: any) => [row.rate, row.value]), [['2.01', '1.01']], 'the same rate in another spelling');
+  const rerated = await call(`/stock-items/${rated.id}`, { name: 'Rated', unitId: kg.id, openings: [{ locationId: main.id, quantity: '0.5', rate: '2.02' }], revision: spelled.body.stockItem.revision });
+  assert.deepEqual(rerated.body.stockItem.openings.map((row: any) => [row.rate, row.value]), [['2.02', '1.01']], 'a new rate with the same value is written');
+
   await asAdmin(database.adminUrl, admin => admin.query("UPDATE company SET locked_through = '2026-01-31' WHERE company_id = $1", [companyId]));
   try {
+    await refused(call(`/stock-items/${rated.id}`, { name: 'Rated', unitId: kg.id, openings: [{ locationId: main.id, quantity: '0.5', rate: '2.03' }], revision: rerated.body.stockItem.revision }), 409, 'locked_period', 'a new rate with the same value under the lock');
+    assert.equal((await call(`/stock-items/${rated.id}`, { name: 'Rated', unitId: kg.id, openings: [{ locationId: main.id, quantity: '0.5', rate: '2.02' }], revision: rerated.body.stockItem.revision })).status, 200, 'the same rate re-sent under the lock');
     await refused(call('/stock-items', { name: 'Locked', unitId: nos.id, openings: [{ locationId: main.id, quantity: '1', rate: '1.00' }] }), 409, 'locked_period', 'new opening rows under the lock');
     const current = (await call(`/stock-items/${sheet.id}`)).body.stockItem;
     await refused(call(`/stock-items/${sheet.id}`, { name: 'Sheet', unitId: kg.id, openings: [{ locationId: main.id, quantity: '4001', rate: '4.20' }], revision: current.revision }), 409, 'locked_period', 'changed rows under the lock');

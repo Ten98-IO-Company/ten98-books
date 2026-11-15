@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import pg, { type PoolClient } from 'pg';
 import { getDatabase, migrationFiles } from '../src/server/db.ts';
-import { alterItem, alterUnit, createItem, createUnit, deleteUnit, readItem } from '../src/server/ledger/stock-masters.ts';
+import { alterItem, alterUnit, createItem, createTree, createUnit, deleteTree, deleteUnit, readItem } from '../src/server/ledger/stock-masters.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { accountingTables, assertDatabaseRoles, setCompanyScope } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
@@ -205,37 +205,62 @@ const insertOpening = (itemId: string, quantity: string) => (client: PoolClient)
   'INSERT INTO stock_opening (company_id, item_id, location_id, quantity, rate, value) VALUES ($1, $2, $3, $4, 2, 300)', [companyId, itemId, ids.main, quantity]);
 
 /**
- * Direct SQL as the application role, the path item lines and imports will also take: `change` runs in a transaction
- * held open while an opening row of 1.5 is inserted on a second connection. The insert must wait for it and then be
- * checked against what it committed.
+ * Direct SQL as the application role, the path item lines and imports will also take: the change that `setup` returns
+ * runs in a transaction held open while an opening row of 1.5 is inserted on a second connection. The insert must wait
+ * for it, then be checked against what it committed, or be accepted once it rolls back (each on fresh masters).
  */
-async function openingDuring(change: (client: PoolClient) => Promise<unknown>, itemId: string): Promise<void> {
-  const first = await openApp();
-  let insert: Promise<void> | undefined;
-  try {
-    await change(first.client);
-    insert = asApp(insertOpening(itemId, '1.5'));
-    assert.equal(await state(insert), 'waiting', 'the insert waits for the open change');
-    await first.end('COMMIT');
-    await assert.rejects(insert, code('23514', 'stock_opening_quantity_places'), 'checked against the committed change');
-  } finally {
-    await first.end('ROLLBACK');
-    await insert?.catch(() => undefined);
+async function openingDuring(setup: (suffix: string) => Promise<{ change: (client: PoolClient) => Promise<unknown>; itemId: string }>): Promise<void> {
+  for (const end of ['COMMIT', 'ROLLBACK'] as const) {
+    const { change, itemId } = await setup(end === 'COMMIT' ? '' : ' 2');
+    const first = await openApp();
+    let insert: Promise<unknown> | undefined;
+    try {
+      await change(first.client);
+      insert = asApp(insertOpening(itemId, '1.5'));
+      assert.equal(await state(insert), 'waiting', `the insert waits for the open change (${end})`);
+      await first.end(end);
+      if (end === 'COMMIT') await assert.rejects(insert, code('23514', 'stock_opening_quantity_places'), 'checked against the committed change');
+      else await assert.doesNotReject(insert, 'accepted once the change rolled back');
+    } finally {
+      await first.end('ROLLBACK');
+      await insert?.catch(() => undefined);
+    }
+    assert.equal(Number((await one('SELECT count(*) FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, itemId])).count), end === 'COMMIT' ? 0 : 1, end);
   }
-  assert.equal(Number((await one('SELECT count(*) FROM stock_opening WHERE company_id = $1 AND item_id = $2', [companyId, itemId])).count), 0);
 }
 
 test('by direct SQL, an opening row inserted while a unit\'s decimals are lowered in an open transaction waits and is checked against the lowered decimals', async () => {
-  const unit = await write(context => createUnit(context, { symbol: 'Drum', decimals: 2 }));
-  const item = await write(context => createItem(context, { name: 'Resin', unitId: unit.id }));
-  await openingDuring(client => client.query('UPDATE stock_unit SET decimals = 0 WHERE company_id = $1 AND id = $2', [companyId, unit.id]), item.id);
+  await openingDuring(async suffix => {
+    const unit = await write(context => createUnit(context, { symbol: `Drum${suffix}`, decimals: 2 }));
+    const item = await write(context => createItem(context, { name: `Resin${suffix}`, unitId: unit.id }));
+    return { itemId: item.id, change: client => client.query('UPDATE stock_unit SET decimals = 0 WHERE company_id = $1 AND id = $2', [companyId, unit.id]) };
+  });
 });
 
 test('by direct SQL, an opening row inserted while its item\'s unit is changed in an open transaction waits and is checked against the new unit', async () => {
-  const fine = await write(context => createUnit(context, { symbol: 'Sack', decimals: 2 }));
-  const whole = await write(context => createUnit(context, { symbol: 'Bale', decimals: 0 }));
-  const item = await write(context => createItem(context, { name: 'Cotton', unitId: fine.id }));
-  await openingDuring(client => client.query('UPDATE stock_item SET unit_id = $3 WHERE company_id = $1 AND id = $2', [companyId, item.id, whole.id]), item.id);
+  await openingDuring(async suffix => {
+    const fine = await write(context => createUnit(context, { symbol: `Sack${suffix}`, decimals: 2 }));
+    const whole = await write(context => createUnit(context, { symbol: `Bale${suffix}`, decimals: 0 }));
+    const item = await write(context => createItem(context, { name: `Cotton${suffix}`, unitId: fine.id }));
+    return { itemId: item.id, change: client => client.query('UPDATE stock_item SET unit_id = $3 WHERE company_id = $1 AND id = $2', [companyId, item.id, whole.id]) };
+  });
+});
+
+test('an item created while its unit, stock group or stock category is being deleted waits and is answered not_found', async () => {
+  const unit = await write(context => createUnit(context, { symbol: 'Vanishing', decimals: 0 }));
+  const { second: onUnit } = await race(
+    context => deleteUnit(context, unit.id, { revision: unit.revision }),
+    context => createItem(context, { name: 'Orphan', unitId: unit.id }));
+  await assert.rejects(onUnit, (error: { code?: string; message?: string }) => error.code === 'not_found' && error.message === 'The unit was not found.', 'the unit');
+  const kept = await write(context => createUnit(context, { symbol: 'Staying', decimals: 0 }));
+  for (const [name, field, what] of [['stock-groups', 'groupId', 'stock group'], ['stock-categories', 'categoryId', 'stock category']] as const) {
+    const master = await write(context => createTree(context, name, { name: `Vanishing ${what}` }));
+    const { second } = await race(
+      context => deleteTree(context, name, master.id, { revision: master.revision }),
+      context => createItem(context, { name: `Orphan in ${what}`, unitId: kept.id, [field]: master.id }));
+    await assert.rejects(second, (error: { code?: string; message?: string }) => error.code === 'not_found' && error.message === `The ${what} was not found.`, `the ${what}`);
+  }
+  assert.equal(Number((await one("SELECT count(*) FROM stock_item WHERE company_id = $1 AND name LIKE 'Orphan%'", [companyId])).count), 0);
 });
 
 test('deleting a unit while an opening write holds one of its items answers in_use at once instead of deadlocking', async () => {
