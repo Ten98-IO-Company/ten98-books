@@ -38,8 +38,8 @@ function GroupSummaryScreen() {
     exportPath={screen.period ? `/api/companies/${screen.company.id}/reports/group-summary${search.group ? `/${search.group}` : ''}/export?${query(screen.period)}` : null}
     back={() => screen.back(parent)}>
     {data && <ReportTable caption={group ? `Sub-groups and ledgers of ${group.name}` : 'Primary groups'} columns={columns} rows={rows} rowKey={row => row.key}
-      highlight={screen.highlight} onHighlight={screen.setHighlight}
-      onOpen={row => screen.open(row.kind === 'group' ? { report: 'group-summary', search: { group: row.id } } : { report: 'ledger-monthly', search: { ledger: row.id } })}
+      highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={row => row.kind !== 'stock'}
+      onOpen={row => { if (row.kind !== 'stock') screen.open(row.kind === 'group' ? { report: 'group-summary', search: { group: row.id } } : { report: 'ledger-monthly', search: { ledger: row.id } }) }}
       footerCells={['Total', <Balance key='opening' value={data.totals.opening} strong />, <Amount key='debit' value={data.totals.debit} strong />,
         <Amount key='credit' value={data.totals.credit} strong />, <Balance key='closing' value={data.totals.closing} strong />]} />}
   </ReportScreen>

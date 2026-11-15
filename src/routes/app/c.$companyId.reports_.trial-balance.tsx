@@ -42,9 +42,9 @@ function TrialBalanceScreen() {
     back={() => screen.back(null)}
     summary={totals ? <TotalsSummary items={[['Closing debit', totals.closingDebit], ['Closing credit', totals.closingCredit]]} /> : undefined}>
     {data && <ReportTable caption={`Trial balance for ${screen.company.name}`} columns={columns} rows={lines} rowKey={line => line.key}
-      highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={line => line.node !== null}
+      highlight={screen.highlight} onHighlight={screen.setHighlight} canOpen={line => line.node !== null && line.node.kind !== 'stock'}
       onOpen={line => {
-        if (!line.node) return
+        if (!line.node || line.node.kind === 'stock') return // the stock row is no ledger: nothing to open
         screen.open(line.node.kind === 'group' ? { report: 'group-summary', search: { group: line.node.id } } : { report: 'ledger-monthly', search: { ledger: line.node.id } })
       }}
       footerCells={totals ? ['Total', ...(['openingDebit', 'openingCredit', 'debit', 'credit', 'closingDebit', 'closingCredit'] as const).map(key => <Amount key={key} value={totals[key]} strong />)] : undefined} />}

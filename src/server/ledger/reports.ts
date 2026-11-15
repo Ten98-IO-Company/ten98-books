@@ -3,6 +3,7 @@ import { periodQuery, type Nature, type Side, type TrialBalance, type TrialBalan
 import { FoundationError } from '../auth.ts';
 import { parseInput, type LedgerContext } from './context.ts';
 import { groupTreeSql } from './masters.ts';
+import { openingStockValue } from './stock-masters.ts';
 
 /**
  * The M1 read model: typed rows straight from SQL (D-09), shared by the verification API and the report modules in
@@ -12,6 +13,10 @@ import { groupTreeSql } from './masters.ts';
  * opens at zero, and everything it gathered before the period (its opening balance too, once the period starts after
  * the books begin) is closed into the profit and loss ledger, earlier years and earlier months of the same year alike
  * (observed). A period starting on or before the books begin keeps the entered openings on their ledgers.
+ *
+ * Opening stock (M2b slice a) is not a ledger: its value stands beside the ledgers as a debit, counts in the opening
+ * difference, and until valuation (slice c) is the stock value at every date, so it adds nothing to the profit and loss
+ * carried into later periods.
  */
 
 /** Report queries get their own time budget instead of the pool's 10-second default (D-02). */
@@ -31,7 +36,12 @@ type Movement = {
 
 /** A trial balance row plus the opening balance as entered (signed, debit positive), which statements need. */
 export type LedgerRow = TrialBalanceRow & { enteredOpening: bigint };
-export type LedgerRows = { from: string; to: string; rows: LedgerRow[]; openingDifference: { amount: bigint; side: Side | null } };
+export type LedgerRows = {
+  from: string; to: string; rows: LedgerRow[];
+  /** The opening stock rows' value; null when the company has none, or when the rows were read for one ledger. */
+  openingStock: bigint | null;
+  openingDifference: { amount: bigint; side: Side | null };
+};
 
 const sides = (signed: bigint) => signed >= 0n ? { debit: signed, credit: 0n } : { debit: 0n, credit: subtractMoney(0n, signed) };
 const periodFields = (path: readonly PropertyKey[]) => path[0] === 'to' ? 'the end date' : 'the period';
@@ -39,7 +49,7 @@ const periodFields = (path: readonly PropertyKey[]) => path[0] === 'to' ? 'the e
 /**
  * One row per ledger for the period, from one set-based query. With `only`, the query reads that ledger's lines alone,
  * except for the profit and loss ledger, whose opening needs every income and expense ledger before the period; the
- * opening difference then covers the rows returned.
+ * opening difference then covers the rows returned (and opening stock is left out).
  */
 export async function ledgerRows(context: LedgerContext, from: string, to: string, only?: string): Promise<LedgerRows> {
   const period = parseInput(periodQuery, { from, to }, periodFields);
@@ -91,20 +101,22 @@ export async function ledgerRows(context: LedgerContext, from: string, to: strin
     const open = sides(opening), close = sides(closing);
     return { ...row, openingDebit: open.debit, openingCredit: open.credit, closingDebit: close.debit, closingCredit: close.credit, enteredOpening };
   });
+  const openingStock = only === undefined ? await openingStockValue(context) : null;
+  if (openingStock !== null) difference = addMoney(difference, openingStock);
   const side: Side | null = difference > 0n ? 'Dr' : difference < 0n ? 'Cr' : null;
   const amount = side === 'Cr' ? subtractMoney(0n, difference) : difference;
-  return { from: period.from, to: period.to, rows: result, openingDifference: { amount, side } };
+  return { from: period.from, to: period.to, rows: result, openingStock, openingDifference: { amount, side } };
 }
 
 export async function trialBalance(context: LedgerContext, from: string, to: string): Promise<TrialBalance> {
   await reportBudget(context, 30);
-  const { rows, openingDifference, ...period } = await ledgerRows(context, from, to);
+  const { rows, openingStock, openingDifference, ...period } = await ledgerRows(context, from, to);
   const totals = { openingDebit: 0n, openingCredit: 0n, debit: 0n, credit: 0n, closingDebit: 0n, closingCredit: 0n };
   const result = rows.map(({ enteredOpening: _entered, ...row }): TrialBalanceRow => {
     for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] = addMoney(totals[key], row[key]);
     return row;
   });
-  return { ...period, rows: result, totals, openingDifference };
+  return { ...period, rows: result, totals, openingStock, openingDifference };
 }
 
 /** One ledger's opening, movements and closing for the period (the trial balance row, so both always agree). */

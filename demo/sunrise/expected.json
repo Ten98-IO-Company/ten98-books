@@ -202,9 +202,9 @@
   },
   "balanceSheet": {
     "report": "Balance sheet as at 2026-12-31",
-    "total": "233357.70",
+    "total": "521297.25",
     "closingStockInAssets": "90652.95",
-    "note": "liabilities side total (capital, loans, current liabilities and the profit line, which is negative for a loss)"
+    "note": "the total of each side; a loss is a positive line on the assets side"
   },
   "outstanding": {
     "report": "Pending bills as at 2026-12-31 (debit amounts are shown with their side)",

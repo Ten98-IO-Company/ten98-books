@@ -368,16 +368,22 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.deepEqual(report.numbers, { checked: 3, matched: 2, unnumbered: 2, kind: 'dataset sequence (not yet verified against the reference)' });
   assert.ok(formatCompareResult(await compareDataset(owner.userId, stockDataset())).includes('  Voucher numbers (expectedNumber, checked when seeding): dataset sequence (not yet verified against the reference)'));
   assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (no entries)']);
-  assert.ok(report.skipped.includes('items.json: stock not yet supported (1 item(s), 1 location(s); opening stock worth 500.00 is not a ledger balance)'));
+  assert.ok(report.skipped.includes('items.json: stock is not valued yet (1 item(s), 1 location(s)): the statements hold the opening stock of 500.00 in every period'));
+  const created = { created: 1, present: 0 };
+  assert.deepEqual(report.stock, { masters: true, switchedOn: false, units: created, locations: created, groups: created, items: created, openingValue: '500.00' }, 'inventory is on for a new company');
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
   assert.match(printed, /no entries to post .*: 1 journal/);
+  assert.match(printed, /  stock: units 1 created, 0 already present; locations 1 created, 0 already present; stock groups 1 created, 0 already present; items 1 created, 0 already present; opening stock 500.00 set with the items created/);
   assert.match(printed, /vouchers refused by ten98-books posting rules and not posted/);
   assert.match(printed, /voucher numbers, dataset sequence \(not yet verified against the reference\): 2 of 3 checked match expectedNumber; 2 optional voucher\(s\) hold a number in the dataset but take none until regular/);
-  assert.deepEqual(await seedDataset(owner.userId, stockDataset()).then(again => [again.vouchers, again.refused.length]), [{ created: 0, present: 5, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
+  const again = await seedDataset(owner.userId, stockDataset());
+  assert.deepEqual([again.vouchers, again.refused.length], [{ created: 0, present: 5, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
+  const present = { created: 0, present: 1 };
+  assert.deepEqual(again.stock, { masters: true, switchedOn: false, units: present, locations: present, groups: present, items: present, openingValue: '' }, 'and creates no stock master twice');
 });
 
-test('the comparison leaves skipped vouchers and stock out of the counts, checks the opening stock difference and names what it cannot compare', async () => {
+test('the comparison leaves skipped vouchers out of the counts, checks the opening stock and a zero opening difference, and names what it cannot compare', async () => {
   const result = await compareDataset(owner.userId, stockDataset());
   const byLabel = Object.fromEntries(result.lines.map(line => [line.label, line]));
   // Eight vouchers expected in the period; three are never posted (an order, a memorandum, a voucher with no entries).
@@ -386,8 +392,10 @@ test('the comparison leaves skipped vouchers and stock out of the counts, checks
   assert.deepEqual([byLabel['Vouchers of type journal'].expected, byLabel['Vouchers of type journal'].actual, byLabel['Vouchers of type journal'].ok], ['2', '2', true], 'a journal may use a bank ledger');
   assert.ok(!('Vouchers of type sales_order' in byLabel) && !('Vouchers of type memorandum' in byLabel));
   assert.equal(byLabel['Vouchers of type receipt'].ok, true, 'the 2027 receipt is outside the period');
-  const stock = byLabel['Opening-balance difference (equals the opening stock value)'];
-  assert.deepEqual([stock.expected, stock.actual, stock.ok], ['500.00 Cr', '500.00 Cr', true]);
+  const stock = byLabel['Opening stock (the opening rows of items.json)'];
+  assert.deepEqual([stock.expected, stock.actual, stock.ok], ['500.00 Dr', '500.00 Dr', true]);
+  const difference = byLabel['Opening-balance difference (opening stock counted)'];
+  assert.deepEqual([difference.expected, difference.actual, difference.ok], ['0.00', '0.00', true]);
   assert.deepEqual([byLabel['Total debit'].ok, byLabel['Total credit'].ok, byLabel['Gross profit (excluding stock)'].ok, byLabel['Net profit (excluding stock)'].ok], [true, true, true, true]);
   assert.deepEqual(result.lines.filter(line => !line.ok && !line.reason).map(line => line.label), ['Voucher count (types ten98-books has)', 'Vouchers of type payment'], 'the number line agrees: the shifted number is explained');
   const shifted = result.lines.find(line => line.label === 'Voucher numbers shifted by vouchers ten98-books does not post')!;
@@ -395,19 +403,21 @@ test('the comparison leaves skipped vouchers and stock out of the counts, checks
   assert.match(shifted.reason!, /examples: journal-3 \(2026-01-06\): expected 3, assigned 1/);
   assert.ok(!('Gross profit' in byLabel) && !('Total assets' in byLabel), 'stock-inclusive figures are not compared');
   assert.deepEqual(result.notComparable, [
-    'stockSummary (needs inventory)',
+    'stockSummary (needs valuation (slice c))',
     'voucher types ten98-books does not have, left out of the voucher counts: sales_order 1, memorandum 1 (needs those voucher types)',
     'vouchers without lines of supported types that are not cancelled (no accounting effect) cannot be represented yet, left out of the voucher counts: journal 1',
     'voucher numbers: expectedNumber of 1 voucher(s) of types ten98-books does not have (not checked)',
     'trialBalance: 2 ledger(s) not listed in expected.json close at zero and were not compared (Profit and Loss, Purchases)',
-    'profitAndLoss.grossProfit and profitAndLoss.netProfit (include opening and closing stock; need inventory)',
-    'balanceSheet.total and balanceSheet.closingStockInAssets (include closing stock; need inventory)',
+    'profitAndLoss.grossProfit and profitAndLoss.netProfit (include the valued closing stock; needs valuation (slice c))',
+    'balanceSheet.total and balanceSheet.closingStockInAssets (include the valued closing stock; needs valuation (slice c))',
   ]);
   // A wrong opening stock is a difference, not an adjustment.
   const wrong = stockDataset();
   (wrong.extraFiles['items.json'] as { items: { opening: { quantity: string }[] }[] }).items[0].opening[0].quantity = '11';
-  const off = (await compareDataset(owner.userId, wrong)).lines.find(line => line.label.startsWith('Opening-balance difference'))!;
-  assert.deepEqual([off.expected, off.actual, off.difference, off.ok], ['550.00 Cr', '500.00 Cr', '50.00 Dr', false]);
+  const lines = (await compareDataset(owner.userId, wrong)).lines;
+  const off = lines.find(line => line.label.startsWith('Opening stock'))!;
+  assert.deepEqual([off.expected, off.actual, off.difference, off.ok], ['550.00 Dr', '500.00 Dr', '50.00 Cr', false]);
+  assert.equal(lines.find(line => line.label.startsWith('Opening-balance difference'))!.ok, true, 'the books still balance');
 });
 
 test('company creation carries an idempotency key, so a rerun finds the first company even when the marker search cannot', async () => {
