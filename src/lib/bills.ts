@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { calendarDate, type BillKind, type Side } from './ledger.ts';
+import { calendarDate, type BillKind, type CreditPeriod, type Side } from './ledger.ts';
 
 /**
  * The bill reports' shared vocabulary (M2a slice 1): query schemas (zod at the API boundary) and the shapes the server
@@ -88,3 +88,19 @@ export type AgeingReport = {
 };
 export type BillPickerRow = Omit<PendingBill, 'ledgerId' | 'ledgerName' | 'method'> & { side: Side | null };
 export type CreditCheck = { check: boolean; overdueBills: number };
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+/**
+ * The due date of a bill dated `date` with `period`, as the database's `bill_due_date` computes it: days and weeks
+ * add, months add calendar months and clamp to the month's last day (31 January plus one month is 28 February).
+ */
+export function billDueDate(date: string, period: CreditPeriod | null): string {
+  if (period === null) return date;
+  if ('dueDate' in period) return period.dueDate;
+  const [year, month, day] = date.split('-').map(Number);
+  if (period.unit !== 'month') return new Date(Date.UTC(year, month - 1, day + period.count * (period.unit === 'week' ? 7 : 1))).toISOString().slice(0, 10);
+  const target = new Date(Date.UTC(year, month - 1 + period.count, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${target.getUTCFullYear()}-${pad2(target.getUTCMonth() + 1)}-${pad2(Math.min(day, last))}`;
+}
