@@ -123,7 +123,7 @@ function CostCategoryFormBody({ existing, reloadData }: { existing?: CostCategor
     onHistory: existing ? () => void navigate({ to: '/app/c/$companyId/masters/history/cost-category/$categoryId', params: { companyId: company.id, categoryId: existing.id } }) : undefined,
   })
 
-  const set = (field: 'name' | 'secondLanguageName') => (event: { target: { value: string } }) => dispatch({ type: 'set', field, value: event.target.value })
+  const set = (field: 'name' | 'secondLanguageName') => (event: { target: { value: string } }) => { dispatch({ type: 'set', field, value: event.target.value }); setErrors(previous => ({ ...previous, [field]: undefined })) }
   const choose = (field: LookupName) => (value: string) => { dispatch({ type: 'flag', field, value: value === 'yes' }); setErrors(previous => ({ ...previous, [field]: undefined })) }
   return <Stack gap={6}>
     <PageHeader eyebrow='Masters' title={existing ? <>Alter cost category {isolate(existing.name)}</> : 'Create cost category'}

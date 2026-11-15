@@ -6,10 +6,10 @@ import { KeymapPrompt } from '../../components/KeymapChoice'
 import { useApp, useCompany } from '../../lib/app-context'
 import { commands, type CommandId } from '../../lib/commands'
 import { baseCurrencies, financialYearOf } from '../../lib/company'
+import { longDate } from '../../lib/reports'
 
 export const Route = createFileRoute('/app/c/$companyId/')({ component: CompanyHome })
 
-const longDate = (date: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`))
 /** Today's calendar date in the company's time zone (D-09). */
 const companyToday = (timeZone: string) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
