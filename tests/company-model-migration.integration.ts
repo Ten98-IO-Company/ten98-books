@@ -61,8 +61,9 @@ async function post(companyId: string, kind: string, date: string, lines: [ledge
     const voucher = (await admin.query(`INSERT INTO voucher (company_id, voucher_type_id, series, date, idempotency_key, request_hash, created_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, [companyId, type.id, type.numbering_series, date, key, createHash('sha256').update(key).digest('hex'), users.owner])).rows[0].id;
     for (const [index, [ledger, side, amount]] of lines.entries()) {
+      // Lines in their company's base currency: migration 0012 stops on a line in another code (Beta Three is in KWD).
       await admin.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate)
-        SELECT $1, $2, $3, id, $4, $5, 'AED', $5, 1 FROM ledger WHERE company_id = $1 AND name = $6`, [companyId, voucher, index + 1, side, amount, ledger]);
+        SELECT $1, $2, $3, l.id, $4, $5, c.base_currency, $5, 1 FROM ledger l JOIN company c ON c.company_id = l.company_id WHERE l.company_id = $1 AND l.name = $6`, [companyId, voucher, index + 1, side, amount, ledger]);
     }
     const number = (await admin.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, $3, 1)
       ON CONFLICT (company_id, voucher_type_id, series) DO UPDATE SET last_number = voucher_counter.last_number + 1 RETURNING last_number`, [companyId, type.id, type.numbering_series])).rows[0].last_number;
@@ -208,7 +209,9 @@ test('keys, guards, policies and grants are back as before; company now referenc
   const companyKey = (keys: typeof keysAfter) => keys.find(key => key.table === 'company' && key.name === 'company_company_id_fkey');
   assert.match(companyKey(keysBefore)!.definition, /REFERENCES project\(id\) ON DELETE CASCADE/);
   assert.equal(companyKey(keysAfter)!.definition, 'FOREIGN KEY (company_id) REFERENCES workspace(id) ON DELETE CASCADE');
-  assert.deepEqual(keysAfter.filter(key => key !== companyKey(keysAfter)), keysBefore.filter(key => key !== companyKey(keysBefore)));
+  // Migration 0012 adds the keys of ledgers and lines to their currency; every key that was there before is unchanged.
+  const added = ['ledger_currency_fkey', 'voucher_line_currency_fkey'];
+  assert.deepEqual(keysAfter.filter(key => key !== companyKey(keysAfter) && !added.includes(key.name)), keysBefore.filter(key => key !== companyKey(keysBefore)));
   // The dormant project table is closed to the application role; the key table is open for reads and inserts only.
   assert.deepEqual((await admin.query(`SELECT has_table_privilege('books_app', 'project', 'SELECT') AS project,
     has_table_privilege('books_app', 'company_creation', 'SELECT,INSERT') AS keys, has_table_privilege('books_app', 'company_creation', 'UPDATE') AS rewrite`)).rows,

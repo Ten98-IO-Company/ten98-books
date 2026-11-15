@@ -4,7 +4,6 @@ import { after, before, test } from 'node:test';
 import pg from 'pg';
 import { migrationFiles } from '../src/server/db.ts';
 import { createCostCategory, createCostCentre, saveCostCentresSetting } from '../src/server/ledger/cost-centres.ts';
-import { createLedger } from '../src/server/ledger/masters.ts';
 import { alterVoucher, createVoucher, readVoucher } from '../src/server/ledger/vouchers.ts';
 import { migrateDatabase } from '../src/server/startup-migrate.ts';
 import { moneyToWire } from '../src/lib/money.ts';
@@ -49,8 +48,8 @@ async function earlierCompany(client: pg.Client, company: string, billNames: str
     context.role = "owner";
     await saveCostCentresSetting(context, { enabled: true });
     const group = async (key: string) => (await context.client.query("SELECT id FROM account_group WHERE company_id = $1 AND system_key = $2", [company, key])).rows[0].id;
-    const sales = (await createLedger(context, { name: "Sales", groupId: await group("sales") })).id;
-    const party = (await createLedger(context, { name: "Party", groupId: await group("receivables") })).id;
+    const sales = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, cost_centres) VALUES ($1, $2, $3, true) RETURNING id', [company, await group("sales"), "Sales"])).rows[0].id;
+    const party = (await context.client.query('INSERT INTO ledger (company_id, group_id, name, bill_wise) VALUES ($1, $2, $3, true) RETURNING id', [company, await group("receivables"), "Party"])).rows[0].id;
     const centre = (await createCostCentre(context, { name: "Showroom", categoryId: (await createCostCategory(context, { name: "Channel" })).id, parentId: null })).id;
     const type = (await context.client.query("SELECT id FROM voucher_type WHERE company_id = $1 AND kind = 'sales'", [company])).rows[0].id;
     return (await createVoucher(context, { idempotencyKey: `earlier-${randomUUID()}`, voucherTypeId: type, date: "2026-02-01", lines: [

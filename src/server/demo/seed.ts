@@ -8,6 +8,7 @@ import { createCompany, listCompanies } from '../companies.ts';
 import { getDatabase } from '../db.ts';
 import { ledgerContext, runLedger, type LedgerContext } from '../ledger/context.ts';
 import { createCostCategory, createCostCentre, listCostCategories, listCostCentres, saveCostCentresSetting } from '../ledger/cost-centres.ts';
+import { createCurrency, currencyRates, listCurrencies, saveRates } from '../ledger/currencies.ts';
 import { alterLedger, createGroup, createLedger, listGroups, listLedgers, listVoucherTypes } from '../ledger/masters.ts';
 import { createItem, createTree, createUnit, listItems, listTree, listUnits, readInventorySetting, saveInventorySetting } from '../ledger/stock-masters.ts';
 import { cancelVoucher, createVoucher } from '../ledger/vouchers.ts';
@@ -15,7 +16,7 @@ import { withCompany } from '../tenancy.ts';
 import { readLedgerBills } from './bill-rows.ts';
 import { planBills, type SentBillRow } from './bills.ts';
 import { readLedgerCostSetting, readLineCosts } from './cost-rows.ts';
-import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type Dataset, type ItemsFile } from './dataset.ts';
+import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type CurrencyEntry, type Dataset, type ItemsFile } from './dataset.ts';
 
 /**
  * The demo seeder. For an existing user it creates each dataset's company through the app's own `createCompany` (the
@@ -92,6 +93,8 @@ export type SeedReport = {
    * `keptWithoutCostRows` are vouchers an earlier seed posted without cost rows, kept as they were.
    */
   costs: { masters: boolean; switchedOn: boolean; categories: Counts; centres: Counts; rowsPosted: number; leftOutRows: number; leftOut: string[]; warnings: Record<string, string[]>; keptWithoutCostRows: string[] };
+  /** Currencies (currencies.json): the masters and their rate rows created or already present (a present row keeps its rate). */
+  currencies: { masters: Counts; rates: Counts };
   /**
    * Stock masters from items.json. `masters` is true when the dataset has the file; `switchedOn` that this run switched
    * inventory on; `openingValue` is the opening stock of the items created in this run, formatted in the company's currency ('' when none).
@@ -103,6 +106,7 @@ type CostCategoryEntry = { key: string; name: string; allocateRevenue?: boolean;
 type CostCentreEntry = { key: string; name: string; category: string; parent?: string };
 const costCategoryEntries = (dataset: Dataset) => (dataset.extraFiles['costCategories.json'] ?? []) as CostCategoryEntry[];
 const costCentreEntries = (dataset: Dataset) => (dataset.extraFiles['costCentres.json'] ?? []) as CostCentreEntry[];
+const currencyEntries = (dataset: Dataset) => (dataset.extraFiles['currencies.json'] ?? []) as CurrencyEntry[];
 
 export async function findUserId(email: string): Promise<string> {
   const { rows } = await getDatabase().pool.query<{ id: string }>('SELECT id FROM "user" WHERE lower(email) = lower($1)', [email.trim()]);
@@ -200,12 +204,7 @@ export function unmodelled(dataset: Dataset): string[] {
   }
   if (withKey('bank').length) lines.push(`vouchers.json: bank details (instrument and bank date) on ${withKey('bank').length} voucher line(s) (not modelled)`);
   for (const [file, content] of Object.entries(dataset.extraFiles)) {
-    if (file === 'costCategories.json' || file === 'costCentres.json') continue;
-    if (file === 'currencies.json') {
-      const list = content as { code: string; rates?: unknown[] }[];
-      lines.push(`currencies.json: foreign currencies not yet supported (${list.map(currency => currency.code).join(', ')}; ${list.reduce((sum, currency) => sum + (currency.rates?.length ?? 0), 0)} rate(s))`);
-      continue;
-    }
+    if (file === 'costCategories.json' || file === 'costCentres.json' || file === 'currencies.json') continue;
     if (file === 'checkpoints.json') { lines.push('checkpoints.json: scenario checkpoint figures: pending bills are compared with the bill reports and the cost centre figures with the cost category summary'); continue; }
     if (file !== 'items.json') { lines.push(`${file}: feature file not modelled (kept as is)`); continue; }
     const items = content as ItemsFile;
@@ -286,6 +285,7 @@ async function seedMasters(userId: string, companyId: string, dataset: Dataset, 
       } catch (error) { failure(dataset, 'ledgers', at, error); }
     }
     await seedCostMasters(context, dataset, report);
+    await seedCurrencies(context, dataset, report);
     await seedStockMasters(context, dataset, report);
   }).catch(error => { throw error instanceof DemoError ? error : failure(dataset, 'ledgers', 'masters', error); });
 }
@@ -380,6 +380,37 @@ async function seedCostMasters(context: LedgerContext, dataset: Dataset, report:
     for (const entry of costCentreEntries(dataset)) await place(entry.key);
   } catch (error) {
     if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/costCentres.json: cost centres: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Creates the currencies the company lacks (by code; symbol default the code, decimal places default 2) and the rate rows
+ * it lacks (by currency, kind and date), so a rerun changes nothing; a currency or rate row already present is kept as it
+ * is. Foreign amounts on voucher lines are still posted at their base amounts (see unmodelled).
+ */
+async function seedCurrencies(context: LedgerContext, dataset: Dataset, report: SeedReport): Promise<void> {
+  const entries = currencyEntries(dataset);
+  if (!entries.length) return;
+  try {
+    const present = new Set((await listCurrencies(context)).map(currency => currency.code));
+    for (const entry of entries) {
+      if (present.has(entry.code)) report.currencies.masters.present++;
+      else {
+        await createCurrency(context, { code: entry.code, symbol: entry.symbol ?? entry.code, formalName: entry.name, decimals: entry.minorUnits ?? 2 });
+        report.currencies.masters.created++;
+      }
+      const stored = new Set((await currencyRates(context, entry.code)).map(row => `${row.kind} ${row.effectiveDate}`));
+      const byDate = new Map<string, Record<string, string>>();
+      for (const rate of entry.rates ?? []) {
+        if (stored.has(`${rate.kind} ${rate.date}`)) { report.currencies.rates.present++; continue; }
+        byDate.set(rate.date, { ...byDate.get(rate.date), [rate.kind]: rate.rate });
+        report.currencies.rates.created++;
+      }
+      for (const [date, kinds] of byDate) await saveRates(context, { date, rates: [{ currency: entry.code, ...kinds }] });
+    }
+  } catch (error) {
+    if (error instanceof FoundationError) throw new DemoError(`demo/${dataset.slug}/currencies.json: currencies: ${error.message}`);
     throw error;
   }
 }
@@ -552,6 +583,7 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
     numberDifferences: [], nameDifferences: [], openingDifferences: [], skipped: unmodelled(dataset),
     mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {}, keptWithoutBills: [] },
     costs: { masters: costCategoryEntries(dataset).length + costCentreEntries(dataset).length > 0, switchedOn: false, categories: { created: 0, present: 0 }, centres: { created: 0, present: 0 }, rowsPosted: 0, leftOutRows: 0, leftOut: [], warnings: {}, keptWithoutCostRows: [] },
+    currencies: { masters: { created: 0, present: 0 }, rates: { created: 0, present: 0 } },
     stock: { masters: dataset.extraFiles['items.json'] !== undefined, switchedOn: false, units: { created: 0, present: 0 }, locations: { created: 0, present: 0 }, groups: { created: 0, present: 0 }, items: { created: 0, present: 0 }, openingValue: '' },
   };
   if (!company) {
@@ -587,7 +619,7 @@ export async function selectDatasets(selection: DemoSelection, root = demoRoot):
 export function formatSeedReport(report: SeedReport): string[] {
   const stock = report.stock;
   const changed = report.companyCreated || report.groups.created || report.ledgers.created || report.ledgers.openingsSet || report.vouchers.created || report.costs.switchedOn || report.costs.categories.created || report.costs.centres.created
-    || stock.switchedOn || stock.units.created || stock.locations.created || stock.groups.created || stock.items.created;
+    || stock.switchedOn || stock.units.created || stock.locations.created || stock.groups.created || stock.items.created || report.currencies.masters.created || report.currencies.rates.created;
   const part = (counts: Counts) => `${counts.created} created, ${counts.present} already present`;
   const lines = [
     `${report.companyName} (${report.slug}): ${changed ? 'seeded' : 'already present, nothing changed'}`,
@@ -598,6 +630,8 @@ export function formatSeedReport(report: SeedReport): string[] {
   ];
   const costs = report.costs;
   if (costs.masters) lines.push(`  cost centres: ${costs.switchedOn ? 'switched on; ' : ''}categories ${part(costs.categories)}; centres ${part(costs.centres)}`);
+  const currencies = report.currencies;
+  if (currencies.masters.created || currencies.masters.present) lines.push(`  currencies: ${part(currencies.masters)}; rate rows ${part(currencies.rates)}`);
   if (stock.masters) lines.push(`  stock: ${stock.switchedOn ? 'inventory switched on; ' : ''}units ${part(stock.units)}; locations ${part(stock.locations)}; stock groups ${part(stock.groups)}; items ${part(stock.items)}${stock.items.created ? `; opening stock ${stock.openingValue} set with the items created` : ''}`);
   if (costs.rowsPosted) lines.push(`  cost rows: ${costs.rowsPosted} posted with the vouchers`);
   if (costs.leftOutRows) lines.push(`  cost rows left out: ${costs.leftOutRows} on ${costs.leftOut.length} line(s) whose ledger takes no cost centres (the ledger module dropped them, cost_ignored); e.g. ${costs.leftOut.slice(0, 4).join(', ')}`);

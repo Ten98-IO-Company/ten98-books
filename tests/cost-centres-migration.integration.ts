@@ -80,7 +80,8 @@ test('existing income and expense ledgers take cost centres, each with a logged 
     const log = (await admin.query(`SELECT entity_id, action, actor_id, before, after FROM revision_log WHERE company_id = $1 AND actor_id = 'migration:0008_cost_centres' ORDER BY entity_id`, [company])).rows;
     assert.deepEqual(log.map(row => [row.entity_id, row.action]).sort(), [[ledgers[company].rent, 'alter'], [ledgers[company].sales, 'alter']].sort());
     for (const entry of log) {
-      const now = JSON.parse(toJson(await inCompany(user, company, context => readLedger(context, entry.entity_id))));
+      // The ledger as the API reads it, less the currency field migration 0012 added after these entries were logged.
+      const { currency: _currency, ...now } = JSON.parse(toJson(await inCompany(user, company, context => readLedger(context, entry.entity_id))));
       assert.deepEqual(entry.after, now, 'the after snapshot is the ledger as the API reads it');
       assert.deepEqual(entry.before, { ...now, costCentres: false, revision: now.revision - 1 });
     }
