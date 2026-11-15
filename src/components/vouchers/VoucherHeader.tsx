@@ -8,7 +8,7 @@ import { entryDateLabel, type LedgerOption } from '../../lib/voucher-entry'
  * entry, the Account with its current balance under it. Each field carries `data-voucher-field` so the screen can move
  * focus to it by name.
  */
-export function VoucherHeader({ date, dateText, dateError, onDateText, account, accountOptions, accountError, onAccount, onAccountTyped, accountBalance, accountNegative, locked }: {
+export function VoucherHeader({ date, dateText, dateError, onDateText, account, accountOptions, accountError, onAccount, onAccountTyped, onSkipAccount, accountBalance, accountNegative, locked }: {
   date: string
   /** The date field's text while it is open (focused), or null to show the date with its weekday. */
   dateText: string | null
@@ -20,6 +20,8 @@ export function VoucherHeader({ date, dateText, dateError, onDateText, account, 
   accountError?: string
   onAccount: (ledgerId: string) => void
   onAccountTyped: (text: string, advance: boolean) => 'picked' | 'error' | 'unchanged'
+  /** Down on the empty Account (observed): to the first line without choosing one. */
+  onSkipAccount: () => void
   accountBalance: string | null
   accountNegative: boolean
   locked: boolean
@@ -32,7 +34,12 @@ export function VoucherHeader({ date, dateText, dateError, onDateText, account, 
           onChange={event => onDateText(event.target.value)} />
       </Field>
     </Stack>
-    {account !== null && <Stack data-voucher-field='account' gap={1}>
+    {account !== null && <Stack data-voucher-field='account' gap={1} onKeyDownCapture={event => {
+      // Taken before the lookup opens its list on Down: only an empty Account skips (entry.skip-account).
+      const input = event.target as HTMLInputElement
+      if (event.key !== 'ArrowDown' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || input.value !== '') return
+      event.preventDefault(); event.stopPropagation(); onSkipAccount()
+    }}>
       <LookupField label='Account' options={accountOptions} value={account} disabled={locked} error={accountError} required
         description='Cash and bank ledgers. Down on an empty Account goes to the first line.' placeholder='Choose a cash or bank ledger…' emptyMessage='No cash or bank ledger matches.'
         onValueChange={onAccount} onTypedEnter={onAccountTyped} />

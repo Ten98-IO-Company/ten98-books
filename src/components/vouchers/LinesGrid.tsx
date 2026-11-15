@@ -3,7 +3,7 @@ import { useMemo, type Ref } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { useAppCommand } from '../KeyboardShell'
 import {
-  amountText, balanceText, kindTitles, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
+  amountText, balanceText, firstLineSide, kindTitles, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
   type EntryKind, type EntryLayout, type EntryLedger, type EntryLine, type LedgerLists,
 } from '../../lib/voucher-entry'
 import type { Side } from '../../lib/ledger'
@@ -43,7 +43,8 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
   const listOf = (row: EntryGridRow) => lists[(layout === 'double' ? row.values.side : '') as Side | ''] ?? lists['']
   const columns = useMemo<EntryGridColumn[]>(() => [
     ...layout === 'double' ? [{ id: 'side', label: 'Dr or Cr', type: 'side' as const, sides, required: true,
-      readOnly: (row: EntryGridRow) => locked || row.key === lines[0]?.key }] : [],
+      // Fixed by the type on the first line (observed); a line that became first another way keeps its side editable.
+      readOnly: (row: EntryGridRow) => locked || (row.key === lines[0]?.key && row.values.side === firstLineSide(kind)) }] : [],
     { id: 'ledger', label: 'Ledger', type: 'lookup', readOnly: locked,
       options: (row: EntryGridRow) => listOf(row).defaults, allOptions: (row: EntryGridRow) => listOf(row).all, showAllLabel: 'Show all ledgers' },
     { id: 'amount', label: 'Amount', type: 'amount', readOnly: locked, parse: (text: string) => parseEntryAmount(text, exponent) },
@@ -67,7 +68,8 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
 /** Ctrl+D removes the line with the cursor in its ledger cell, and does nothing in an amount cell (observed). */
 function LineCommands() {
   const grid = useEntryGrid()
-  useAppCommand('entry.line.remove', () => { if (grid.activeColumn === 'ledger') grid.removeRow() })
+  // From the bar, focus comes back to the cell either way.
+  useAppCommand('entry.line.remove', () => { if (grid.activeColumn === 'ledger') grid.removeRow(); else if (grid.activeRow) grid.focusCell(grid.activeRow) })
   return null
 }
 

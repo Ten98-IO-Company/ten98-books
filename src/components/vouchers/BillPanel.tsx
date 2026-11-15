@@ -98,6 +98,8 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
     const index = rows.findIndex(row => row.key === event.row)
     const row = rows[index]
     if (!row) return
+    // "Against a bill": the Bill cell opens its pending list, as the method list does (observed).
+    if (event.column === 'method' && row.method === 'against_ref' && row.bill === '') window.setTimeout(() => grid.current?.focusCell(row.key, 'bill', { open: true }), 0)
     if (event.column === 'method' && event.changed) {
       rows[index] = { ...row, bill: '', name: names(row.method) ? row.name : '', credit: names(row.method) ? row.credit || creditDefault : '' }
       change(rows)

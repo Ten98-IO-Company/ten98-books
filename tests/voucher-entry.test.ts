@@ -303,7 +303,7 @@ test('focus after No at accept, after the date key, after a ledger alteration; t
   assert.deepEqual(afterDeclinedAccept('single', lines), { field: 'account' });
   assert.deepEqual(afterDeclinedAccept('double', lines), { cell: { row: 'line-1', column: 'ledger', open: true } });
   assert.deepEqual(afterDate({ cell: { row: 'line-2', column: 'ledger' } }), { cell: { row: 'line-2', column: 'ledger', open: true } }, 'a ledger cell reopens its list');
-  assert.deepEqual(afterDate({ cell: { row: 'line-2', column: 'amount' } }), { cell: { row: 'line-2', column: 'amount', edit: false } });
+  assert.deepEqual(afterDate({ cell: { row: 'line-2', column: 'amount' } }), { cell: { row: 'line-2', column: 'amount', edit: true } }, 'in its editor, so typed keys land there (Part A finding)');
   assert.deepEqual(afterDate({ field: 'narration' }), { field: 'narration' });
   assert.deepEqual(afterLedgerInPlace('saved', 'line-2'), { cell: { row: 'line-2', column: 'amount', edit: true } });
   assert.deepEqual(afterLedgerInPlace('closed', 'line-2'), { cell: { row: 'line-2', column: 'ledger', open: true } });

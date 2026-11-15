@@ -80,7 +80,8 @@ export function useCounterLedgers(companyId: string, voucherTypeId: string | nul
       .catch(() => asked.current.delete(key))
   }, [companyId, voucherTypeId])
   const counterOf = useCallback((ledgerId: string, side: Side): string | null | undefined => known.current.get(`${voucherTypeId}:${ledgerId}:${side}`), [voucherTypeId])
-  return { read, counterOf }
+  const reset = useCallback(() => { known.current.clear(); asked.current.clear() }, [])
+  return { read, counterOf, reset }
 }
 
 const workingListeners = new Set<() => void>()

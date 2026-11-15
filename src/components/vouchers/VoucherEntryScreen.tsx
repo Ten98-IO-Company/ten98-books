@@ -92,7 +92,13 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const [confirm, dialog] = useConfirm()
   const dirty = draftDirty(state)
   const leave = useLeave({ to: '/app/c/$companyId', params: { companyId: company.id } })
-  const askToLeave = useCallback(() => { grid.current?.commit(); return confirm({ title: `Leave this ${kindTitles[latest.current.kind].toLowerCase()} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' }) }, [confirm])
+  const askToLeave = useCallback(async () => {
+    grid.current?.commit()
+    const yes = await confirm({ title: `Leave this ${kindTitles[latest.current.kind].toLowerCase()} unsaved?`, description: 'What you entered in this voucher is not saved.', confirmLabel: 'Leave', cancelLabel: 'Keep entering' })
+    // Kept: back to where the cursor was, also when the question came from a link or a key outside the voucher.
+    if (!yes) window.setTimeout(() => focus(afterDate(lastOrigin.current)), 0)
+    return yes
+  }, [confirm])
   const guard = useLeaveGuard(dirty, askToLeave)
 
   // ---- Focus ----
@@ -116,10 +122,32 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const firstField = (from = latest.current): EntryFocus => from.layout === 'single' ? { field: 'account' } : { cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } }
   const firstLine = (from = latest.current): EntryFocus => ({ cell: { row: from.lines[0]?.key ?? '', column: 'ledger', open: true } })
   useEffect(() => { focusSoon(firstField()) }, [])
+  // Where the cursor last was inside the voucher, for keys and bar buttons that take focus away (the date button, a question).
+  const lastOrigin = useRef<FocusOrigin>({ field: 'account' })
+  // A line whose bill panel was just accepted: the cursor moves on once the panel has given focus back to the grid.
+  const continuing = useRef<string | null>(null)
+  useEffect(() => {
+    const holder = root.current
+    if (!holder) return
+    const onFocus = (event: FocusEvent) => {
+      const target = event.target as Element
+      const field = fieldOf(holder, target)
+      if (field && field !== 'date') { lastOrigin.current = { field }; return }
+      if (!holder.querySelector('[role="grid"]')?.contains(target)) return
+      window.setTimeout(() => {
+        const row = grid.current?.activeRow, column = grid.current?.activeColumn
+        if (row && (column === 'side' || column === 'ledger' || column === 'amount')) lastOrigin.current = { cell: { row, column } }
+        const pending = continuing.current
+        if (pending) { continuing.current = null; continueAfter(pending) }
+      }, 0)
+    }
+    holder.addEventListener('focusin', onFocus)
+    return () => holder.removeEventListener('focusin', onFocus)
+  }, [])
 
   // ---- Lines ----
 
-  const setLines = (lines: EntryLine[]) => { latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved('') }
+  const setLines = (lines: EntryLine[]) => { latest.current = { ...latest.current, lines }; dispatch({ type: 'lines', lines }); setSaved(''); setFailure(null) }
   // A line appended before its counter-ledger read answered takes the answer while it is still empty (observed timing aside).
   const awaiting = useRef(new Map<string, string>())
   const counters = useCounterLedgers(company.id, voucherType?.id ?? null, (ledgerId, side, counter) => {
@@ -198,14 +226,19 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
         line={{ ledger: line.ledger, side: lineSide(line), amount: minorOf(line.amount, exponent) }} previous={latest.current.bills[row.key]}
         creditDefault={creditPeriodText((ledger?.creditPeriod ?? null) as CreditPeriod | null)}
         // The grid's dialog gives focus back to the amount cell as it closes; the cursor moves on after that.
-        onAccept={rows => { dispatch({ type: 'bills', row: row.key, rows }); window.setTimeout(() => window.requestAnimationFrame(() => continueAfter(row.key)), 120) }} close={close} />
+        onAccept={rows => {
+          dispatch({ type: 'bills', row: row.key, rows })
+          continuing.current = row.key
+          // Should the grid not give focus back (nothing to restore), move on anyway.
+          window.setTimeout(() => { if (continuing.current === row.key) { continuing.current = null; continueAfter(row.key) } }, 800)
+        }} close={close} />
     },
   }
 
   // ---- Header ----
 
   const accountOptions = useMemo(() => ledgerOptions(state.kind, 'single', 'account', '', entryLedgers).all, [state.kind, entryLedgers])
-  const setAccount = (ledgerId: string) => { latest.current = { ...latest.current, account: ledgerId }; dispatch({ type: 'account', ledger: ledgerId }); setAccountError(undefined); setSaved('') }
+  const setAccount = (ledgerId: string) => { latest.current = { ...latest.current, account: ledgerId }; dispatch({ type: 'account', ledger: ledgerId }); setAccountError(undefined); setSaved(''); setFailure(null) }
   function accountTyped(text: string, advance: boolean): 'picked' | 'error' | 'unchanged' {
     const result = resolveTyped(accountOptions, text, latest.current.account)
     if ('error' in result) { setAccountError(result.error); return 'error' }
@@ -221,8 +254,10 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     const field = fieldOf(root.current, active)
     const column = grid.current?.activeColumn
     const inGrid = !!active && !field && root.current?.querySelector('[role="grid"]')?.contains(active)
+    // From a bar button (focus outside the voucher) the field or cell the cursor was in last.
     dateOrigin.current = inGrid && grid.current?.activeRow && (column === 'side' || column === 'ledger' || column === 'amount')
       ? { cell: { row: grid.current.activeRow, column } } : field && field !== 'date' ? { field }
+      : !root.current?.contains(active) ? lastOrigin.current
       : latest.current.layout === 'single' ? { field: 'account' } : { cell: { row: latest.current.lines[0]?.key ?? '', column: 'ledger' } }
     if (inGrid) grid.current?.commit()
     setDateError(undefined)
@@ -299,6 +334,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     const outcome = await draft.save(voucherType.id, current)
     if (!outcome) return
     if (outcome.kind === 'saved') {
+      // The saved voucher is history now: counters read before it are stale.
+      counters.reset()
       const { voucher, warnings } = outcome
       const differs = expected !== null && voucher.number !== expected ? ` (No. ${expected} was shown; another voucher took it first)` : ''
       const notes = warnings.length ? ` ${warnings.length === 1 ? 'Note' : 'Notes'}: ${warnings.map(warning => warning.code.replaceAll('_', ' ')).join(', ')}.` : ''
@@ -416,7 +453,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     {warnings.map(warning => <Alert key={warning} tone='warning'>{warning}</Alert>)}
     <VoucherHeader date={state.date} dateText={dateText} dateError={dateError} onDateText={text => { setDateText(text); setDateError(undefined) }}
       account={state.layout === 'single' ? state.account : null} accountOptions={accountOptions} accountError={accountError}
-      onAccount={setAccount} onAccountTyped={accountTyped} accountBalance={accountBalance}
+      onAccount={setAccount} onAccountTyped={accountTyped} onSkipAccount={() => focus(firstLine())} accountBalance={accountBalance}
       accountNegative={!!state.account && (balances.get(state.account) ?? 0n) < 0n} locked={locked} />
     <LinesGrid kind={state.kind} layout={state.layout} number={number} lines={state.lines} ledgers={entryLedgers} balances={balances} exponent={exponent}
       locked={locked} apiRef={grid} panel={panel} onLines={setLines} createRow={createRow} onEnd={onEnd} onCellCommit={onCellCommit} announce={setAnnounced} />

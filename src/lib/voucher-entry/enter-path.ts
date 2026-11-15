@@ -59,11 +59,11 @@ export function afterDeclinedAccept(layout: EntryLayout, lines: readonly EntryLi
   return lines.length ? { cell: { row: lines[0].key, column: 'ledger', open: true } } : { field: 'date' };
 }
 
-/** Where the date key's field returns: the field or cell it was opened from; a ledger cell reopens its list (observed). */
+/** Where the date key's field returns: the field or cell it was opened from, editing, so typing goes on there; a ledger cell reopens its list (observed). */
 export type FocusOrigin = { field: 'date' | 'account' | 'total' | 'narration' } | { cell: { row: string; column: 'side' | 'ledger' | 'amount' } };
 export function afterDate(origin: FocusOrigin): EntryFocus {
   if ('field' in origin) return origin;
-  return { cell: { ...origin.cell, ...origin.cell.column === 'ledger' ? { open: true } : { edit: false } } };
+  return { cell: { ...origin.cell, ...origin.cell.column === 'ledger' ? { open: true } : { edit: true } } };
 }
 
 /** After the ledger alteration opened from a lookup: saved goes to the line's amount, closed back to the ledger with its list (observed). */
