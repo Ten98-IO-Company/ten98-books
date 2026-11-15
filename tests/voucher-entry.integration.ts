@@ -4,8 +4,13 @@ import { after, before, test } from 'node:test';
 import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtime';
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { addLedger, asAdmin, browser, chart, createCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
+import { addLedger, asAdmin, browser, chart, createCompany, inCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
+import { accountSide, nextBillRow, toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
+import { join } from 'node:path';
+import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
+import { seedDataset } from '../src/server/demo/seed.ts';
+import { listLedgers } from '../src/server/ledger/masters.ts';
+import { listVouchers, readVoucher } from '../src/server/ledger/vouchers.ts';
 
 /**
  * The voucher entry reads (docs/LEDGER.md, "Voucher entry reads"): the previewed next number, the balance preview and the
@@ -305,4 +310,45 @@ test('the pending list for entry is in the observed name order: case and hyphens
   }
   const listed = (await ok(owner.browser.call(`${c.base}/ledgers/${party}/bills?asOf=2026-07-01&scope=pending&sort=name`))).bills.map((bill: any) => bill.name);
   assert.deepEqual(listed, ['10', '9', 'A-020', 'A-100', 'a2', 'B-050', 'B1', 'b3', 'B-300', 'C-200']);
+});
+
+test('round 2, item 11: the screen\'s bodies for the twelve starter vouchers store exactly what a full seed stores, row for row', async () => {
+  const starter = await loadDataset(join(demoRoot, 'starter-trading'));
+  const full = await seedDataset(owner.userId, starter);
+  const copy = await seedDataset(owner.userId, starter, true, 'Entry shape copy');
+  const ledgers = await inCompany(owner.userId, copy.companyId, listLedgers);
+  const types = (await ok(owner.browser.call(`/api/companies/${copy.companyId}/voucher-types`))).voucherTypes as { id: string; kind: string; systemKey: string | null }[];
+  const nameOf = new Map(starter.ledgers.map(ledger => [ledger.key, ledger.name]));
+  const ledgerId = (key: string) => ledgers.find(ledger => ledger.name === nameOf.get(key))!.id;
+  const cashOrBank = (id: string) => ledgers.find(ledger => ledger.id === id)?.cashOrBank === true;
+  const slice = starter.vouchers.filter(voucher => ['payment', 'receipt', 'contra', 'journal'].includes(voucher.type));
+  assert.equal(slice.length, 12);
+  for (const voucher of slice) {
+    const kind = voucher.type as 'payment' | 'receipt' | 'contra' | 'journal';
+    const lines = voucher.lines.map((line, index) => ({ key: `line-${index + 1}`, side: line.side as 'Dr' | 'Cr', ledger: ledgerId(line.ledger), amount: line.amount }));
+    // As the screen keys them (Part B): single entry with the Account on its side; a journal in double entry.
+    const account = kind === 'journal' ? undefined : lines.find(line => line.side === accountSide(kind) && cashOrBank(line.ledger));
+    const draft = account ? { kind, layout: 'single' as const, account: account.ledger, lines: lines.filter(line => line !== account) } : { kind, layout: 'double' as const, account: '', lines };
+    // Each bill-wise line gets the panel's default rows, as accepted with Enter.
+    const bills: Record<string, BillDraft[]> = {};
+    for (const line of draft.lines) {
+      if (!ledgers.find(ledger => ledger.id === line.ledger)?.billWise) continue;
+      const pending = ((await ok(owner.browser.call(`/api/companies/${copy.companyId}/ledgers/${line.ledger}/bills?asOf=${voucher.date}&scope=pending&sort=name`))).bills as any[])
+        .map(bill => ({ ...bill, pending: parseMoney(bill.pending, 2), finalPending: parseMoney(bill.finalPending, 2) }));
+      const side = draft.layout === 'single' ? (accountSide(kind) === 'Dr' ? 'Cr' : 'Dr') : line.side;
+      bills[line.key] = [nextBillRow({ kind, lineSide: side, lineAmount: parseMoney(line.amount, 2), rows: [], pending, exponent: 2, key: 'b1' })];
+    }
+    const typeId = types.find(type => type.kind === kind && type.systemKey !== null)!.id;
+    const body = toVoucherBody({ ...draft, idempotencyKey: `shape-${randomUUID()}`, voucherTypeId: typeId, date: voucher.date, narration: voucher.narration ?? '', bills }, 2);
+    const answer = await owner.browser.call(`/api/companies/${copy.companyId}/vouchers`, body);
+    assert.equal(answer.status, 201, `${voucher.key}: ${JSON.stringify(answer.body)}`);
+  }
+  const stored = async (companyId: string) => inCompany(owner.userId, companyId, async context => {
+    const page = await listVouchers(context, { from: '2026-01-01', to: '2026-12-31', limit: 500 });
+    const read = await Promise.all(page.vouchers.filter(voucher => ['payment', 'receipt', 'contra', 'journal'].includes(voucher.kind)).map(voucher => readVoucher(context, voucher.id)));
+    return read.map(voucher => ({ kind: voucher.kind, date: voucher.date, number: voucher.number, narration: voucher.narration,
+      lines: voucher.lines.map(line => ({ ledger: line.ledgerName, side: line.side, amount: line.amount, bills: line.bills.map(bill => ({ kind: bill.kind, name: bill.billName, side: bill.side, amount: bill.amount })) })) }))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+  });
+  assert.deepEqual(await stored(copy.companyId), await stored(full.companyId));
 });
