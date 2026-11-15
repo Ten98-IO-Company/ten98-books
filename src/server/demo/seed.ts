@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import pg, { type PoolClient } from 'pg';
 import { formatMoney } from '@ten98/runtime';
 import { baseCurrencies, companyCreateInput } from '../../lib/company.ts';
+import { itemInvoiceKinds, type ItemLineInput, type VoucherKind } from '../../lib/ledger.ts';
 import { nameMatchKey } from '../../lib/names.ts';
 import { FoundationError } from '../auth.ts';
+import { postgresUrl } from '../config.ts';
 import { createCompany, listCompanies } from '../companies.ts';
 import { getDatabase } from '../db.ts';
 import { ledgerContext, runLedger, type LedgerContext } from '../ledger/context.ts';
@@ -16,7 +19,7 @@ import { withCompany } from '../tenancy.ts';
 import { readLedgerBills } from './bill-rows.ts';
 import { planBills, type SentBillRow } from './bills.ts';
 import { readLedgerCostSetting, readLineCosts } from './cost-rows.ts';
-import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type CurrencyEntry, type Dataset, type ItemsFile } from './dataset.ts';
+import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositionOf, listDatasetFolders, loadDataset, numbersKind, openingStockValue, toMinor, type CurrencyEntry, type Dataset, type InventoryEntry, type ItemsFile, type VoucherEntry } from './dataset.ts';
 
 /**
  * The demo seeder. For an existing user it creates each dataset's company through the app's own `createCompany` (the
@@ -33,7 +36,7 @@ import { checkNumbers, DemoError, demoRoot, describeNumberDifference, dispositio
  */
 
 /** Feature names (company.json `features`) ten98-books models; anything else is listed as skipped. */
-export const supportedFeatures: ReadonlySet<string> = new Set(['accounting', 'billWise', 'costCentres']);
+export const supportedFeatures: ReadonlySet<string> = new Set(['accounting', 'billWise', 'costCentres', 'inventory']);
 
 export const voucherKeyPrefix = (slug: string) => `demo:${slug}:`;
 /** The idempotency key the company is created under: one company per dataset and owner, however it is renamed later. */
@@ -98,8 +101,15 @@ export type SeedReport = {
   /**
    * Stock masters from items.json. `masters` is true when the dataset has the file; `switchedOn` that this run switched
    * inventory on; `openingValue` is the opening stock of the items created in this run, formatted in the company's currency ('' when none).
+   * `itemLines` were sent with vouchers posted in this run; `warnings` are the ledger module's negative-stock answers to them, each naming the voucher.
+   * `shape` is how the company holds the dataset's item lines (see `seededBeforeItemLines`): `items` with them, `accounting` for a
+   * company seeded before item lines (its item invoices stay accounting invoices and `journalsLeftOut` stock journals are not
+   * posted), `none` when the dataset has no item lines the seeder reads.
    */
-  stock: { masters: boolean; switchedOn: boolean; units: Counts; locations: Counts; groups: Counts; items: Counts; openingValue: string };
+  stock: {
+    masters: boolean; switchedOn: boolean; units: Counts; locations: Counts; groups: Counts; items: Counts; openingValue: string;
+    itemLines: number; warnings: string[]; shape: 'items' | 'accounting' | 'none'; journalsLeftOut: number;
+  };
 };
 
 type CostCategoryEntry = { key: string; name: string; allocateRevenue?: boolean; allocateNonRevenue?: boolean };
@@ -192,8 +202,16 @@ export function unmodelled(dataset: Dataset): string[] {
   note('ledgers.json', dataset.ledgers, 'ledger(s)');
   note('vouchers.json', dataset.vouchers, 'voucher(s)');
   note('vouchers.json', dataset.vouchers.flatMap(voucher => voucher.lines), 'voucher line(s)');
-  const inventory = dataset.vouchers.filter(voucher => voucher.inventory?.length);
-  if (inventory.length) lines.push(`vouchers.json: inventory on ${inventory.length} voucher(s), ${inventory.reduce((sum, voucher) => sum + voucher.inventory!.length, 0)} item line(s) (stock is not modelled)`);
+  const inventory = dataset.vouchers.filter(voucher => voucher.inventory?.length && dispositionOf(voucher) === 'post');
+  const itemLines = inventory.flatMap(voucher => voucher.inventory as InventoryEntry[]);
+  if (!dataset.extraFiles['items.json']) {
+    if (inventory.length) lines.push(`vouchers.json: inventory on ${inventory.length} voucher(s), ${itemLines.length} item line(s), not read: the dataset has no items.json`);
+  } else {
+    // The seeder reads these fields of an item line (the unit is checked against the item's when the dataset is loaded).
+    const read = new Set(['item', 'direction', 'quantity', 'rate', 'amount', 'discountPercent', 'location', 'unit']);
+    const others = [...new Set(itemLines.flatMap(line => Object.keys(line).filter(key => !read.has(key))))].sort();
+    if (others.length) lines.push(`vouchers.json: ${others.join(', ')} on ${itemLines.filter(line => Object.keys(line).some(key => !read.has(key))).length} item line(s) of posted vouchers (not read)`);
+  }
   // The features the line extras carry, counted: none of them is modelled, and the amounts are posted without them.
   const lineExtras = dataset.vouchers.flatMap(voucher => voucher.lines.map(line => line.extras as Record<string, unknown> | undefined)).filter(extra => extra !== undefined);
   const withKey = (key: string) => lineExtras.filter(extra => Array.isArray(extra[key]) ? (extra[key] as unknown[]).length > 0 : extra[key] !== undefined);
@@ -435,13 +453,68 @@ export function describeSkippedBills(skipped: ReturnType<typeof planBills>['skip
 type PostedLine = { ledgerId: string; side: 'Dr' | 'Cr'; amount: string; bills?: SentBillRow[]; costAllocations?: { costCentreId: string; amount: string }[] };
 /** The shapes one voucher is tried in: complete, without its cost rows (bill rows kept), and without either. */
 type Shape = 'full' | 'withoutCost' | 'plain';
+/** The ids item lines name: items and locations by dataset key, and ledgers by key for the item ledger. */
+type StockIds = { items: Record<string, string>; locations: Record<string, string>; ledgers: Record<string, string> };
+
+/**
+ * A voucher's item lines as sent. An invoice's items post to one item ledger, whose voucher line the ledger module derives
+ * and appends after the lines sent: the dataset's own copy of that line is the one line on the kind's side worth the
+ * items' sum, and it must be the voucher's last line, so the lines sent before it keep their numbers (bill rows, cost rows
+ * and the ledger module's warnings refer to lines by number). Anything else is a DemoError, never a guess. A stock journal
+ * sends each row's direction and no ledger lines.
+ */
+export function planVoucherItems(dataset: Dataset, voucher: VoucherEntry, ids: StockIds): { inventory: ItemLineInput[]; itemLedgerId?: string; ledgerLine?: number } {
+  const rows = voucher.inventory as InventoryEntry[];
+  const invoice = itemInvoiceKinds[voucher.type as VoucherKind];
+  const inventory = rows.map((row): ItemLineInput => ({
+    itemId: ids.items[row.item], ...row.location !== undefined ? { locationId: ids.locations[row.location] } : {}, quantity: row.quantity,
+    ...row.rate !== undefined ? { rate: row.rate } : {}, ...row.discountPercent !== undefined ? { discountPercent: row.discountPercent } : {},
+    ...row.amount !== undefined ? { amount: row.amount } : {}, ...invoice ? {} : { direction: row.direction },
+  }));
+  if (!invoice) return { inventory };
+  const exponent = dataset.company.minorUnits;
+  const sum = rows.reduce((total, row) => total + toMinor(row.amount!, exponent), 0n);
+  const at = `demo/${dataset.slug}/vouchers.json: voucher "${voucher.key}": `;
+  const found = voucher.lines.flatMap((line, index) => line.side === invoice.side && toMinor(line.amount, exponent) === sum ? [index] : []);
+  if (found.length !== 1) {
+    throw new DemoError(`${at}${found.length ? `${found.length} lines` : 'no line'} on the ${invoice.side} side ${found.length ? 'are' : 'is'} worth the items' sum of ${formatMoney(sum, exponent)}; the seeder needs exactly one, the item ledger's line, which the ledger module derives from the items`);
+  }
+  const index = found[0];
+  if (index !== voucher.lines.length - 1) throw new DemoError(`${at}the item ledger's line (line ${index + 1}, worth the items' sum) must be the voucher's last line: the ledger module appends it after the lines sent`);
+  return { inventory, itemLedgerId: ids.ledgers[voucher.lines[index].ledger], ledgerLine: index };
+}
+
+/** The keys of the dataset's item invoices (an invoice kind with item lines, posted); none without items.json. */
+const itemInvoiceKeys = (dataset: Dataset) => dataset.extraFiles['items.json'] === undefined ? [] : dataset.vouchers
+  .filter(voucher => voucher.inventory?.length && itemInvoiceKinds[voucher.type as VoucherKind] && dispositionOf(voucher) === 'post').map(voucher => voucher.key);
+
+/**
+ * True when the company holds the dataset's item invoices as accounting invoices: it was seeded before item lines (M2b
+ * slice b2), when the seeder posted their ledger lines alone and skipped stock journals. The decision is per company and
+ * all or nothing, so the books never mix invoices that move stock with invoices that do not: such a company keeps that
+ * shape for every item invoice, also those a stopped run had not posted yet, and gets no stock journal; a company that
+ * holds none of them is seeded with item lines throughout. A company holding both shapes is refused (no seeder writes one).
+ */
+export async function seededBeforeItemLines(client: PoolClient, companyId: string, dataset: Dataset): Promise<boolean> {
+  const keys = itemInvoiceKeys(dataset);
+  if (!keys.length) return false;
+  const { rows } = await client.query<{ items: boolean }>(
+    'SELECT EXISTS (SELECT 1 FROM inventory_line l WHERE l.company_id = v.company_id AND l.voucher_id = v.id) AS items FROM voucher v WHERE v.company_id = $1 AND v.idempotency_key = ANY($2::text[])',
+    [companyId, keys.map(key => voucherKeyPrefix(dataset.slug) + key)]);
+  const accounting = rows.filter(row => !row.items).length;
+  if (accounting && accounting < rows.length) {
+    throw new DemoError(`demo/${dataset.slug}: the company holds ${accounting} of the dataset's item invoices without item lines and ${rows.length - accounting} with them; seed into a new company`);
+  }
+  return accounting > 0;
+}
 
 /**
  * Posts the vouchers in entry order, each in its own transaction under its idempotency key; stops at the first error.
  * A voucher cancelled without lines is posted as a void, so it takes its number as it did in the dataset's books.
  */
 async function seedVouchers(userId: string, companyId: string, dataset: Dataset, report: SeedReport): Promise<void> {
-  const { ledgerByKey, typeIds, centreIds } = await runLedger(userId, companyId, 'read', async context => {
+  const items = dataset.extraFiles['items.json'] as ItemsFile | undefined;
+  const { ledgerByKey, typeIds, centreIds, stockIds, beforeItemLines } = await runLedger(userId, companyId, 'read', async context => {
     const ledgers = await listLedgers(context);
     const ledgerByKey: Record<string, string> = {};
     for (const entry of dataset.ledgers) {
@@ -450,8 +523,16 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
     }
     const centres = new Map((await listCostCentres(context)).map(centre => [nameMatchKey(centre.name), centre.id]));
     const centreIds = Object.fromEntries(costCentreEntries(dataset).flatMap(entry => centres.has(nameMatchKey(entry.name)) ? [[entry.key, centres.get(nameMatchKey(entry.name))!]] : []));
-    return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])), centreIds };
+    // Items and locations are matched by name key, as seedStockMasters created or found them.
+    const byName = (rows: { id: string; name?: unknown }[]) => new Map(rows.map(row => [nameMatchKey(String(row.name)), row.id]));
+    const keyed = (entries: { key: string; name: string }[], found: Map<string, string>) => Object.fromEntries(entries.flatMap(entry => found.has(nameMatchKey(entry.name)) ? [[entry.key, found.get(nameMatchKey(entry.name))!]] : []));
+    const stockIds = items ? { items: keyed(items.items ?? [], byName(await listItems(context))), locations: keyed(items.locations ?? [], byName(await listTree(context, 'stock-locations'))), ledgers: ledgerByKey } : undefined;
+    const beforeItemLines = await seededBeforeItemLines(context.client, context.company.companyId, dataset);
+    return { ledgerByKey, typeIds: Object.fromEntries((await listVoucherTypes(context)).map(type => [type.systemKey ?? '', type.id])), centreIds, stockIds, beforeItemLines };
   });
+  if (stockIds && dataset.vouchers.some(voucher => voucher.inventory?.length && dispositionOf(voucher) === 'post')) report.stock.shape = beforeItemLines ? 'accounting' : 'items';
+  const itemName = new Map((items?.items ?? []).map(item => [stockIds?.items[item.key], item.name]));
+  const locationName = new Map((items?.locations ?? []).map(location => [stockIds?.locations[location.key], location.name]));
   const bump = (counts: Record<string, number>, type: string) => { counts[type] = (counts[type] ?? 0) + 1; };
   const bills = planBills(dataset);
   report.bills.skipped = describeSkippedBills(bills.skipped);
@@ -465,8 +546,12 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
       bump(disposition === 'unsupported-type' ? report.unsupportedTypes : report.noEntries, voucher.type);
       continue;
     }
+    // A company seeded before item lines gets no stock journal (see `seededBeforeItemLines`).
+    if (beforeItemLines && voucher.type === 'stock_journal') { report.stock.journalsLeftOut++; continue; }
     try {
-      const lines: PostedLine[] = voucher.lines.map((line, index) => {
+      // Item lines are read once items.json names the items; without it, or in a company seeded before item lines, a voucher's lines post alone.
+      const stock = stockIds && !beforeItemLines && voucher.inventory?.length ? planVoucherItems(dataset, voucher, stockIds) : undefined;
+      const lines: PostedLine[] = voucher.lines.filter((_, index) => index !== stock?.ledgerLine).map((line, index) => {
         const rows = bills.lines.get(voucher.key)?.[index];
         const costs = readLineCosts(line.extras);
         return {
@@ -480,6 +565,7 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         idempotencyKey: voucherKeyPrefix(dataset.slug) + voucher.key, voucherTypeId: typeIds[voucher.type], date: voucher.date,
         narration: voucher.narration ?? null, status: disposition === 'void' ? 'cancelled' : voucher.status === 'optional' ? 'optional' : 'regular', postDated: voucher.postDated,
         lines: lines.map((line): PostedLine => shape === 'full' ? line : { ledgerId: line.ledgerId, side: line.side, amount: line.amount, ...shape === 'withoutCost' && line.bills ? { bills: line.bills } : {} }),
+        ...stock ? { inventory: stock.inventory, ...stock.itemLedgerId ? { itemLedgerId: stock.itemLedgerId } : {} } : {},
       });
       const send = (body: ReturnType<typeof payload>, shape: Shape) => runLedger(userId, companyId, 'write', async context => {
         let { voucher: posted, replayed, warnings } = await createVoucher(context, body);
@@ -487,8 +573,14 @@ async function seedVouchers(userId: string, companyId: string, dataset: Dataset,
         if (shape !== 'full' && !replayed) throw new FoundationError(409, 'This request key was already used for a different voucher.', 'idempotency_mismatch');
         if (!replayed) {
           report.bills.rowsPosted += body.lines.reduce((sum, line) => sum + (line.bills?.length ?? 0), 0);
+          report.stock.itemLines += body.inventory?.length ?? 0;
           let sentCostRows = body.lines.reduce((sum, line) => sum + (line.costAllocations?.length ?? 0), 0);
           for (const warning of warnings) {
+            if (warning.code === 'negative_stock') {
+              report.stock.warnings.push(`${voucher.key}: ${itemName.get(warning.itemId) ?? warning.itemId} at ${locationName.get(warning.locationId) ?? warning.locationId} ${warning.quantity}`);
+              continue;
+            }
+            if (warning.code === 'stock_check_incomplete') { report.stock.warnings.push(`${voucher.key}: the stock check could not be completed`); continue; }
             const code: string = warning.code;
             if (code.startsWith('cost_')) {
               (report.costs.warnings[code] ??= []).push(`${voucher.key}${warning.line ? ` line ${warning.line}` : ''}`);
@@ -584,7 +676,7 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
     mastersOnly, bills: { openingBills: 0, rowsPosted: 0, skipped: [], warnings: {}, keptWithoutBills: [] },
     costs: { masters: costCategoryEntries(dataset).length + costCentreEntries(dataset).length > 0, switchedOn: false, categories: { created: 0, present: 0 }, centres: { created: 0, present: 0 }, rowsPosted: 0, leftOutRows: 0, leftOut: [], warnings: {}, keptWithoutCostRows: [] },
     currencies: { masters: { created: 0, present: 0 }, rates: { created: 0, present: 0 } },
-    stock: { masters: dataset.extraFiles['items.json'] !== undefined, switchedOn: false, units: { created: 0, present: 0 }, locations: { created: 0, present: 0 }, groups: { created: 0, present: 0 }, items: { created: 0, present: 0 }, openingValue: '' },
+    stock: { masters: dataset.extraFiles['items.json'] !== undefined, switchedOn: false, units: { created: 0, present: 0 }, locations: { created: 0, present: 0 }, groups: { created: 0, present: 0 }, items: { created: 0, present: 0 }, openingValue: '', itemLines: 0, warnings: [], shape: 'none', journalsLeftOut: 0 },
   };
   if (!company) {
     try {
@@ -602,6 +694,38 @@ async function seedUnderLock(userId: string, dataset: Dataset, mastersOnly: bool
   await seedMasters(userId, company!.id, dataset, report);
   if (!mastersOnly) await seedVouchers(userId, company!.id, dataset, report);
   return report;
+}
+
+/** The ledger tables a seed fills, analysed once it is done. */
+export const seededTables = ['voucher', 'voucher_line', 'inventory_line'] as const;
+const notRefreshed = (reason: string) => `statistics not refreshed: ${reason}; set MIGRATION_DATABASE_URL and run again, or wait for autoanalyze`;
+
+/**
+ * Analyses the tables a seed filled, so the planner has statistics for them at once: a table never analysed makes every
+ * voucher lookup read the whole company until autoanalyze runs (docs/LEDGER.md, the open item under "Item lines"). The
+ * application role owns no table and has no MAINTAIN privilege (D-03: no request path may lock a table across companies),
+ * and its ANALYZE is skipped with a notice, not an error. So the seed command, and only it, opens one connection as the
+ * owner role (MIGRATION_DATABASE_URL), after seeding, for this ANALYZE and the checks around it, and closes it; no data
+ * statement goes through it and the URL is never printed. Success is checked, not assumed: the role may analyse each
+ * table, and each has statistics afterwards. Any failure is reported in the answer, never thrown: the seeded data is right.
+ */
+export async function refreshStatistics(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  let url: string | undefined;
+  try { url = postgresUrl('MIGRATION_DATABASE_URL', env); } catch { return notRefreshed('MIGRATION_DATABASE_URL is not a PostgreSQL URL'); }
+  if (!url) return notRefreshed('MIGRATION_DATABASE_URL is not set');
+  const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+  try {
+    await client.connect();
+    const { rows } = await client.query<{ name: string }>("SELECT t AS name FROM unnest($1::text[]) t WHERE NOT has_table_privilege(t, 'MAINTAIN')", [seededTables]);
+    if (rows.length) return notRefreshed(`the role of MIGRATION_DATABASE_URL may not analyse ${rows.map(row => row.name).join(', ')} (it is not the owner role)`);
+    await client.query(`ANALYZE ${seededTables.join(', ')}`);
+    const { rows: missing } = await client.query<{ name: string }>('SELECT relname AS name FROM pg_class WHERE oid = ANY($1::text[]::regclass[]) AND reltuples < 0 ORDER BY relname', [seededTables]);
+    if (missing.length) return notRefreshed(`${missing.map(row => row.name).join(', ')} still have no statistics`);
+    return `statistics refreshed for ${seededTables.join(', ')}`;
+  } catch (error) {
+    // The code only (an SQLSTATE or a connection error code): a message could carry the host or the role.
+    return notRefreshed(`the owner connection failed (${(error as { code?: string })?.code ?? 'no error code'})`);
+  } finally { await client.end().catch(() => undefined); }
 }
 
 export type DemoSelection = { email: string; company?: string; all?: boolean };
@@ -633,6 +757,9 @@ export function formatSeedReport(report: SeedReport): string[] {
   const currencies = report.currencies;
   if (currencies.masters.created || currencies.masters.present) lines.push(`  currencies: ${part(currencies.masters)}; rate rows ${part(currencies.rates)}`);
   if (stock.masters) lines.push(`  stock: ${stock.switchedOn ? 'inventory switched on; ' : ''}units ${part(stock.units)}; locations ${part(stock.locations)}; stock groups ${part(stock.groups)}; items ${part(stock.items)}${stock.items.created ? `; opening stock ${stock.openingValue} set with the items created` : ''}`);
+  if (stock.shape === 'items') lines.push(`  item lines: posted with the item invoices and stock journals; ${stock.itemLines} in this run`);
+  if (stock.shape === 'accounting') lines.push(`  item lines: none: this company was seeded before item lines existed, so its item invoices stay accounting invoices and it holds no stock movements (${stock.journalsLeftOut} stock journal(s) not posted); seed into a new company to get them`);
+  if (stock.warnings.length) lines.push(`  negative stock warned by the postings: ${stock.warnings.length} (e.g. ${stock.warnings.slice(0, 3).join('; ')})`);
   if (costs.rowsPosted) lines.push(`  cost rows: ${costs.rowsPosted} posted with the vouchers`);
   if (costs.leftOutRows) lines.push(`  cost rows left out: ${costs.leftOutRows} on ${costs.leftOut.length} line(s) whose ledger takes no cost centres (the ledger module dropped them, cost_ignored); e.g. ${costs.leftOut.slice(0, 4).join(', ')}`);
   if (costs.keptWithoutCostRows.length) lines.push(`  vouchers already posted before cost rows were sent, kept as they were without cost rows: ${costs.keptWithoutCostRows.length} (e.g. ${costs.keptWithoutCostRows.slice(0, 3).join(', ')}); seed into a new company to get their cost figures`);
@@ -666,5 +793,12 @@ export async function seedDemo(selection: DemoSelection & { yes: boolean; master
     if (selection.all || !selection.company) throw new DemoError('--as names one copy of one dataset: give --company <slug> and not --all.');
   }
   const userId = await findUserId(selection.email);
-  for (const dataset of await selectDatasets(selection)) for (const line of formatSeedReport(await seedDataset(userId, dataset, selection.mastersOnly === true, selection.as))) print(line);
+  let posted = 0;
+  for (const dataset of await selectDatasets(selection)) {
+    const report = await seedDataset(userId, dataset, selection.mastersOnly === true, selection.as);
+    posted += report.vouchers.created;
+    for (const line of formatSeedReport(report)) print(line);
+  }
+  // Last step: the tables this run filled get statistics (see refreshStatistics).
+  if (posted) print(await refreshStatistics());
 }

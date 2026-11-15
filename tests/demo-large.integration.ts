@@ -3,15 +3,18 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { compareDataset, formatCompareResult } from '../src/server/demo/compare.ts';
 import { demoRoot, loadDataset } from '../src/server/demo/dataset.ts';
-import { seedDataset } from '../src/server/demo/seed.ts';
+import { formatSeedReport, seedDataset } from '../src/server/demo/seed.ts';
+import { readStockQuantity } from '../src/server/ledger/item-lines.ts';
+import { listItems, listTree } from '../src/server/ledger/stock-masters.ts';
 import { balanceSheetReport, profitAndLossReport, trialBalanceReport } from '../src/server/reports/statements.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
-import { inCompany, setupOwner, type Member } from './helpers/ledger.ts';
+import { inCompany, invite, rowCount, setupOwner, type Member } from './helpers/ledger.ts';
 
 /**
  * The four large companies (gulfline and najd: 319 vouchers each with orders, stock journals, cancelled entries and
  * opening stock; harbourview: bills, cost centres, foreign currencies; sunrise: item invoices, bills of materials,
- * manufacturing stock journals) seeded as books_app and compared with their expected.json.
+ * manufacturing stock journals) seeded as books_app and compared with their expected.json. Item invoices post their
+ * item lines and stock journals are posted (M2b slice b2); stock is not valued yet, so every statement is as before.
  *
  * Every remaining difference is asserted by name, not hidden, so a change in the data or the tools fails here on purpose.
  * Journals may use cash and bank ledgers, numbers restart each financial year and vouchers cancelled without lines are
@@ -33,18 +36,20 @@ type Expectation = {
   bills: { opening: number; posted: number; foreign: number; warnings: Record<string, number> };
   /** Cost centres: categories and centres created, rows posted, rows left out and the ledger module's warnings by code. */
   costs: { categories: number; centres: number; posted: number; leftOut: number; warnings: Record<string, number> };
+  /** Item lines posted: the invoices' and the stock journals' (orders and notes are skipped whole). */
+  itemLines: number;
 };
-const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, stock_journal: 4, memorandum: 2, reversing_journal: 1 };
+const tradingUnsupported = { sales_order: 3, delivery_note: 3, purchase_order: 2, receipt_note: 1, memorandum: 2, reversing_journal: 1 };
 const expectations: Expectation[] = [
-  { slug: 'gulfline', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [65, 0, 0], differs: [],
-    bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} } },
-  { slug: 'najd', created: 303, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 302, matched: 302 }, counts: [65, 0, 0], differs: [],
-    bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} } },
+  { slug: 'gulfline', created: 307, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 306, matched: 306 }, counts: [66, 0, 0], differs: [],
+    bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} }, itemLines: 226 },
+  { slug: 'najd', created: 307, voids: 2, unsupported: tradingUnsupported, noEntries: {}, numbers: { checked: 306, matched: 306 }, counts: [66, 0, 0], differs: [],
+    bills: { opening: 3, posted: 244, foreign: 0, warnings: {} }, costs: { categories: 0, centres: 0, posted: 0, leftOut: 0, warnings: {} }, itemLines: 226 },
   // The four vouchers cancelled without lines (receipt, sales, payment) are voids and hold their numbers, so all 189 numbers match.
   { slug: 'harbourview', created: 192, voids: 4, unsupported: { memorandum: 2, reversing_journal: 1 }, noEntries: {}, numbers: { checked: 189, matched: 189 }, counts: [81, 0, 12], differs: [],
-    bills: { opening: 2, posted: 121, foreign: 17, warnings: {} }, costs: { categories: 2, centres: 5, posted: 147, leftOut: 0, warnings: {} } },
-  { slug: 'sunrise', created: 216, voids: 2, unsupported: { stock_journal: 36, sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: {},
-    numbers: { checked: 214, matched: 214 }, counts: [65, 0, 0], differs: [],
+    bills: { opening: 2, posted: 121, foreign: 17, warnings: {} }, costs: { categories: 2, centres: 5, posted: 147, leftOut: 0, warnings: {} }, itemLines: 0 },
+  { slug: 'sunrise', created: 252, voids: 2, unsupported: { sales_order: 2, delivery_note: 2, memorandum: 2, purchase_order: 1, receipt_note: 1, reversing_journal: 1 }, noEntries: {},
+    numbers: { checked: 250, matched: 250 }, counts: [74, 0, 0], differs: [], itemLines: 287,
     // payment-048 settles SI-STE-11 in full after debit-note-001 already took 88.20 of it: the ledger module accepts that and says so.
     bills: { opening: 1, posted: 145, foreign: 0, warnings: { bill_over_settled: 1 } }, costs: { categories: 1, centres: 6, posted: 25, leftOut: 0, warnings: {} } },
 ];
@@ -71,6 +76,7 @@ for (const expectation of expectations) {
     assert.deepEqual(Object.fromEntries(Object.entries(first.costs.warnings).map(([code, which]) => [code, which.length])), expectation.costs.warnings);
     assert.equal(first.bills.skipped.length, expectation.bills.foreign ? 1 : 0);
     if (expectation.bills.foreign) assert.match(first.bills.skipped[0], new RegExp(`^${expectation.bills.foreign} bill rows on foreign-currency lines`));
+    assert.deepEqual([first.stock.itemLines, first.stock.warnings, first.stock.shape], [expectation.itemLines, [], expectation.itemLines ? 'items' : 'none'], 'every item line posted, and no stock goes negative');
 
     started = Date.now();
     const again = await seedDataset(owner.userId, dataset);
@@ -78,7 +84,7 @@ for (const expectation of expectations) {
     assert.deepEqual([again.companyCreated, again.vouchers, again.groups.created, again.ledgers.created], [false, { created: 0, present: expectation.created, cancelled: 0 }, 0, 0]);
     assert.deepEqual([again.bills.openingBills, again.bills.rowsPosted, again.bills.warnings], [0, 0, {}], 'a second run posts no bill rows and raises no warning');
     assert.deepEqual([again.voided, again.costs.rowsPosted, again.costs.categories.created, again.costs.centres.created, again.costs.switchedOn, again.costs.warnings], [0, 0, 0, 0, false, {}], 'a second run posts no void and no cost row and creates no cost master');
-    assert.deepEqual([again.stock.units.created, again.stock.locations.created, again.stock.groups.created, again.stock.items.created, again.stock.switchedOn], [0, 0, 0, 0, false], 'and creates no stock master');
+    assert.deepEqual([again.stock.units.created, again.stock.locations.created, again.stock.groups.created, again.stock.items.created, again.stock.switchedOn, again.stock.itemLines], [0, 0, 0, 0, false, 0], 'and creates no stock master and posts no item line');
     assert.deepEqual(again.numberDifferences, first.numberDifferences);
     assert.deepEqual(first.numberDifferences, [], 'every voucher number equals the dataset\'s');
 
@@ -192,4 +198,53 @@ test('opening stock: sunrise and gulfline hold it in every statement, their open
       if (expected.balanceSheet !== null) assert.equal(sheet.totals.assets, expected.balanceSheet);
     });
   }
+});
+
+test('item lines: sunrise\'s closing quantities at the end of 2026, and gulfline\'s LED panel in each location', async () => {
+  const sunrise = await loadDataset(join(demoRoot, 'sunrise'));
+  const { companyId } = await compareDataset(owner.userId, sunrise);
+  const closing = await inCompany(owner.userId, companyId, async context => Object.fromEntries(await Promise.all((await listItems(context)).map(async item => [item.name, (await readStockQuantity(context, item.id, { date: '2026-12-31' })).quantity]))));
+  assert.deepEqual(closing, {
+    'Steel Sheet 2mm': '10280.0', 'Steel Rod 12mm': '3740', 'Paint Grey': '306.0', Hinges: '2960', 'Welding Wire': '186.0',
+    'Steel Cabinet': '4', 'Metal Gate': '10', 'Work Table': '25',
+  });
+  const gulfline = await loadDataset(join(demoRoot, 'gulfline'));
+  const company = await compareDataset(owner.userId, gulfline);
+  const panel = await inCompany(owner.userId, company.companyId, async context => {
+    const item = (await listItems(context)).find(entry => entry.name === 'LED Panel 600x600 40W')!;
+    const places = await listTree(context, 'stock-locations');
+    const at = async (location?: string) => (await readStockQuantity(context, item.id, { date: '2026-12-31', ...location ? { locationId: places.find(place => place.name === location)!.id } : {} })).quantity;
+    return [await at(), await at('Dubai Warehouse'), await at('Jebel Ali Store'), await at('Showroom - Al Quoz')];
+  });
+  assert.deepEqual(panel, ['660', '420', '160', '80'], 'all locations, then Dubai Warehouse, Jebel Ali Store and Showroom - Al Quoz');
+});
+
+test('a company seeded before item lines keeps that shape for every item invoice, also after a stopped run: no stock journal, no movement, quantities not compared', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const sunrise = await loadDataset(join(demoRoot, 'sunrise'));
+  const invoices = sunrise.vouchers.filter(voucher => voucher.inventory?.length && ['sales', 'purchase', 'credit_note', 'debit_note'].includes(voucher.type));
+  const cut = sunrise.vouchers.findIndex(voucher => voucher.key === invoices[Math.floor(invoices.length / 2)].key);
+  // The seeder before item lines read no items.json, skipped stock journals and posted invoices with their ledger lines
+  // alone; this one stopped half way through the item invoices.
+  const { 'items.json': _items, ...otherFiles } = sunrise.extraFiles;
+  const earlier = await seedDataset(user.userId, { ...sunrise, extraFiles: otherFiles, vouchers: sunrise.vouchers.slice(0, cut).filter(voucher => voucher.type !== 'stock_journal') });
+  assert.equal(earlier.stock.shape, 'none');
+
+  const report = await seedDataset(user.userId, sunrise);
+  assert.deepEqual([report.stock.shape, report.stock.journalsLeftOut, report.stock.itemLines], ['accounting', 36, 0]);
+  assert.deepEqual(report.vouchers, { created: 216 - earlier.vouchers.created, present: earlier.vouchers.created, cancelled: 0 }, 'the remaining vouchers, item invoices among them, as before item lines');
+  assert.equal(await rowCount(database.adminUrl, 'inventory_line', report.companyId), 0, 'no item row at all');
+  assert.ok(formatSeedReport(report).includes('  item lines: none: this company was seeded before item lines existed, so its item invoices stay accounting invoices and it holds no stock movements (36 stock journal(s) not posted); seed into a new company to get them'));
+  const openings = Object.fromEntries((sunrise.extraFiles['items.json'] as { items: { name: string; opening?: { quantity: string }[] }[] }).items
+    .map(item => [item.name, (item.opening ?? []).reduce((sum, row) => sum + Number(row.quantity), 0)]));
+  const closing = await inCompany(user.userId, report.companyId, async context => Object.fromEntries(await Promise.all((await listItems(context))
+    .map(async item => [item.name, Number((await readStockQuantity(context, item.id, { date: '2026-12-31' })).quantity)]))));
+  assert.deepEqual(closing, openings, 'every quantity is its opening: nothing moved');
+
+  const again = await seedDataset(user.userId, sunrise);
+  assert.deepEqual([again.vouchers.created, again.stock.shape], [0, 'accounting'], 'a further run changes nothing');
+  const result = await compareDataset(user.userId, sunrise);
+  assert.deepEqual([result.matches, result.differences, result.pending], [65, 0, 8], formatCompareResult(result).join('\n'));
+  assert.ok(result.lines.filter(line => line.reason).every(line => line.label.startsWith('Closing quantity of ') && line.reason!.startsWith('this company was seeded before item lines existed')));
+  assert.ok(result.notComparable.includes('stock journals left out of the voucher counts: 36 (this company was seeded before item lines existed and holds no stock movements; seed into a new company to compare them)'));
 });

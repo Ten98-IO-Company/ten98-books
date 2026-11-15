@@ -14,6 +14,11 @@ export type Side = (typeof sides)[number];
 export const voucherKinds = ['contra', 'payment', 'receipt', 'journal', 'sales', 'purchase', 'credit_note', 'debit_note', 'stock_journal'] as const;
 export type VoucherKind = (typeof voucherKinds)[number];
 export type VoucherStatus = 'regular' | 'cancelled' | 'optional';
+/** The invoice kinds that take item lines, with the direction their items move and the side of their derived ledger lines. */
+export const itemInvoiceKinds: Partial<Record<VoucherKind, { direction: 'in' | 'out'; side: Side }>> = {
+  sales: { direction: 'out', side: 'Cr' }, purchase: { direction: 'in', side: 'Dr' },
+  credit_note: { direction: 'in', side: 'Dr' }, debit_note: { direction: 'out', side: 'Cr' },
+};
 
 /**
  * Stable reasons the ledger API sends as `code` beside the plain-language `error`, so screens branch on the reason, not
@@ -274,6 +279,17 @@ export const billWarningCodes = ['bills_ignored', 'bills_kept', 'bill_attached',
   'cost_ignored', 'cost_kept', 'cost_rebalanced', 'cost_dropped'] as const;
 export type BillWarningCode = (typeof billWarningCodes)[number];
 export type BillWarning = { code: BillWarningCode; line: number | null; billId: string | null; billName: string | null; amount: bigint | null };
+/**
+ * A location's stock that a posting, alter, cancel or delete leaves below zero (M2b slice b2): the item, the location
+ * and the quantity there over every date, in the unit's places. A warning only: the voucher is saved.
+ */
+/**
+ * Stock warnings: an (item, location) left below zero, or the check could not be completed in its own time budget (the
+ * posting stands either way; docs/LEDGER.md, "Stock reads").
+ */
+export type StockWarning = { code: 'negative_stock'; itemId: string; locationId: string; quantity: string } | { code: 'stock_check_incomplete' };
+/** What a voucher's answer may warn of: its bill and cost rows, and its stock. */
+export type VoucherWarning = BillWarning | StockWarning;
 export type VoucherSummary = Omit<Voucher, 'lines' | 'inventory'>;
 export type VoucherPage = { vouchers: VoucherSummary[]; next: string | null };
 

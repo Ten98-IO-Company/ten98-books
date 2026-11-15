@@ -45,7 +45,8 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env) {
   trustedProxies(env);
   const appUrl = appUrlOrigin(env.APP_URL ?? 'http://localhost:3000');
   // Two roles (D-03): DATABASE_URL is the non-owner application role used by web and worker. The owner role's
-  // MIGRATION_DATABASE_URL is deliberately not part of this configuration; only migrateDatabase reads it, and the
+  // MIGRATION_DATABASE_URL is deliberately not part of this configuration; only migrateDatabase and the demo seed command's
+  // ANALYZE read it, and the
   // Compose web and worker services never receive it (a one-shot migrate service does).
   const databaseUrl = postgresUrl('DATABASE_URL', env);
   if (!databaseUrl) throw new Error('A PostgreSQL DATABASE_URL is required');

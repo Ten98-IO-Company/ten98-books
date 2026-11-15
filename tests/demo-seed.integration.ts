@@ -188,8 +188,8 @@ test('cancelled and optional vouchers, extras and a wrong expectation: reported,
   assert.deepEqual(report.ledgers, { created: 2, present: 1, openingsSet: 2 });
   assert.deepEqual(report.numberDifferences, ['voucher "rent-wrong" (payment): expected number 5, ten98-books assigned 2'], 'the number is reported, never forced');
   assert.deepEqual(report.skipped, [
-    'company.json: feature "inventory" is not modelled', 'ledgers.json: extras on 1 ledger(s) (shareClass)',
-    'vouchers.json: inventory on 1 voucher(s), 1 item line(s) (stock is not modelled)',
+    'ledgers.json: extras on 1 ledger(s) (shareClass)',
+    'vouchers.json: inventory on 1 voucher(s), 1 item line(s), not read: the dataset has no items.json',
   ]);
   const statuses = await inCompany(owner.userId, report.companyId, async context => (await listVouchers(context, { from: '2000-01-01', to: '2030-12-31' })).vouchers.map(voucher => `${voucher.status}${voucher.postDated ? '+post-dated' : ''} ${voucher.number ?? 'no number'}`));
   assert.deepEqual(statuses, ['regular 1', 'cancelled 2', 'optional no number', 'regular+post-dated 3']);
@@ -328,7 +328,7 @@ const stockDataset = (): Dataset => parseDataset({
   ],
   vouchers: [
     { key: 'receipt-1', type: 'receipt', date: '2026-01-02', status: 'regular', postDated: false, expectedNumber: 1,
-      lines: [{ ledger: 'cash', side: 'Dr', amount: '100.00' }, { ledger: 'sales', side: 'Cr', amount: '100.00' }], inventory: [{ item: 'lamp', location: 'main', quantity: '2' }] },
+      lines: [{ ledger: 'cash', side: 'Dr', amount: '100.00' }, { ledger: 'sales', side: 'Cr', amount: '100.00' }] },
     { key: 'order-1', type: 'sales_order', date: '2026-01-03', status: 'regular', postDated: false, expectedNumber: 1, lines: [], extras: { noAccountingEffect: true } },
     { key: 'journal-1', type: 'journal', date: '2026-01-04', status: 'optional', postDated: false, expectedNumber: 1,
       lines: [{ ledger: 'promo', side: 'Dr', amount: '10.00' }, { ledger: 'bank', side: 'Cr', amount: '10.00' }] },
@@ -371,7 +371,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   assert.deepEqual(report.numberDifferences, ['voucher "journal-3" (journal): expected number 3, ten98-books assigned 1; 2 earlier journal voucher(s) hold numbers in the dataset but none here, which accounts for the whole difference: journal-1 (optional), journal-2 (no entries)']);
   assert.ok(report.skipped.includes('items.json: stock is not valued yet (1 item(s), 1 location(s)): the statements hold the opening stock of 500.00 in every period'));
   const created = { created: 1, present: 0 };
-  assert.deepEqual(report.stock, { masters: true, switchedOn: false, units: created, locations: created, groups: created, items: created, openingValue: '500.00' }, 'inventory is on for a new company');
+  assert.deepEqual(report.stock, { masters: true, switchedOn: false, units: created, locations: created, groups: created, items: created, openingValue: '500.00', itemLines: 0, warnings: [], shape: 'none', journalsLeftOut: 0 }, 'inventory is on for a new company');
   const printed = formatSeedReport(report).join('\n');
   assert.match(printed, /vouchers not posted, type not yet supported: 1 sales order, 1 memorandum/);
   assert.match(printed, /no entries to post .*: 1 journal/);
@@ -381,7 +381,7 @@ test('vouchers ten98-books cannot post are skipped, counted by type and never dr
   const again = await seedDataset(owner.userId, stockDataset());
   assert.deepEqual([again.vouchers, again.refused.length], [{ created: 0, present: 5, cancelled: 0 }, 1], 'a second run posts nothing and reports the same skips');
   const present = { created: 0, present: 1 };
-  assert.deepEqual(again.stock, { masters: true, switchedOn: false, units: present, locations: present, groups: present, items: present, openingValue: '' }, 'and creates no stock master twice');
+  assert.deepEqual(again.stock, { masters: true, switchedOn: false, units: present, locations: present, groups: present, items: present, openingValue: '', itemLines: 0, warnings: [], shape: 'none', journalsLeftOut: 0 }, 'and creates no stock master twice');
 });
 
 test('the comparison leaves skipped vouchers out of the counts, checks the opening stock and a zero opening difference, and names what it cannot compare', async () => {
@@ -513,4 +513,32 @@ test('harbourview: the seeder creates USD and EUR with their nine standard rate 
   assert.deepEqual([await standard('2026-06-30', 'EUR'), await standard('2026-12-31', 'EUR')], ['4.10', '4.20']);
   const again = await seedDataset(user.userId, harbourview, true);
   assert.deepEqual(again.currencies, { masters: { created: 0, present: 2 }, rates: { created: 0, present: 9 } });
+});
+
+test('an item invoice posts its items to the ledger of its line worth their sum; a dataset where that line is missing, doubled or not last stops the seed', async () => {
+  const user = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const sunrise = await loadDataset(join(demoRoot, 'sunrise'));
+  // purchase-001: the supplier (Cr 11350.50), input VAT (Dr 540.50) and purchases (Dr 10810.00, the items' sum, last).
+  const purchase = sunrise.vouchers.find(voucher => voucher.key === 'purchase-001')!;
+  const only = (lines: typeof purchase.lines): Dataset => ({ ...sunrise, vouchers: [{ ...purchase, lines }] });
+  const [supplier, vat, purchases] = purchase.lines;
+  assert.deepEqual([supplier.ledger, vat.ledger, purchases.ledger, purchases.amount], ['ironvale-trading', 'vat-input-5', 'purchases-raw-materials', '10810.00']);
+  const refusals: [string, typeof purchase.lines, RegExp][] = [
+    ['no line', [supplier, vat, { ...purchases, amount: '10810.01' }], /voucher "purchase-001": no line on the Dr side is worth the items' sum of 10810\.00; the seeder needs exactly one/],
+    ['two lines', [supplier, { ...vat, amount: '10810.00' }, purchases], /voucher "purchase-001": 2 lines on the Dr side are worth the items' sum of 10810\.00; the seeder needs exactly one/],
+    ['not last', [purchases, supplier, vat], /voucher "purchase-001": the item ledger's line \(line 1, worth the items' sum\) must be the voucher's last line/],
+  ];
+  for (const [what, lines, message] of refusals) {
+    await assert.rejects(seedDataset(user.userId, only(lines)), (error: unknown) => error instanceof DemoError && message.test(error.message), what);
+  }
+  const report = await seedDataset(user.userId, only(purchase.lines));
+  assert.deepEqual([report.companyCreated, report.vouchers.created, await rowCount(database.adminUrl, 'voucher', report.companyId)], [false, 1, 1], 'the refusals posted nothing; the company they created is resumed');
+  assert.deepEqual([report.stock.itemLines, report.stock.shape], [2, 'items']);
+  await inCompany(user.userId, report.companyId, async context => {
+    const [row] = (await listVouchers(context, { from: '2026-01-01', to: '2026-12-31' })).vouchers;
+    const posted = await readVoucher(context, row.id);
+    assert.deepEqual(posted.lines.map(line => [line.ledgerName, line.side, line.amount]), [['Ironvale Trading', 'Cr', 1135050n], ['VAT Input 5%', 'Dr', 54050n], ['Purchases - Raw Materials', 'Dr', 1081000n]],
+      'the last line is derived from the items, on the item ledger the dataset named');
+    assert.deepEqual(posted.inventory.map(line => [line.quantity, line.direction, line.amount, line.lineNo]), [['1800.0', 'in', 756000n, 3], ['500', 'in', 325000n, 3]], "quantities shown in their unit's places (Kg has one)");
+  });
 });
