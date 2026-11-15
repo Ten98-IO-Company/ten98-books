@@ -13,7 +13,7 @@ export const isEntryKind = (value: unknown): value is EntryKind => entryKinds.in
 
 export const kindTitles: Record<VoucherKind, string> = {
   payment: 'Payment', receipt: 'Receipt', contra: 'Contra', journal: 'Journal', sales: 'Sales', purchase: 'Purchase',
-  credit_note: 'Credit note', debit_note: 'Debit note',
+  credit_note: 'Credit note', debit_note: 'Debit note', stock_journal: 'Stock journal',
 };
 
 /** Single entry: an Account field and particulars lines. Double entry: lines with a side each. */

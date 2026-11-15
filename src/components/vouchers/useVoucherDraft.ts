@@ -7,7 +7,8 @@ import type { Wire } from '../../lib/money'
 import { blankDraft, createDraftController, isLocked, toVoucherBody, type DraftState, type EntryKind, type EntryLayout, type SendFailure } from '../../lib/voucher-entry'
 import { readStored, sessionStore, writeStored } from '../../lib/working-date'
 
-export type SaveAnswer = { voucher: Wire<Voucher>; warnings: Wire<BillWarning>[]; replayed: boolean }
+/** `warnings` may carry codes beyond the bill warnings (a later slice's): the screen ignores the ones it does not know. */
+export type SaveAnswer = { voucher: Wire<Voucher>; warnings: readonly ({ code: string } & Partial<Wire<BillWarning>>)[]; replayed: boolean }
 
 const draftKey = (userId: string, companyId: string) => `voucherDrafts:${userId}:${companyId}`
 const newKey = () => `voucher-${crypto.randomUUID()}`

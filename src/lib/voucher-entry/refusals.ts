@@ -1,5 +1,5 @@
 import type { MoneyExponent } from '@ten98/runtime/browser';
-import type { LedgerErrorCode } from '../ledger.ts';
+import { billWarningCodes, type LedgerErrorCode } from '../ledger.ts';
 import { balanceText } from './amounts.ts';
 
 /** Where a save refusal is shown (docs/VOUCHERS.md, "Escape, leaving and failures"). Total over the codes, so a new code fails the typecheck until placed. */
@@ -32,4 +32,13 @@ export const refusalPlace = (code: string | undefined): RefusalPlace => code !==
 /** The warning a credit to a cash-in-hand ledger raises when its balance goes below zero; never blocks (observed). */
 export function negativeCashWarning(name: string, balance: bigint | undefined, exponent: MoneyExponent): string | null {
   return balance !== undefined && balance < 0n ? `${name} will be ${balanceText(balance, exponent)} after this voucher.` : null;
+}
+
+/**
+ * The notes a saved voucher's message carries: the bill warnings this screen knows, in words. Any other code (a later
+ * slice's stock warnings, say) is ignored here, never a failure; its own screen will show it.
+ */
+export function savedNotes(warnings: readonly { code: string }[]): string {
+  const known = warnings.flatMap(warning => billWarningCodes.some(code => code === warning.code) ? [warning.code.replaceAll('_', ' ')] : []);
+  return known.length ? ` ${known.length === 1 ? 'Note' : 'Notes'}: ${known.join(', ')}.` : '';
 }

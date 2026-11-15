@@ -14,7 +14,7 @@ import {
   afterDate, afterDeclinedAccept, amountText, appendedLine, askBeforeLeaving, balanceText, blankDraft, bodyLines, dropKeptDraft, startNewVoucher, bodyProblems, canTakeStored, cashInHandIds, cashRuleProblem, creditPeriodText,
   detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, escapeStep, isBlankLine, isCompleteLine, kindTitles, layoutTitles, layoutsOf, ledgerOptions,
   lineKey, listEnd, minorOf, negativeCashWarning, parseEntryDate, particularsSide, particularsTotal, proposedAmount, readLayout, refusalPlace,
-  isLocked, lockAlert, refusal, relayLines, writeLayout, type DraftState, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
+  isLocked, lockAlert, refusal, relayLines, savedNotes, writeLayout, type DraftState, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
 } from '../../lib/voucher-entry'
 import { sessionStore, writeStored } from '../../lib/working-date'
 import { useAppCommand } from '../KeyboardShell'
@@ -425,7 +425,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       // A replay is the voucher an earlier send already saved: its number was never the one shown since.
       const differs = result.answer.replayed ? ' (it was already in the books: saved by an earlier send whose answer was lost)'
         : expected !== null && voucher.number !== expected ? ` (No. ${expected} was shown; another voucher took it first)` : ''
-      const notes = warnings.length ? ` ${warnings.length === 1 ? 'Note' : 'Notes'}: ${warnings.map(warning => warning.code.replaceAll('_', ' ')).join(', ')}.` : ''
+      // Warning codes this screen does not know (a later slice's) are ignored, never a failure.
+      const notes = savedNotes(warnings)
       // Rendered at once with the next voucher (same type, layout and date), the cursor on its first field (observed).
       flushSync(() => {
         setSaved(`Saved ${kindTitles[sent.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${longDate(voucher.date)}${differs}.${notes}`)

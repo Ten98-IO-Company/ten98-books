@@ -5,7 +5,7 @@ import { balancePreviewInput, counterLedgerQuery, ledgerErrorCodes, nextNumberQu
 import {
   afterDate, afterDeclinedAccept, againstAmount, allocated, appendedLine, billDueDate, billRowBody, billsCover,
   blankDraft, cashModeKey, cashRuleProblem, creditPeriodText, defaultBillMethod, detailSteps, differenceText, draftDirty, draftReducer,
-  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, allocationProblem, lineColumns, negativeCashWarning, nextDraft,
+  entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, listEnd, defaultRowsOnly, allocationProblem, lineColumns, negativeCashWarning, nextDraft, savedNotes,
   nextBillRow, openBills, parseCreditPeriod, parseEntryAmount, parseEntryDate, proposedAmount, readLayout, refusalPlace, refusalPlaces,
   relayLines, toVoucherBody, writeLayout, bodyProblems, billRowProblem, cashInHandIds, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
 } from '../src/lib/voucher-entry/index.ts';
@@ -485,4 +485,11 @@ test('round 3, mutation gaps: the panel\'s over-allocation, the amount\'s requir
   const app = readFileSync(new URL('../src/routes/app.tsx', import.meta.url), 'utf8');
   assert.match(app, /sections\.filter\(section => section\.id !== 'vouchers' \|\| company\?\.role !== 'viewer'\)/, 'sidebar: no Vouchers for viewers');
   assert.match(app, /items: offered\.map\(/);
+});
+
+test('the notes of a saved voucher: known bill warnings in words, codes this screen does not know ignored, never a failure', () => {
+  assert.equal(savedNotes([]), '');
+  assert.equal(savedNotes([{ code: 'bill_split' }]), ' Note: bill split.');
+  assert.equal(savedNotes([{ code: 'bill_split' }, { code: 'stock_negative' }, { code: 'bills_kept' }]), ' Notes: bill split, bills kept.');
+  assert.equal(savedNotes([{ code: 'stock_negative' }]), '', 'a warning of a later slice alone adds nothing');
 });
