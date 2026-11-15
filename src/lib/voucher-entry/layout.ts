@@ -116,10 +116,12 @@ export type Relaid = EntryDraft;
  * - Double entry to single entry: the Account is the first line on the new type's Account side whose ledger the Account
  *   field offers (`isAccount`: cash or bank); every other line must be on the particulars' side and add up to it.
  * - Double to double: unchanged.
+ * - A voucher with nothing entered yet (no Account, every line blank) simply takes the new type's own layout.
  */
 export function relayLines(from: EntryDraft & { bills: Readonly<Record<string, readonly unknown[]>> }, to: { kind: EntryKind; layout: EntryLayout }, exponent: MoneyExponent, key: () => string, isAccount: (ledgerId: string) => boolean): Relaid | { refused: string } {
   const kept = from.lines.filter(line => !isBlankLine(line));
   const blank = (side: Side): EntryLine => ({ key: key(), side, ledger: '', amount: '' });
+  if (from.account === '' && !kept.length) return { kind: to.kind, layout: to.layout, account: '', lines: [blank(to.layout === 'single' ? particularsSide(to.kind) : firstLineSide(to.kind))] };
   if (from.layout === 'single') {
     const total = particularsTotal(kept, exponent);
     const sided = kept.map(line => ({ ...line, side: particularsSide(from.kind) as Side | '' }));

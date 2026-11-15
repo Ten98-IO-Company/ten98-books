@@ -189,6 +189,14 @@ test('a single-entry payment switched to a journal is re-laid as observed: Dr Ba
   assert.ok(state.serial > 11, 'keys stay unique after a switch');
 });
 
+test('a voucher with nothing entered switches to the new type\'s own layout, whatever the sides (replay finding)', () => {
+  for (const [from, to] of [[blankDraft('payment', 'single', '2026-01-01'), { kind: 'receipt' as const, layout: 'single' as const }], [blankDraft('journal', 'double', '2026-01-01'), { kind: 'receipt' as const, layout: 'single' as const }], [blankDraft('receipt', 'single', '2026-01-01'), { kind: 'journal' as const, layout: 'double' as const }]] as const) {
+    const result = relaid(relayLines(from, to, 2, keys(), cashOrBank));
+    assert.deepEqual([result.kind, result.layout, result.account, result.lines.length, result.lines[0].side], [to.kind, to.layout, '', 1, to.layout === 'single' ? 'Cr' : 'Dr']);
+  }
+  assert.ok('refused' in relayLines({ ...blankDraft('journal', 'double', '2026-01-01'), lines: [ln('line-1', 'Dr', 'l-wages', '5.00')] }, { kind: 'receipt', layout: 'single' }, 2, keys(), cashOrBank), 'with something entered the rules still apply');
+});
+
 test('review items 1 and 2: a layout switch never reverses a side, never changes an amount, never drops a bill row; what it cannot keep it refuses', () => {
   // Toggle: the Account's line keeps its side and goes after the particulars (body order).
   const toggled = relaid(relayLines(draftOf('payment', 'single', 'l-cash', [ln('line-1', 'Dr', 'l-wages', '100.00')]), { kind: 'payment', layout: 'double' }, 2, keys(), cashOrBank));

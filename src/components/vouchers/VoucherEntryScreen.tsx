@@ -197,7 +197,8 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       return <BillPanel key={row.key} companyId={company.id} kind={latest.current.kind} date={latest.current.date} exponent={exponent}
         line={{ ledger: line.ledger, side: lineSide(line), amount: minorOf(line.amount, exponent) }} previous={latest.current.bills[row.key]}
         creditDefault={creditPeriodText((ledger?.creditPeriod ?? null) as CreditPeriod | null)}
-        onAccept={rows => { dispatch({ type: 'bills', row: row.key, rows }); window.setTimeout(() => continueAfter(row.key), 30) }} close={close} />
+        // The grid's dialog gives focus back to the amount cell as it closes; the cursor moves on after that.
+        onAccept={rows => { dispatch({ type: 'bills', row: row.key, rows }); window.setTimeout(() => window.requestAnimationFrame(() => continueAfter(row.key)), 120) }} close={close} />
     },
   }
 

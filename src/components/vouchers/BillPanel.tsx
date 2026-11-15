@@ -1,4 +1,4 @@
-import { Alert, EntryGrid, Stack, StatusLine, Text, type EntryCommitEvent, type EntryGridApi, type EntryGridColumn, type EntryGridRow } from '@ten98/ui'
+import { Alert, EntryGrid, formatChord, Stack, StatusLine, Text, useCommandKeys, type EntryCommitEvent, type EntryGridApi, type EntryGridColumn, type EntryGridRow } from '@ten98/ui'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime/browser'
 import { errMsg } from '../../lib/api'
@@ -50,6 +50,7 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
   const latest = useRef(drafts)
   latest.current = drafts
   const grid = useRef<EntryGridApi>(null)
+  const acceptKey = useCommandKeys('entry.accept')[0]
   // The rows arrive after the pending bills: the first row's method then takes focus with its list open (observed).
   const firstKey = drafts[0]?.key
   useEffect(() => { if (firstKey) window.setTimeout(() => grid.current?.focusCell(firstKey, 'method', { open: true }), 0) }, [firstKey])
@@ -114,7 +115,7 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
       {error ? <Alert tone='danger'>The pending bills could not be loaded: {error}</Alert>
         : !pending ? <StatusLine busy>Loading the pending bills…</StatusLine>
         : <>
-          <Text size='sm' tone='muted'>Enter after the last row adds a row for the rest; Ctrl+A accepts with the rest on account; Escape keeps the earlier rows. Pending bills are listed by name.</Text>
+          <Text size='sm' tone='muted'>Enter after the last row adds a row for the rest; {acceptKey ? formatChord(acceptKey).text : 'the accept key'} accepts with the rest on account; Escape keeps the earlier rows. Pending bills are listed by name.</Text>
           <EntryGrid label={title} columns={columns} rows={toRows(drafts, date)} onRowsChange={next => change(fromRows(next))}
             createRow={current => toRows([nextBillRow({ kind, lineSide: line.side, lineAmount: line.amount, rows: fromRows(current), pending, exponent, key: key() })], date)[0]}
             onCellCommit={onCellCommit} escapeMode='restore' openListOnAppend apiRef={grid}
