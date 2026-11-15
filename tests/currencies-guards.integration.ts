@@ -276,3 +276,17 @@ test('the name check, the decimals and delete checks and the rate lookup read by
     } finally { client.release(); }
   }
 });
+
+test('direct SQL: a voucher line in another currency code, a foreign ledger opening and a symbol with an empty key are refused', async () => {
+  // Rate 1 and equal amounts pass the line's own base-only check; the per-voucher check at commit refuses the code.
+  const type = await asAdmin(database.adminUrl, async admin => (await admin.query("SELECT id, numbering_series FROM voucher_type WHERE company_id = $1 AND kind = 'journal'", [companyId])).rows[0]);
+  await assert.rejects(asApp(async client => {
+    const voucher = (await client.query(`INSERT INTO voucher (company_id, voucher_type_id, series, date, status, idempotency_key, request_hash, created_by)
+      VALUES ($1, $2, $3, '2026-03-01', 'optional', $4, $5, $6) RETURNING id`, [companyId, type.id, type.numbering_series, 'foreign-code-line', 'b'.repeat(64), owner.userId])).rows[0].id;
+    await client.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate)
+      VALUES ($1, $2, 1, $3, 'Dr', 100, 'USD', 100, 1), ($1, $2, 2, $4, 'Cr', 100, 'USD', 100, 1)`, [companyId, voucher, ids.usdBank, ids.capital]);
+  }), code('23514', 'voucher_line_base_currency_only'));
+  await assert.rejects(asApp(client => client.query('UPDATE ledger SET opening_amount = 100 WHERE company_id = $1 AND id = $2', [companyId, ids.usdBank])),
+    code('23514', 'ledger_currency_settings'), 'an opening balance on a foreign ledger');
+  for (const symbol of ['...', '-']) await assert.rejects(asApp(client => insertCurrency(client, { code: 'XPP', symbol })), code('23514', 'currency_symbol_key'), symbol);
+});

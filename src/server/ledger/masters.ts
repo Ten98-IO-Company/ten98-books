@@ -44,6 +44,7 @@ const groupRefusals = {
   account_group_builtin: ledgerError(400, 'A built-in group keeps its nature. Choose a parent group of the same nature.', 'nature_fixed'),
   ledger_cash_family: ledgerError(400, 'The cash ledger must stay under a cash or bank group, so this group cannot move there.', 'family_rule'),
   ledger_bill_wise_family: ledgerError(400, 'This group holds bill-wise ledgers or ledgers with bills, so it cannot move under the cash and bank groups.', 'family_rule'),
+  ledger_currency_family: ledgerError(400, 'This group holds a ledger in a foreign currency, so it cannot become an income or expense group: those ledgers stay in the base currency.', 'validation'),
 };
 const groupInUse = { ...groupRefusals, '23503': ledgerError(409, 'This group still holds sub-groups or ledgers. Move or delete them first.', 'in_use') };
 const ledgerRefusals = {
@@ -53,7 +54,7 @@ const ledgerRefusals = {
   ledger_bill_wise_family: ledgerError(400, 'Cash, bank and the profit and loss ledger keep no bills: they cannot be bill-wise, and a ledger with bills cannot move under the cash and bank groups.', 'family_rule'),
   bill_allocation_opening_locked: ledgerError(409, 'Opening bills are locked with the opening balances.', 'locked_period'),
   ledger_cost_centres_group: ledgerError(400, 'The profit and loss ledger takes no cost centres.', 'family_rule'),
-  ledger_currency_settings: ledgerError(400, 'A ledger in a foreign currency is not bill-wise, has no credit period or credit-days check and takes no cost centres.', 'validation'),
+  ledger_currency_settings: ledgerError(400, 'A ledger in a foreign currency is not bill-wise, has no credit period, credit-days check or opening balance (until foreign openings are built) and takes no cost centres.', 'validation'),
   ledger_currency_family: ledgerError(400, 'The profit and loss ledger and ledgers under income or expense groups stay in the base currency.', 'validation'),
   ledger_currency_in_use: ledgerError(409, 'This ledger has postings, an opening balance, bill rows or cost rows, so its currency cannot change.', 'in_use'),
   ledger_currency_fkey: ledgerError(400, 'The currency was not found.', 'not_found'),
@@ -277,7 +278,7 @@ export async function createLedger(context: LedgerContext, value: unknown): Prom
   const credit = creditColumns(input.creditPeriod ?? null);
   // New income and expense ledgers take cost centres by default (M2a slice 2), as existing ones were set by migration 0008.
   const costCentres = input.costCentres ?? (group.nature === 'income' || group.nature === 'expense');
-  assertCurrencyRules(context, { currency, nature: group.nature, billWise, creditPeriod: input.creditPeriod ?? null, creditDaysCheck: input.creditDaysCheck ?? false, costCentres });
+  assertCurrencyRules(context, { currency, nature: group.nature, billWise, creditPeriod: input.creditPeriod ?? null, creditDaysCheck: input.creditDaysCheck ?? false, costCentres, opening: opening.amount !== 0n || Boolean(input.opening?.bills?.length) });
   const { rows } = await context.client.query<{ id: string }>(
     `INSERT INTO ledger (company_id, group_id, name, second_language_name, opening_amount, opening_side, bill_wise, credit_count, credit_unit, credit_due_date, credit_days_check, cost_centres, currency)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
@@ -319,9 +320,10 @@ export async function alterLedger(context: LedgerContext, ledgerId: string, valu
   const creditPeriod = input.creditPeriod === undefined ? before.creditPeriod : input.creditPeriod;
   const credit = creditColumns(creditPeriod);
   const currency = input.currency === undefined || input.currency === before.currency ? before.currency : await ledgerCurrency(context, input.currency);
-  assertCurrencyRules(context, { currency, nature, billWise, creditPeriod, creditDaysCheck: input.creditDaysCheck ?? before.creditDaysCheck, costCentres: input.costCentres ?? before.costCentres });
   // The ledger row is locked (readLedger above), so a posting in flight, which key-shares it, has committed: its lines show.
   if (currency !== before.currency && await currencyFixed(context, ledgerId, before.opening.amount !== 0n || opening.amount !== 0n)) throw ledgerRefusals.ledger_currency_in_use;
+  assertCurrencyRules(context, { currency, nature, billWise, creditPeriod, creditDaysCheck: input.creditDaysCheck ?? before.creditDaysCheck, costCentres: input.costCentres ?? before.costCentres,
+    opening: opening.amount !== 0n || Boolean(openingBills?.length ?? before.openingBills.length) });
   // Turning bill-wise off keeps the ledger's bills (observed); new rows on it are dropped from then on. Turning cost
   // centres off likewise keeps the allocation rows posted (vouchers.ts keeps them through an alter).
   await context.client.query(
@@ -353,13 +355,13 @@ async function ledgerCurrency(context: LedgerContext, code: string): Promise<str
 
 /**
  * A ledger in a foreign currency is not bill-wise, has no credit period or credit-days check and takes no cost centres
- * (observed: the fields leave the form), and is neither the profit and loss ledger (`nature` null) nor under an income or
+ * (observed: the fields leave the form), takes no opening balance until foreign openings are built (slice b), and is neither the profit and loss ledger (`nature` null) nor under an income or
  * expense group (ours: only capital, bank and debtor ledgers were tried in the reference).
  */
-function assertCurrencyRules(context: LedgerContext, ledger: { currency: string; nature: Nature | null; billWise: boolean; creditPeriod: CreditPeriod | null; creditDaysCheck: boolean; costCentres: boolean }): void {
+function assertCurrencyRules(context: LedgerContext, ledger: { currency: string; nature: Nature | null; billWise: boolean; creditPeriod: CreditPeriod | null; creditDaysCheck: boolean; costCentres: boolean; opening: boolean }): void {
   if (ledger.currency === context.company.baseCurrency) return;
   if (ledger.nature === null || ledger.nature === 'income' || ledger.nature === 'expense') throw ledgerRefusals.ledger_currency_family;
-  if (ledger.billWise || ledger.creditPeriod !== null || ledger.creditDaysCheck || ledger.costCentres) throw ledgerRefusals.ledger_currency_settings;
+  if (ledger.billWise || ledger.creditPeriod !== null || ledger.creditDaysCheck || ledger.costCentres || ledger.opening) throw ledgerRefusals.ledger_currency_settings;
 }
 
 /** Whether a ledger's currency is fixed: it has an opening amount, voucher lines, bill rows or cost rows. */

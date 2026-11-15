@@ -16,6 +16,8 @@ CREATE TABLE currency (
   system_key text CHECK (system_key IN ('base')),
   symbol text NOT NULL CHECK (symbol = btrim(symbol) AND length(symbol) BETWEEN 1 AND 20),
   symbol_key text COLLATE "C" GENERATED ALWAYS AS (name_match_key(symbol)) STORED,
+  -- A symbol of ignored characters only ("...", "-") has an empty key, which would then block every such symbol.
+  CONSTRAINT currency_symbol_key CHECK (symbol_key <> ''),
   formal_name text NOT NULL CHECK (formal_name = btrim(formal_name) AND length(formal_name) BETWEEN 1 AND 120),
   iso_code text CHECK (iso_code ~ '^[A-Z]{3}$'),
   -- The runtime money module supports exponents 0, 2 and 3; 1 and 4 are a declared gap.
@@ -57,9 +59,11 @@ ALTER TABLE ledger ADD COLUMN currency text;
 -- ---- Guards ----
 
 -- Currencies: the base row keeps its code and decimals and is not deleted; no currency changes its code; decimals change
--- only while no ledger names the currency (taking the row FOR UPDATE first, so a ledger insert still in flight, which
--- key-shares the row, is waited for and then seen); a delete is refused while a ledger names the currency or a rate row
--- lies in the locked period. Symbols and codes: every create and symbol change takes the company's base row FOR NO KEY
+-- only while no ledger names the currency; a delete is refused while a ledger names the currency or a rate row
+-- lies in the locked period. A ledger insert still in flight key-shares the currency row, and any UPDATE of a currency
+-- row waits for it (measured: even `revision = revision`, also as the table owner, while an explicit FOR NO KEY UPDATE
+-- does not; tests/currencies-guards.integration.ts pins the outcome), so the use check after the wait sees that ledger.
+-- Symbols and codes: every create and symbol change takes the company's base row FOR NO KEY
 -- UPDATE (serialising currency writes, while postings, which only key-share currency rows, never wait on it) and then
 -- refuses a symbol equal under the key to another currency's symbol or code, or a code equal to another's symbol.
 -- The lookups run through EXECUTE, planned with their values each time. A cached generic plan (PL/pgSQL switches to one
@@ -100,7 +104,6 @@ BEGIN
       IF OLD.system_key IS NOT NULL THEN
         RAISE EXCEPTION 'the base currency keeps the company''s decimals' USING ERRCODE = '23514', CONSTRAINT = 'currency_builtin';
       END IF;
-      EXECUTE 'SELECT 1 FROM currency WHERE company_id = $1 AND code = $2 FOR UPDATE' USING NEW.company_id, NEW.code;
       EXECUTE 'SELECT EXISTS (SELECT 1 FROM ledger WHERE currency = $1 AND company_id = $2)' INTO v_found USING NEW.code, NEW.company_id;
       IF v_found THEN
         RAISE EXCEPTION 'currency % is named by a ledger: its decimals are fixed', NEW.code USING ERRCODE = '23503', CONSTRAINT = 'currency_in_use';
@@ -194,14 +197,7 @@ BEGIN
   END IF;
   SELECT base_currency INTO v_base FROM company WHERE company_id = NEW.company_id;
   IF TG_OP = 'INSERT' AND NEW.currency IS NULL THEN NEW.currency := v_base; END IF;
-  IF NEW.currency IS DISTINCT FROM v_base THEN
-    IF NEW.bill_wise OR NEW.credit_count IS NOT NULL OR NEW.credit_due_date IS NOT NULL OR NEW.credit_days_check OR NEW.cost_centres THEN
-      RAISE EXCEPTION 'a ledger in a foreign currency is not bill-wise, has no credit terms and takes no cost centres' USING ERRCODE = '23514', CONSTRAINT = 'ledger_currency_settings';
-    END IF;
-    IF NEW.group_id IS NULL OR (SELECT nature FROM account_group WHERE company_id = NEW.company_id AND id = NEW.group_id) IN ('income', 'expense') THEN
-      RAISE EXCEPTION 'the profit and loss ledger and income and expense ledgers stay in the base currency' USING ERRCODE = '23514', CONSTRAINT = 'ledger_currency_family';
-    END IF;
-  END IF;
+  -- Checked first, so a ledger with an opening amount moving to a foreign currency is refused as fixed, not as an opening.
   IF TG_OP = 'UPDATE' AND NEW.currency IS DISTINCT FROM OLD.currency AND OLD.currency IS NOT NULL THEN
     PERFORM 1 FROM ledger WHERE company_id = NEW.company_id AND id = NEW.id FOR UPDATE;
     IF OLD.opening_amount <> 0 OR NEW.opening_amount <> 0
@@ -209,6 +205,16 @@ BEGIN
       OR EXISTS (SELECT 1 FROM bill_allocation WHERE company_id = NEW.company_id AND ledger_id = NEW.id)
       OR EXISTS (SELECT 1 FROM cost_allocation WHERE company_id = NEW.company_id AND ledger_id = NEW.id) THEN
       RAISE EXCEPTION 'the currency of a ledger with postings, an opening amount, bill rows or cost rows is fixed' USING ERRCODE = '23514', CONSTRAINT = 'ledger_currency_in_use';
+    END IF;
+  END IF;
+  IF NEW.currency IS DISTINCT FROM v_base THEN
+    -- No opening balance either until foreign openings are built (slice b): an amount here would be base units with no
+    -- foreign amount beside it. Opening bills must fit the opening amount (ledger_assert_opening_bills), so none fit.
+    IF NEW.bill_wise OR NEW.credit_count IS NOT NULL OR NEW.credit_due_date IS NOT NULL OR NEW.credit_days_check OR NEW.cost_centres OR NEW.opening_amount <> 0 THEN
+      RAISE EXCEPTION 'a ledger in a foreign currency is not bill-wise, has no credit terms or opening balance and takes no cost centres' USING ERRCODE = '23514', CONSTRAINT = 'ledger_currency_settings';
+    END IF;
+    IF NEW.group_id IS NULL OR (SELECT nature FROM account_group WHERE company_id = NEW.company_id AND id = NEW.group_id) IN ('income', 'expense') THEN
+      RAISE EXCEPTION 'the profit and loss ledger and income and expense ledgers stay in the base currency' USING ERRCODE = '23514', CONSTRAINT = 'ledger_currency_family';
     END IF;
   END IF;
   RETURN NEW;
@@ -228,6 +234,48 @@ BEGIN
 END $$;
 CREATE TRIGGER account_group_currency_guard BEFORE UPDATE OF nature ON account_group FOR EACH ROW
   WHEN (NEW.nature IS DISTINCT FROM OLD.nature) EXECUTE FUNCTION account_group_currency_guard();
+
+-- The check at commit of 0009, plus: until foreign lines are built (slice b), every line of a voucher is in its company's
+-- base currency. The base-only check on the line tests its rate and amounts, not its code, and the key to currency now
+-- accepts any code the company has. Counted in the check's existing one statement per voucher, not looked up per line.
+CREATE OR REPLACE FUNCTION voucher_assert_balanced() RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE
+  v_company text;
+  v_voucher uuid;
+  v_status text;
+  v_number integer;
+  v_void boolean;
+  v_base text;
+  v_lines integer;
+  v_foreign integer;
+  v_debit numeric;
+  v_credit numeric;
+BEGIN
+  IF TG_TABLE_NAME = 'voucher' THEN v_company := NEW.company_id; v_voucher := NEW.id;
+  ELSIF TG_OP = 'DELETE' THEN v_company := OLD.company_id; v_voucher := OLD.voucher_id;
+  ELSE v_company := NEW.company_id; v_voucher := NEW.voucher_id;
+  END IF;
+  PERFORM ledger_assert_scope(v_company);
+  SELECT v.status, v.number, v.created_cancelled, c.base_currency INTO v_status, v_number, v_void, v_base
+  FROM voucher v JOIN company c ON c.company_id = v.company_id WHERE v.company_id = v_company AND v.id = v_voucher;
+  IF NOT FOUND THEN
+    -- In scope, only a line removed together with its voucher (company removal) finds no voucher; never skip otherwise.
+    IF TG_OP = 'DELETE' THEN RETURN NULL; END IF;
+    RAISE EXCEPTION 'voucher % is not visible to its own check', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_balanced';
+  END IF;
+  SELECT count(*), count(*) FILTER (WHERE currency <> v_base), coalesce(sum(amount) FILTER (WHERE side = 'Dr'), 0), coalesce(sum(amount) FILTER (WHERE side = 'Cr'), 0)
+    INTO v_lines, v_foreign, v_debit, v_credit FROM voucher_line WHERE company_id = v_company AND voucher_id = v_voucher;
+  IF NOT (v_void AND v_status = 'cancelled' AND v_lines = 0) AND (v_lines < 2 OR v_debit <> v_credit) THEN
+    RAISE EXCEPTION 'voucher % is not balanced', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_balanced';
+  END IF;
+  IF v_foreign > 0 THEN
+    RAISE EXCEPTION 'voucher % has lines in a currency other than the base currency', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_line_base_currency_only';
+  END IF;
+  IF (v_status = 'optional') <> (v_number IS NULL) THEN
+    RAISE EXCEPTION 'voucher % has no number', v_voucher USING ERRCODE = '23514', CONSTRAINT = 'voucher_numbered';
+  END IF;
+  RETURN NULL;
+END $$;
 
 -- ---- Revision log, row-level security and grants ----
 
@@ -319,20 +367,49 @@ END $$;
 
 -- ---- Existing companies ----
 
+-- Everything from here to the end reads rows of tables under the forced company policy, which applies to the migrator
+-- too: the pre-check, the seeding and backfill, SET NOT NULL and the four key validations. Without a scope they would see
+-- no rows, and a validation would mark its key valid without checking anything. So the scope lists every workspace (a
+-- company's id is its workspace's) until the last statement clears it; the deferred checks run before that.
+DO $$
+BEGIN
+  PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
+END $$;
+
+-- Before 0012 a voucher line or a bill row could carry another currency code (the base-only checks test the rate and the
+-- amounts, not the code). The keys below would refuse such rows, so they stop the migration first, named: company,
+-- table, how many and a few of them. The operator corrects them and migrates again.
+DO $$
+DECLARE v_found text;
+BEGIN
+  SELECT string_agg(format('%s in company %s: %s row(s), e.g. %s', kind, company_id, rows, examples), '; ' ORDER BY kind, company_id) INTO v_found FROM (
+    SELECT 'voucher lines' AS kind, l.company_id, count(*) AS rows,
+      array_to_string((array_agg(format('voucher %s line %s in %s', l.voucher_id, l.line_no, l.currency) ORDER BY l.voucher_id, l.line_no))[1:3], ', ') AS examples
+    FROM voucher_line l JOIN company c ON c.company_id = l.company_id WHERE l.currency <> c.base_currency GROUP BY l.company_id
+    UNION ALL
+    SELECT 'bills', b.company_id, count(*), array_to_string((array_agg(format('bill %s in %s', b.id, b.currency) ORDER BY b.id))[1:3], ', ')
+    FROM bill b JOIN company c ON c.company_id = b.company_id WHERE b.currency <> c.base_currency GROUP BY b.company_id
+    UNION ALL
+    SELECT 'bill rows', a.company_id, count(*), array_to_string((array_agg(format('row %s in %s', a.id, a.currency) ORDER BY a.id))[1:3], ', ')
+    FROM bill_allocation a JOIN company c ON c.company_id = a.company_id WHERE a.currency <> c.base_currency GROUP BY a.company_id) found;
+  IF v_found IS NOT NULL THEN
+    RAISE EXCEPTION 'these rows carry a currency other than their company''s base currency; correct them first: %', v_found;
+  END IF;
+END $$;
+
 -- Every company gets its base row, and every ledger states the base currency it already had. The backfill is not an
--- alter: no revision is bumped or logged. The scope lists every workspace for this transaction only, as in 0008; the
--- deferred checks run before it is cleared.
+-- alter: no revision is bumped or logged.
 DO $$
 DECLARE company_row record;
 BEGIN
-  PERFORM set_config('app.company_ids', coalesce((SELECT string_agg(id, ',') FROM workspace), ''), true);
   FOR company_row IN SELECT company_id FROM company LOOP
     PERFORM ledger_seed_company(company_row.company_id);
   END LOOP;
   UPDATE ledger l SET currency = c.base_currency FROM company c WHERE c.company_id = l.company_id AND l.currency IS NULL;
+  -- The backfill queued the deferred ledger checks; they run now, under the scope, and must not be pending when the
+  -- table is altered below.
   SET CONSTRAINTS ALL IMMEDIATE;
   SET CONSTRAINTS ALL DEFERRED;
-  PERFORM set_config('app.company_ids', '', true);
 END $$;
 
 ALTER TABLE ledger ALTER COLUMN currency SET NOT NULL;
@@ -340,8 +417,10 @@ ALTER TABLE ledger ALTER COLUMN currency SET NOT NULL;
 -- led by the sought columns.
 CREATE INDEX ledger_currency_idx ON ledger (currency, company_id);
 
--- The foreign keys to currency: added NOT VALID (a brief lock, no scan under it), then validated, which reads the rows
--- without blocking writes. Every existing value is the company's base code.
+-- The foreign keys to currency, added NOT VALID and then validated under the scope set above. The migration is one
+-- transaction, so its locks are held until it commits: `ledger` ACCESS EXCLUSIVE (SET NOT NULL, the new column), and
+-- `voucher_line`, `bill` and `bill_allocation` SHARE ROW EXCLUSIVE (adding a key), which blocks writes to them while it
+-- runs. Every existing value is its company's base code (the pre-check above).
 ALTER TABLE ledger ADD CONSTRAINT ledger_currency_fkey FOREIGN KEY (company_id, currency) REFERENCES currency (company_id, code) NOT VALID;
 ALTER TABLE voucher_line ADD CONSTRAINT voucher_line_currency_fkey FOREIGN KEY (company_id, currency) REFERENCES currency (company_id, code) NOT VALID;
 ALTER TABLE bill ADD CONSTRAINT bill_currency_fkey FOREIGN KEY (company_id, currency) REFERENCES currency (company_id, code) NOT VALID;
@@ -350,3 +429,10 @@ ALTER TABLE ledger VALIDATE CONSTRAINT ledger_currency_fkey;
 ALTER TABLE voucher_line VALIDATE CONSTRAINT voucher_line_currency_fkey;
 ALTER TABLE bill VALIDATE CONSTRAINT bill_currency_fkey;
 ALTER TABLE bill_allocation VALIDATE CONSTRAINT bill_allocation_currency_fkey;
+
+DO $$
+BEGIN
+  SET CONSTRAINTS ALL IMMEDIATE;
+  SET CONSTRAINTS ALL DEFERRED;
+  PERFORM set_config('app.company_ids', '', true);
+END $$;

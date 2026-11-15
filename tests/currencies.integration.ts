@@ -241,3 +241,27 @@ async function setupOutsider(): Promise<Member> {
   const theirs = await createCompany(owner.browser, { name: 'Elsewhere Books' });
   return invite(owner.browser, theirs, 'admin');
 }
+
+test('review fixes over the API: a group holding a foreign ledger stays out of income and expense, a foreign ledger takes no opening, a symbol needs a key, equal rates write nothing', async () => {
+  const b = await books('Currency Review');
+  assert.equal((await b.call('/currencies', usd)).status, 201);
+  // A group holding a USD ledger, moved under an expense group or given an expense nature, is refused (it answered 500).
+  const group = (await b.call('/groups', { name: 'Overseas Banks', nature: 'asset' })).body.group;
+  assert.equal((await b.call('/ledgers', { name: 'USD Account', groupId: group.id, currency: 'USD' })).status, 201);
+  assert.deepEqual(code(await b.call(`/groups/${group.id}`, { name: group.name, parentId: b.accounts.group('indirect_expenses'), revision: group.revision })), [400, 'validation'], 'moved under an expense group');
+  assert.deepEqual(code(await b.call(`/groups/${group.id}`, { name: group.name, parentId: null, nature: 'expense', revision: group.revision })), [400, 'validation'], 'given the expense nature');
+  // No opening balance or opening bills on a foreign ledger until foreign openings are built.
+  const receivables = b.accounts.group('receivables');
+  assert.deepEqual(code(await b.call('/ledgers', { name: 'USD Opened', groupId: b.accounts.group('bank_accounts'), currency: 'USD', opening: { amount: '10', side: 'Dr' } })), [400, 'validation'], 'an opening on create');
+  assert.deepEqual(code(await b.call('/ledgers', { name: 'USD Billed', groupId: receivables, currency: 'USD', opening: { amount: '10', side: 'Dr', bills: [{ name: 'OB', amount: '10' }] } })), [400, 'validation'], 'opening bills on create');
+  const plain = (await b.call('/ledgers', { name: 'USD Plain', groupId: b.accounts.group('bank_accounts'), currency: 'USD' })).body.ledger;
+  assert.deepEqual(code(await b.call(`/ledgers/${plain.id}`, { name: plain.name, groupId: plain.groupId, revision: plain.revision, opening: { amount: '10', side: 'Dr' } })), [400, 'validation'], 'an opening on alter');
+  // A symbol of ignored characters only has an empty key.
+  for (const symbol of ['...', '-', '( )']) assert.deepEqual(code(await b.call('/currencies', { code: 'XPP', symbol, formalName: 'Punctuation', decimals: 2 })), [400, 'validation'], symbol);
+  // Rates compare as numbers: the same value written another way changes nothing and logs nothing.
+  assert.equal((await b.call('/exchange-rates', { date: '2026-05-01', rates: [{ currency: 'USD', standard: '3.70' }] })).status, 200);
+  const logged = (await revisions(b.companyId, 'exchange_rate')).length;
+  for (const rate of ['3.7', '3.7000']) assert.equal((await b.call('/exchange-rates', { date: '2026-05-01', rates: [{ currency: 'USD', standard: rate }] })).status, 200, rate);
+  assert.equal((await revisions(b.companyId, 'exchange_rate')).length, logged, 'no entry for an equal rate');
+  assert.deepEqual((await b.call('/currencies/USD/rates')).body.rates, [{ kind: 'standard', effectiveDate: '2026-05-01', rate: '3.70' }], 'the stored text stays');
+});

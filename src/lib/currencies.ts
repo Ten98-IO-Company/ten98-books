@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { calendarDate, currencyCode } from './ledger.ts';
+import { nameMatchKey } from './names.ts';
 
 /**
  * Currencies and dated rates (M2a currencies, slice a): wire schemas (zod at the API boundary) and the shapes the server
@@ -8,7 +9,8 @@ import { calendarDate, currencyCode } from './ledger.ts';
  */
 
 const clean = (value: string) => !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(value);
-const symbol = z.string().trim().min(1).max(20).refine(clean);
+/** A symbol needs a character the name match key keeps: one of ignored characters only ("...") would block every such symbol. */
+const symbol = z.string().trim().min(1).max(20).refine(clean).refine(value => nameMatchKey(value) !== '', { message: 'A symbol needs a letter, a digit or a sign, not only spaces and punctuation.' });
 const formalName = z.string().trim().min(1).max(120).refine(clean);
 const isoCode = z.string().regex(/^[A-Z]{3}$/, { message: 'An ISO code is three capital letters.' });
 const decimalWord = z.string().trim().max(40).refine(clean).nullable().transform(value => value || null);

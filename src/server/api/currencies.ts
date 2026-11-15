@@ -33,7 +33,8 @@ export const currenciesApi: SignedInArea = async ({ request, url, path, user }) 
   }
   const match = path.match(currencyRoute);
   if (!match) return null;
-  const [, companyId, rawCode, rawAction] = match as unknown as [string, string, string | undefined, string | undefined];
+  // The code and action groups are optional: absent, they are undefined at run time, so they are read with ?. below.
+  const [, companyId, rawCode, rawAction] = match;
   const code = rawCode?.toUpperCase(), action = rawAction?.toLowerCase();
   if (!code) {
     if (request.method === 'GET') return json({ currencies: await runLedger(user.id, companyId, 'read', listCurrencies) });

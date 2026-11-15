@@ -28,6 +28,7 @@ const ratesLocked = (through: string) => ledgerError(409, `Rates dated on or bef
 const refusals = {
   currency_pkey: ledgerError(409, 'A currency with this code already exists.', 'duplicate_name'),
   currency_symbol_idx: symbolTaken,
+  currency_symbol_key: ledgerError(400, 'A symbol needs a letter, a digit or a sign, not only spaces and punctuation.', 'validation'),
   currency_builtin: ledgerError(409, 'The base currency keeps its code and decimal places and cannot be deleted. Its symbol, names and presentation can be changed.', 'seeded_row'),
   currency_in_use: inUse,
   '23503': inUse,
@@ -58,8 +59,8 @@ export async function getCurrency(context: LedgerContext, code: string): Promise
 
 /**
  * One currency with its revision-log id. `lock` takes its row first: `share` (FOR NO KEY UPDATE) serialises changes to
- * it without waiting for postings that key-share it; `update` (FOR UPDATE) also waits for ledgers still being written in
- * it, so a use check that follows sees them.
+ * it without waiting for postings that key-share it; `update` (FOR UPDATE, the lock a delete takes) also waits for
+ * ledgers still being written in it, so the delete's use check that follows sees them.
  */
 async function readCurrency(context: LedgerContext, code: string, lock?: 'share' | 'update'): Promise<Currency & { id: string }> {
   if (lock) await context.client.query(`SELECT 1 FROM currency WHERE company_id = $1 AND code = $2 ${lock === 'update' ? 'FOR UPDATE' : 'FOR NO KEY UPDATE'}`, [context.company.companyId, code]);
@@ -88,12 +89,11 @@ export async function createCurrency(context: LedgerContext, value: unknown): Pr
 
 export async function alterCurrency(context: LedgerContext, code: string, value: unknown): Promise<Currency> {
   const input = parseInput(currencyAlterInput, value, currencyFields);
-  const current = await readCurrency(context, code, 'share');
-  if (current.revision !== input.revision) throw conflict('currency');
-  let before = current;
-  if (input.decimals !== current.decimals) {
-    if (current.systemKey) throw refusals.currency_builtin;
-    before = await readCurrency(context, code, 'update');
+  const before = await readCurrency(context, code, 'share');
+  if (before.revision !== input.revision) throw conflict('currency');
+  if (input.decimals !== before.decimals) {
+    if (before.systemKey) throw refusals.currency_builtin;
+    // A ledger still being written in this currency is not seen here; the UPDATE below waits for it and the guard then refuses.
     if (await namedByLedger(context, code)) throw inUse;
   }
   await context.client.query(
@@ -177,7 +177,7 @@ async function ratesDatedOn(context: LedgerContext, date: string): Promise<DateR
 /**
  * Writes one date's rates: a value writes the row of that kind, null removes it, an omitted kind is left alone. One
  * revision-log entry (entity `exchange_rate`, one id per date) holds that date's rows before and after; a call that
- * changes nothing writes none. Writes for one date queue on a transaction lock, so the before and after are exact. The
+ * changes nothing writes none. Rates compare as numbers: 3.7 sent for a stored 3.70 writes nothing and keeps the text. Writes for one date queue on a transaction lock, so the before and after are exact. The
  * answer is the rates in force on the date, with `rates_move_reports` when vouchers are dated on or after it.
  */
 export async function saveRates(context: LedgerContext, value: unknown): Promise<RatesSaved> {
@@ -201,7 +201,7 @@ export async function saveRates(context: LedgerContext, value: unknown): Promise
         ? context.client.query('DELETE FROM exchange_rate WHERE company_id = $1 AND currency = $2 AND kind = $3 AND effective_date = $4::date', [companyId, row.currency, kind, input.date])
         : context.client.query(
           `INSERT INTO exchange_rate (company_id, currency, kind, effective_date, rate) VALUES ($1, $2, $3, $4::date, $5::numeric)
-           ON CONFLICT (company_id, currency, kind, effective_date) DO UPDATE SET rate = EXCLUDED.rate WHERE exchange_rate.rate::text <> EXCLUDED.rate::text`,
+           ON CONFLICT (company_id, currency, kind, effective_date) DO UPDATE SET rate = EXCLUDED.rate WHERE exchange_rate.rate <> EXCLUDED.rate`,
           [companyId, row.currency, kind, input.date, rate]);
       await write.catch(error => refusal(error, { ...refusals, exchange_rate_locked: ratesLocked(lockedThrough ?? '') }));
     }

@@ -61,8 +61,9 @@ async function post(companyId: string, kind: string, date: string, lines: [ledge
     const voucher = (await admin.query(`INSERT INTO voucher (company_id, voucher_type_id, series, date, idempotency_key, request_hash, created_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, [companyId, type.id, type.numbering_series, date, key, createHash('sha256').update(key).digest('hex'), users.owner])).rows[0].id;
     for (const [index, [ledger, side, amount]] of lines.entries()) {
+      // Lines in their company's base currency: migration 0012 stops on a line in another code (Beta Three is in KWD).
       await admin.query(`INSERT INTO voucher_line (company_id, voucher_id, line_no, ledger_id, side, amount, currency, currency_amount, fx_rate)
-        SELECT $1, $2, $3, id, $4, $5, 'AED', $5, 1 FROM ledger WHERE company_id = $1 AND name = $6`, [companyId, voucher, index + 1, side, amount, ledger]);
+        SELECT $1, $2, $3, l.id, $4, $5, c.base_currency, $5, 1 FROM ledger l JOIN company c ON c.company_id = l.company_id WHERE l.company_id = $1 AND l.name = $6`, [companyId, voucher, index + 1, side, amount, ledger]);
     }
     const number = (await admin.query(`INSERT INTO voucher_counter (company_id, voucher_type_id, series, last_number) VALUES ($1, $2, $3, 1)
       ON CONFLICT (company_id, voucher_type_id, series) DO UPDATE SET last_number = voucher_counter.last_number + 1 RETURNING last_number`, [companyId, type.id, type.numbering_series])).rows[0].last_number;

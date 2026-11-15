@@ -17,7 +17,7 @@ test('a currency: a three-letter code in capitals, 0, 2 or 3 decimals, a symbol 
   for (const decimals of [0, 2, 3]) assert.equal(ok(currencyCreateInput, { ...usd, decimals }), true, String(decimals));
   for (const [change, what] of [[{ code: 'usd' }, 'small letters'], [{ code: 'US' }, 'two letters'], [{ code: 'US1' }, 'a digit'], [{ decimals: 1 }, 'one decimal'],
     [{ decimals: 4 }, 'four decimals'], [{ decimals: 2.5 }, 'a fraction'], [{ symbol: '  ' }, 'a blank symbol'], [{ formalName: '' }, 'no formal name'],
-    [{ isoCode: 'us' }, 'an ISO code in small letters'], [{ extra: true }, 'an unknown field']] as const) {
+    [{ isoCode: 'us' }, 'an ISO code in small letters'], [{ extra: true }, 'an unknown field'], [{ symbol: '...' }, 'a symbol of ignored characters only'], [{ symbol: '( - )' }, 'another']] as const) {
     assert.equal(ok(currencyCreateInput, { ...usd, ...change }), false, what);
   }
   assert.equal(ok(currencyAlterInput, { symbol: '$', formalName: 'US Dollar', decimals: 2, revision: 1 }), true);
