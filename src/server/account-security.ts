@@ -131,7 +131,9 @@ function challengeCookie(request: Request): { identifier: string } | null {
   if (pairs.length !== 1 || pairs[0][0] !== name || !pairs[0][1]) return null;
   let decoded: string;
   try { decoded = decodeURIComponent(pairs[0][1]); } catch { return null; }
-  const identifier = decoded.slice(0, decoded.lastIndexOf('.'));
+  const at = decoded.lastIndexOf('.');
+  if (at < 1) return null;
+  const identifier = decoded.slice(0, at);
   return /^2fa-[A-Za-z0-9_-]{20}$/.test(identifier) ? { identifier } : null;
 }
 
@@ -348,11 +350,15 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // recovery codes would otherwise satisfy the factor proof that turning it off asks for. The password is checked first,
     // so a refused password never consumes a recovery code or an authenticator window.
     const details = parsed(accountInputs[path as '/api/account/two-factor/disable' | '/api/account/two-factor/recovery-codes'], input);
+    // With two-factor on, a request without a code is refused first, the same way whatever the password, so the answer
+    // never tells whether the password was right. Then the password (a wrong one never spends a code), then the code.
+    if (current.user.twoFactorEnabled && !details.code && !details.backupCode) {
+      throw path === '/api/account/two-factor/recovery-codes'
+        ? new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required')
+        : new FoundationError(400, 'Enter an authenticator code or a recovery code to verify this action.');
+    }
     const credential = await client.query<{ password: string }>("SELECT password FROM account WHERE \"userId\"=$1 AND \"providerId\"='credential' AND password IS NOT NULL", [userId]);
     if (!credential.rowCount || !await verifyPassword({ hash: credential.rows[0].password, password: details.password })) throw new FoundationError(400, proofRefused);
-    if (current.user.twoFactorEnabled && path === '/api/account/two-factor/recovery-codes' && !details.code && !details.backupCode) {
-      throw new FoundationError(400, 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', 'second_factor_required');
-    }
     if (current.user.twoFactorEnabled) await requireFactorProof(client, request, userId, details);
     if (path === '/api/account/two-factor/disable') {
       const response = await invoke(auth, request, '/two-factor/disable', { password: details.password });

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { after, before, test } from 'node:test';
+import { handleApi } from '../src/server/api.ts';
 import { authCookiePrefix } from '../src/server/auth.ts';
+import { getConfig } from '../src/server/config.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { asAdmin, browser, invite, password, setupOwner, type Member } from './helpers/ledger.ts';
 import { challenged as challengedIn, enableFactor, step, totp, verifyWith } from './helpers/two-factor.ts';
@@ -241,4 +243,101 @@ test('new recovery codes: two requests racing with one code, a sign-in code as p
   const signed = await challenged(second);
   assert.equal((await signed.browser.call('/api/auth/two-factor/verify-totp', { code: next })).status, 200);
   assert.deepEqual([(await regenerate({ code: next })).status], [409]);
+});
+
+test('a challenge value with no dot (an identifier plus one character) is refused before the limiter', async () => {
+  const challenge = challengeOf(await challenged(owner));
+  await asAdmin(database.adminUrl, admin => admin.query('DELETE FROM request_limit'));
+  const answer = await verifyWith(`${challengeName()}=${identifierOf(challenge)}x`, totp(secrets.get(owner.userId)!, step()));
+  assert.deepEqual([answer.status, answer.body, answer.signedIn], [401, refusal, false]);
+  const buckets = await asAdmin(database.adminUrl, async admin => (await admin.query("SELECT count(*)::int AS n FROM request_limit WHERE key LIKE 'two-factor:%' AND key NOT LIKE '%:unresolved'")).rows[0].n);
+  assert.equal(buckets, 0, 'the real challenge\'s bucket is not spent');
+});
+
+test('without a code the answer does not depend on the password; a wrong password never spends the code', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const wrong = 'wrong horse battery staple';
+  for (const [path, noCode] of [
+    ['/api/account/two-factor/recovery-codes', { error: 'Enter a code from your authenticator app, or a recovery code, to get new recovery codes.', code: 'second_factor_required' }],
+    ['/api/account/two-factor/disable', { error: 'Enter an authenticator code or a recovery code to verify this action.' }],
+  ] as const) {
+    const right = await second.browser.call(path, { password }), bad = await second.browser.call(path, { password: wrong });
+    assert.deepEqual([right.status, right.body], [400, noCode], `${path}: no code, right password`);
+    assert.deepEqual([bad.status, bad.body], [right.status, right.body], `${path}: no code, wrong password answers the same`);
+    const code = totp(secrets.get(second.userId)!, step());
+    assert.deepEqual((await second.browser.call(path, { password: wrong, code })).body, { error: 'The password or the code was not accepted.' }, `${path}: a code, wrong password`);
+    if (path === '/api/account/two-factor/recovery-codes') {
+      const done = await second.browser.call(path, { password, code });
+      assert.equal(done.status, 200, `${path}: the same code with the right password (it was not spent)`);
+      backupCodes.set(second.userId, done.body.backupCodes);
+    }
+  }
+});
+
+/** Every session row of a user. */
+const sessions = (userId: string) => asAdmin(database.adminUrl, async admin => Number((await admin.query('SELECT count(*) FROM session WHERE "userId" = $1', [userId])).rows[0].count));
+/** A verify with the given header lines (two Cookie headers become one joined value, as Headers does). */
+async function verifyHeaders(lines: string[], code: string) {
+  const headers = new Headers({ origin: getConfig().appUrl, 'content-type': 'application/json' });
+  for (const line of lines) headers.append('cookie', line);
+  const response = await handleApi(new Request(new URL('/api/auth/two-factor/verify-totp', getConfig().appUrl), { method: 'POST', headers, body: JSON.stringify({ code }) }));
+  return { status: response.status, signedIn: response.headers.getSetCookie().some(line => line.replace(/^__Secure-/, '').startsWith(`${authCookiePrefix()}.session_token=`)) };
+}
+
+test('odd Cookie header shapes: a used code never signs anyone in; a fresh code signs in at most once', async t => {
+  const name = challengeName(), prefix = authCookiePrefix();
+  const fullyEncoded = (value: string) => [...decodeURIComponent(value)].map(character => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+  const rows: [string, (real: string, other: string) => string[]][] = [
+    ['our name in upper case', real => [`${name.toUpperCase()}=${real}`]],
+    ['spaces around the name and =', real => [`  ${name}  =  ${real}  `]],
+    ['tabs around the name and =', real => [`\t${name}\t=\t${real}\t`]],
+    ['our name percent-encoded', real => [`${name.replace(/\./g, '%2E')}=${real}`]],
+    ['our value percent-encoded', real => [`${name}=${fullyEncoded(real)}`]],
+    ['a quoted value', real => [`${name}="${real}"`]],
+    ['an empty-named pair beside ours', real => [`=junk; ${name}=${real}`]],
+    ['a pair with no = beside ours', real => [`junk; ${name}=${real}`]],
+    [', instead of ; between pairs', real => [`${name}=${real}, theme=dark`]],
+    ['two Cookie headers', real => [`${name}=${real}`, 'theme=dark']],
+    ['a neighbour value with an encoded = and ;', real => [`note=a%3Db%3Bc; ${name}=${real}`]],
+    ['our value with an encoded = and ; appended', real => [`${name}=${real}%3D%3B`]],
+    ['an 8 KB header', real => [`pad=${'a'.repeat(8 * 1024)}; ${name}=${real}`]],
+    ['a 64 KB header', real => [`pad=${'a'.repeat(64 * 1024)}; ${name}=${real}`]],
+    ['a null byte', real => [`${name}=${real}\0`]],
+    ['non-ASCII (Latin-1) in a neighbour', real => [`pad=é; ${name}=${real}`]],
+    ['non-ASCII beyond Latin-1 in a neighbour', real => [`pad=€; ${name}=${real}`]],
+    ['another app\'s prefix carrying another user\'s challenge', (real, other) => [`ten98-${'1'.repeat(16)}.two_factor=${other}; ${name}=${real}`]],
+    ['better-auth.two_factor carrying another user\'s challenge', (real, other) => [`better-auth.two_factor=${other}; ${name}=${real}`]],
+    ['__Secure-better-auth.two_factor carrying another user\'s challenge', (real, other) => [`__Secure-better-auth.two_factor=${other}; ${name}=${real}`]],
+    ['__Host- of our prefix carrying another user\'s challenge', (real, other) => [`__Host-${prefix}.two_factor=${other}; ${name}=${real}`]],
+  ];
+  const outcomes: string[] = [];
+  for (const [label, build] of rows) {
+    const reset = () => asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+    // A used code: the owner signs in with it first.
+    await reset();
+    const code = totp(secrets.get(owner.userId)!, step());
+    assert.equal((await (await challenged(owner)).browser.call('/api/auth/two-factor/verify-totp', { code })).status, 200);
+    const real = challengeOf(await challenged(owner)), other = challengeOf(await challenged(second));
+    let lines: string[];
+    try { lines = build(real, other); new Headers(lines.map(line => ['cookie', line])); } catch { outcomes.push(`${label}: not sendable (Headers refuses it)`); continue; }
+    const before = [await sessions(owner.userId), await sessions(second.userId)];
+    const used = await verifyHeaders(lines, code);
+    assert.equal(used.signedIn, false, `${label}: used code`);
+    assert.deepEqual([await sessions(owner.userId), await sessions(second.userId)], before, `${label}: no session row`);
+    // A fresh code (the used-code ledger cleared) on a new real challenge: at most one success, and the plain cookie
+    // still works when this shape is refused.
+    await reset();
+    const realAgain = challengeOf(await challenged(owner)), otherAgain = challengeOf(await challenged(second));
+    const fresh = await verifyHeaders(build(realAgain, otherAgain), code);
+    const again = await verifyHeaders(build(realAgain, otherAgain), code);
+    assert.equal([fresh, again].filter(answer => answer.signedIn).length <= 1, true, `${label}: at most one success`);
+    let outcome = fresh.signedIn ? 'fresh code: signed in once' : `fresh code: refused (${fresh.status})`;
+    if (!fresh.signedIn) {
+      const plain = await verifyHeaders([`${name}=${realAgain}`], code);
+      assert.equal(plain.signedIn, true, `${label}: the plain cookie still works`);
+      outcome += '; the plain cookie then signs in';
+    }
+    outcomes.push(`${label}: used code refused (${used.status}), no session; ${outcome}`);
+  }
+  for (const line of outcomes) t.diagnostic(line);
 });
