@@ -1,19 +1,20 @@
-import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, WorkspaceProjectSwitcher } from '@ten98/ui'
+import { AccountMenu, Alert, AppShell, AppStateScreen, AppTopbar, Banner, SidebarFooter, SidebarNav, Stack, WorkspaceProjectSwitcher } from '@ten98/ui'
 import type { NavLinkComponent, SidebarNavGroup } from '@ten98/ui'
 import { AppBrand } from '@ten98/ui/app'
-import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState, type ErrorComponentProps } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { version } from '../../package.json'
 import { CompanyPicker } from '../components/CompanyPicker'
 import { ContextActionBar } from '../components/ContextActionBar'
-import { KeyboardShell } from '../components/KeyboardShell'
+import { KeyboardShell, useBackOverride } from '../components/KeyboardShell'
 import { AccountPresentationContext, useAccountPresentationState } from '../lib/account-presentation'
 import { api, ApiError, errMsg } from '../lib/api'
 import { AppContext, readLastCompany, rememberLastCompany, type AppState, type CompanySummary, type Me } from '../lib/app-context'
 import { sectionPath, workspaceOptions } from '../lib/company'
+import { shellBackTarget } from '../lib/commands'
 
 /** The signed-in shell (application-shell-auth-presentation): company switcher, company sections, account menu. */
-export const Route = createFileRoute('/app')({ component: AppLayout })
+export const Route = createFileRoute('/app')({ component: AppLayout, notFoundComponent: RouteNotFound, errorComponent: RouteError })
 
 const ShellLink: NavLinkComponent = ({ href, ...props }) => <Link to={href} {...props} />
 
@@ -100,12 +101,15 @@ function AppLayout() {
   const manager = current?.role === 'owner' || current?.role === 'admin'
   const pageTitle = (ready ? currentSection?.label : undefined) ?? (pathname.startsWith('/app/account') ? 'Your account' : pathname.startsWith('/app/team') ? 'Team'
     : pathname.startsWith('/app/companies/new') ? 'Create company' : company ? 'Set up the company' : 'Companies')
-  // Escape goes back one level, from a company page to the company menu. The menu is the top level: /app only reopens a company.
-  const back = ready && pathname.toLowerCase().replace(/\/$/, '') !== base ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } }) : undefined
+  // Escape goes back one level, from a company page to the company menu (shellBackTarget). The menu is the top level: /app
+  // only reopens a company. A company in the address that the list does not hold cannot be opened: Escape goes to /app.
+  const backTo = shellBackTarget({ companyInAddress: companyId !== undefined, listed: companies === null ? null : company !== undefined, ready, atMenu: pathname.toLowerCase().replace(/\/$/, '') === base })
+  const back = backTo === 'menu' && company ? () => void navigate({ to: '/app/c/$companyId', params: { companyId: company.id } })
+    : backTo === 'start' ? () => void navigate({ to: '/app' }) : undefined
   const openCompany = (id: string) => void navigate({ href: `/app/c/${id}${ready ? sectionPath(pathname, base) : ''}` })
 
   return <AppContext value={state}><PresentationProvider userId={me.user.id} onUnauthorized={unauthorized}>
-    <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} onSwitchCompany={companies ? () => setPickerOpen(true) : undefined}>
+    <KeyboardShell userId={me.user.id} onUnauthorized={unauthorized} back={back} companyOpen={ready} onSwitchCompany={companies ? () => setPickerOpen(true) : undefined}>
     <AppShell sidebarLabel='Application navigation' skipLinkLabel='Skip to main content' mainLabel='Main content' navigation={{ open: menuOpen, onOpenChange: setMenuOpen }}
       sidebar={<>
         <AppBrand product='Books' href='/app' />
@@ -119,7 +123,6 @@ function AppLayout() {
         </SidebarFooter>
       </>}
       topbar={<AppTopbar wrap menuToggle menuLabel='Menu' breadcrumb={{ icon: 'building', scope: shown?.name, current: pageTitle }}
-        badge={{ label: 'Development preview', hideOnMobile: true }}
         actions={<AccountMenu name={me.user.name || 'Account'} email={me.user.email} linkComponent={ShellLink} items={[
           { id: 'account', kind: 'link', label: 'Account and security', href: '/app/account', icon: 'user' },
           { id: 'separator', kind: 'separator' },
@@ -144,4 +147,27 @@ const createCompany = { label: 'Create company', href: '/app/companies/new' }
 
 function PresentationProvider({ userId, onUnauthorized, children }: { userId: string; onUnauthorized: () => void; children: ReactNode }) {
   return <AccountPresentationContext value={useAccountPresentationState(userId, onUnauthorized)}>{children}</AccountPresentationContext>
+}
+
+/**
+ * A route state inside the shell (an address no route matches, or a page that failed): the shared state screen in a
+ * region that takes focus when it appears, so focus is on a named element and not the page body, and Escape goes to the
+ * start page (/app), which opens the last company used.
+ */
+function RouteState({ state, title, message, onRetry }: { state: 'not-found' | 'error'; title: string; message: string; onRetry?: () => void }) {
+  const navigate = useNavigate()
+  const region = useRef<HTMLElement>(null)
+  useEffect(() => { region.current?.focus() }, [])
+  useBackOverride(() => void navigate({ to: '/app' }))
+  return <Stack ref={region} tabIndex={-1} role='region' aria-label={title}>
+    <AppStateScreen state={state} surface='plain' brand={false} aside={null} title={title} message={message} onRetry={onRetry} homeHref={state === 'not-found' ? '/app' : undefined} retryLabel={state === 'not-found' ? 'Go to the start page' : undefined} />
+  </Stack>
+}
+
+function RouteNotFound() {
+  return <RouteState state='not-found' title='Page not found' message='This address does not open a page of the application.' />
+}
+
+function RouteError({ reset }: ErrorComponentProps) {
+  return <RouteState state='error' title='This page could not be shown' message='Something went wrong while showing this page.' onRetry={reset} />
 }

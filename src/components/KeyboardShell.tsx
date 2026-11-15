@@ -106,11 +106,13 @@ export function useBackOverride(run: (() => void) | undefined) {
  * The keyboard layer of the signed-in shell (D-05): loads the user's keymap, mounts the `@ten98/ui` shortcut registry
  * with both keymaps, registers the global commands and owns the keyboard help dialog.
  */
-export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, children }: {
+export function KeyboardShell({ userId, onUnauthorized, back, companyOpen = false, onSwitchCompany, children }: {
   userId: string
   onUnauthorized: () => void
   /** Goes back one level from the current page; undefined where Escape should keep its native meaning. */
   back?: () => void
+  /** A company with books is open, so go-to and switch-to have screens to offer; false outside one and on a company that cannot be opened or is not set up. */
+  companyOpen?: boolean
   /** Opens the company picker; undefined while the workspace has no companies. */
   onSwitchCompany?: () => void
   children: ReactNode
@@ -198,7 +200,7 @@ export function KeyboardShell({ userId, onUnauthorized, back, onSwitchCompany, c
 
   return <KeyboardContext value={state}><BackOverrideContext value={setBackOverride}><OpenScreenContext value={openScreen}>
     <ShortcutProvider keymaps={keymaps} keymap={keymap}>
-      <GlobalCommands back={backNow} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
+      <GlobalCommands back={backNow} companyOpen={companyOpen} onSwitchCompany={onSwitchCompany} onHelp={openHelp} onOpenList={setGoToMode} />
       <ReservedKeys context='global' />
       {children}
       <KeyboardHelp open={helpOpen} onOpenChange={setHelpOpen} keymap={keymap} />
@@ -213,8 +215,10 @@ const popupOpen = () => document.querySelector('dialog[open], :popover-open, [ar
 /** The company open in the address, or undefined outside a company. */
 const useOpenCompanyId = () => (useParams({ strict: false }) as { companyId?: string }).companyId?.toLowerCase()
 
-function GlobalCommands({ back, onSwitchCompany, onHelp, onOpenList }: { back?: () => void; onSwitchCompany?: () => void; onHelp: () => void; onOpenList: (mode: ScreenMode) => void }) {
-  const inCompany = useOpenCompanyId() !== undefined
+function GlobalCommands({ back, companyOpen, onSwitchCompany, onHelp, onOpenList }: { back?: () => void; companyOpen: boolean; onSwitchCompany?: () => void; onHelp: () => void; onOpenList: (mode: ScreenMode) => void }) {
+  // Go-to and switch-to list a company's screens: off where no company with books is open, so the action bar does not offer them.
+  const companyInAddress = useOpenCompanyId() !== undefined
+  const inCompany = companyOpen && companyInAddress
   useAppCommand('help.keyboard', onHelp)
   // Not allowed in text input, so a text field, select or open popup keeps Escape (the registry's rule); the check here
   // covers a dialog or popover that is open while focus is outside it.

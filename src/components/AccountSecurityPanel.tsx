@@ -86,7 +86,8 @@ function AccountSecurityContent({ expectedUserId, onUnauthorized }: { expectedUs
       onAcknowledgeCodes={() => setCodes(null)}
       onRegenerate={({ password }) => mutate<{ backupCodes: string[] }>('factor', '/api/account/two-factor/recovery-codes', { password }, value => setCodes(value.backupCodes))}
       onDisable={({ password, code = '' }) => mutate('factor', '/api/account/two-factor/disable', { password, ...(/^\d{6}$/.test(code.trim()) ? { code: code.trim() } : { backupCode: code.trim() }) }, clearSecrets)} />
-    <SessionListFlow title='Signed-in sessions' formatDate={formatDate} busy={busy === 'sessions'} error={errs.sessions || undefined}
+    {/* The server keeps no activity time, so the column shows when each session signed in, and says so. */}
+    <SessionListFlow title='Signed-in sessions' formatDate={formatDate} busy={busy === 'sessions'} error={errs.sessions || undefined} messages={{ lastActive: 'Signed in' }}
       sessions={data.sessions.map(session => ({ id: session.id, device: session.userAgent ?? 'Unknown device', lastActiveAt: session.createdAt, current: session.current }))}
       onRevoke={({ id }) => mutate('sessions', '/api/account/sessions/revoke', { sessionId: id })}
       onRevokeOthers={() => mutate('sessions', '/api/account/sessions/revoke-others', {})} />

@@ -43,10 +43,23 @@ function Entry() {
   }
 
   useEffect(() => {
-    fragment.current = readAuthFragment(window.location.hash)
-    if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+    // A link opened while this page is already loaded changes only the hash, so the fragment is read on each change too.
+    const takeFragment = () => {
+      const next = readAuthFragment(window.location.hash)
+      if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+      return next
+    }
+    fragment.current = takeFragment()
     void boot()
-    return () => { generation.current++ }
+    const onHashChange = () => {
+      const next = takeFragment()
+      if (!next) return
+      fragment.current = next
+      setPhase('loading')
+      void boot()
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => { generation.current++; window.removeEventListener('hashchange', onHashChange) }
   }, [])
 
   function beginRecovery(value: PasswordRecovery, initialEmail = email) {
@@ -74,9 +87,12 @@ function Entry() {
       catch (error) { if (error instanceof ApiError && error.status === 401) { setEmail(acceptedEmail); setPhase('signin') } else { setPageError(errMsg(error)); setPhase('error') } }
     }}
     onSignIn={async invitedEmail => {
+      setEmail(invitedEmail)
+      // Switch account: sign the other account out and show the invitation again, signed out, so it offers what fits the
+      // invited address (sign in for an existing account, the new-person form otherwise) rather than always asking to sign in.
+      if (signedInEmail) { await api('/api/auth/sign-out', { method: 'POST', body: {} }).catch(() => undefined); setSignedInEmail(null); return }
       // Sign in as the invited account; the invitation reopens after sign-in.
-      if (signedInEmail) await api('/api/auth/sign-out', { method: 'POST', body: {} }).catch(() => undefined)
-      setSignedInEmail(null); setEmail(invitedEmail); setPhase('signin')
+      setPhase('signin')
     }}
     onCancel={() => { fragment.current = null; void boot() }}
     onUnauthorized={() => { setSignedInEmail(null); setPhase('signin') }} />
