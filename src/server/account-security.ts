@@ -112,23 +112,25 @@ async function keepResponseSession(client: PoolClient, auth: Auth, request: Requ
   await revokeOtherSessions(client, userId, current.session.id);
 }
 
+/** The one name the library reads the challenge under: the auth prefix, with `__Secure-` when the app URL is https. */
+function challengeCookieName(): string {
+  return `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${authCookiePrefix()}.two_factor`;
+}
+
 /**
- * The sign-in challenge cookie exactly as the library verifies it: one exact name (the auth prefix, with `__Secure-`
- * when the app URL is https, as Better Auth decides from the base URL the preset passes it). The raw Cookie header is
- * parsed here, not by either library parser (they disagree on duplicate names and prefixes): exactly one pair with that
- * name, no other name under our prefix that a parser could read as the challenge (the `__Secure-` or plain counterpart,
- * the dash form), and an identifier of the library's shape (`2fa-` and 20 random characters, everything before the
- * last `.` as the library signs it). Cookies under any other prefix (another app on the same host) are ignored.
- * Anything else answers null.
+ * The sign-in challenge cookie exactly as the library verifies it, from the raw Cookie header (not either library parser:
+ * they disagree on duplicate names). Only pairs with the one exact name count; every other name is ignored, our own
+ * variants included, since the library never reads them (refusing on them would let a planted cookie deny a second step).
+ * The exact name twice is `duplicate` (the library would read the first); otherwise the value must have an identifier of
+ * the library's shape (`2fa-` and 20 random characters) before its last `.`. Anything else answers null.
  */
-function challengeCookie(request: Request): { identifier: string } | null {
-  const prefix = authCookiePrefix();
-  const name = `${appOrigin(getConfig().appUrl).startsWith('https://') ? '__Secure-' : ''}${prefix}.two_factor`;
-  const variants = new Set([`${prefix}.two_factor`, `__Secure-${prefix}.two_factor`, `${prefix}-two_factor`, `__Secure-${prefix}-two_factor`]);
+function challengeCookie(request: Request): { identifier: string } | 'duplicate' | null {
+  const name = challengeCookieName();
   const pairs = (request.headers.get('cookie') ?? '').split(';').map(pair => pair.trim()).filter(Boolean)
     .map(pair => { const at = pair.indexOf('='); return at < 0 ? [pair, ''] : [pair.slice(0, at).trim(), pair.slice(at + 1).trim()]; })
-    .filter(([pairName]) => variants.has(pairName));
-  if (pairs.length !== 1 || pairs[0][0] !== name || !pairs[0][1]) return null;
+    .filter(([pairName]) => pairName === name);
+  if (pairs.length > 1) return 'duplicate';
+  if (pairs.length !== 1 || !pairs[0][1]) return null;
   let decoded: string;
   try { decoded = decodeURIComponent(pairs[0][1]); } catch { return null; }
   const at = decoded.lastIndexOf('.');
@@ -265,6 +267,12 @@ export async function handleAccountSecurity(request: Request, limit: Limit): Pro
     // ambiguous is refused before the library runs, in the same words, so nothing tells whether a challenge existed.
     const refused = () => json({ error: 'The code was not accepted. Try another code or sign in again.' }, 401);
     const cookie = challengeCookie(request);
+    // The exact name twice: refused, and the name expired with the library's attributes, so signing in again recovers.
+    if (cookie === 'duplicate') {
+      const response = refused();
+      response.headers.append('set-cookie', `${challengeCookieName()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${challengeCookieName().startsWith('__Secure-') ? '; Secure' : ''}`);
+      return response;
+    }
     if (!cookie) return refused();
     await limit(`two-factor:${createHash('sha256').update(cookie.identifier).digest('hex')}`, limits.twoFactorPerChallenge);
     return transaction(async (client, auth) => {

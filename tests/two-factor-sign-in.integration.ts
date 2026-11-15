@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { after, before, test } from 'node:test';
 import { handleApi } from '../src/server/api.ts';
 import { authCookiePrefix } from '../src/server/auth.ts';
@@ -120,10 +120,38 @@ test('a second challenge cookie of the same name is refused in either order: the
   }
 });
 
-test('a __Secure- challenge cookie beside the plain one on http is refused', async () => {
+test('a planted variant of our name is ignored: a used code is refused, a fresh one signs in with the record under the right user', async () => {
+  for (const variant of [`__Secure-${challengeName()}`, `${authCookiePrefix()}-two_factor`, `__Secure-${authCookiePrefix()}-two_factor`]) {
+    const { code, challenge } = await usedCodeAndChallenge();
+    const planted = (value: string) => `${variant}=2fa-attempts-${identifierOf(value)}.x; ${challengeName()}=${value}`;
+    const used = await verifyWith(planted(challenge), code);
+    assert.deepEqual([used.status, used.signedIn], [409, false], `${variant}: a used code`);
+    await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+    const fresh = await verifyWith(planted(challengeOf(await challenged(owner))), code);
+    assert.deepEqual([fresh.status, fresh.signedIn], [200, true], `${variant}: a fresh code`);
+    const record = await asAdmin(database.adminUrl, async admin => Number((await admin.query("SELECT count(*) FROM verification WHERE identifier LIKE 'totp-used:' || $1 || ':%'", [owner.userId])).rows[0].count));
+    assert.equal(record, 1, `${variant}: the reuse record is the owner's`);
+  }
+});
+
+test('our exact name twice is refused once and cleared; the next sign-in from the same cookie jar works; a used code stays refused', async () => {
   const { code, challenge } = await usedCodeAndChallenge();
-  const answer = await verifyWith(`__Secure-${challengeName()}=2fa-attempts-${identifierOf(challenge)}.x; ${challengeName()}=${challenge}`, code);
-  assert.deepEqual([answer.status, answer.body, answer.signedIn], [401, refusal, false]);
+  const used = await verifyWith(`${challengeName()}=2fa-attempts-${identifierOf(challenge)}.x; ${challengeName()}=${challenge}`, code);
+  assert.deepEqual([used.status, used.signedIn], [401, false], 'a used code with a duplicate');
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const jar = await challenged(owner);
+  const real = challengeOf(jar);
+  const response = await handleApi(new Request(new URL('/api/auth/two-factor/verify-totp', getConfig().appUrl), { method: 'POST',
+    headers: { cookie: `${challengeName()}=planted.x; ${challengeName()}=${real}`, origin: getConfig().appUrl, 'content-type': 'application/json' }, body: JSON.stringify({ code }) }));
+  assert.deepEqual([response.status, await response.json()], [401, refusal]);
+  const cleared = response.headers.getSetCookie().find(line => line.startsWith(`${challengeName()}=;`));
+  assert.ok(cleared && /Max-Age=0/i.test(cleared) && /Path=\//.test(cleared) && /HttpOnly/i.test(cleared), String(cleared));
+  // The jar drops the cleared name, signs in again and completes the second step.
+  jar.browser.cookies.delete(challengeName());
+  const email = await asAdmin(database.adminUrl, async admin => (await admin.query('SELECT email FROM "user" WHERE id = $1', [owner.userId])).rows[0].email as string);
+  assert.deepEqual((await jar.browser.call('/api/auth/sign-in/email', { email, password })).body, { twoFactorRedirect: true });
+  assert.equal((await jar.browser.call('/api/auth/two-factor/verify-totp', { code })).status, 200);
+  assert.equal((await jar.browser.call('/api/me')).status, 200);
 });
 
 test('another user\'s pending challenge beside the real one is refused', async () => {
@@ -196,15 +224,12 @@ test('new recovery codes need the second factor as well as the password; the cod
   assert.equal((await second.browser.call('/api/account/two-factor/recovery-codes', { password, backupCode: proof })).status, 400, 'the same recovery code again');
 });
 
-test('a challenge cookie of another app on the same host is ignored; our dash variant beside ours is refused', async () => {
+test('a challenge cookie of another app on the same host is ignored', async () => {
   await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
   const theirs = `ten98-${'0'.repeat(16)}.two_factor=2fa-${'a'.repeat(20)}.signature`;
-  const dashed = await challenged(owner);
-  const refusedDash = await verifyWith(`${challengeName()}=${challengeOf(dashed)}; ${authCookiePrefix()}-two_factor=2fa-${'b'.repeat(20)}.x`, totp(secrets.get(owner.userId)!, step()));
-  assert.deepEqual([refusedDash.status, refusedDash.body, refusedDash.signedIn], [401, refusal, false], 'our dash variant');
   const fine = await challenged(owner);
   const accepted = await verifyWith(`${theirs}; ${challengeName()}=${challengeOf(fine)}`, totp(secrets.get(owner.userId)!, step()));
-  assert.deepEqual([accepted.status, accepted.signedIn], [200, true], 'another app\'s cookie beside ours');
+  assert.deepEqual([accepted.status, accepted.signedIn], [200, true]);
 });
 
 test('one challenge sent with different percent-escaping spends one limiter bucket', async () => {
@@ -340,4 +365,37 @@ test('odd Cookie header shapes: a used code never signs anyone in; a fresh code 
     outcomes.push(`${label}: used code refused (${used.status}), no session; ${outcome}`);
   }
   for (const line of outcomes) t.diagnostic(line);
+});
+
+test('the session the library creates must be the user the handler checked: a newer row naming another user rolls back', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const challenge = challengeOf(await challenged(owner));
+  // The library reads the newest row of an identifier; the handler's lookup reads the first. A newer row naming the second
+  // user makes the library verify the second user's code and sign them in, while the handler checked the owner.
+  await asAdmin(database.adminUrl, admin => admin.query(`INSERT INTO verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+    VALUES ($1, $2, $3, now() + interval '10 minutes', now() + interval '1 minute', now())`, [randomUUID(), identifierOf(challenge), second.userId]));
+  const before = await sessions(second.userId);
+  const answer = await verifyWith(`${challengeName()}=${challenge}`, totp(secrets.get(second.userId)!, step()));
+  assert.deepEqual([answer.status, answer.signedIn], [401, false]);
+  assert.equal(await sessions(second.userId), before, 'the library\'s session was rolled back');
+});
+
+test('a client already signed in is told the sign-in is complete, and no second session is made', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const pending = challengeOf(await challenged(owner));
+  const sessionCookie = [...owner.browser.cookies].map(([cookieName, value]) => `${cookieName}=${value}`).join('; ');
+  const before = await sessions(owner.userId);
+  const answer = await verifyWith(`${sessionCookie}; ${challengeName()}=${pending}`, totp(secrets.get(owner.userId)!, step()));
+  assert.deepEqual([answer.status, answer.body.error], [409, 'This sign-in is already complete.']);
+  assert.equal(await sessions(owner.userId), before);
+});
+
+test('a code that confirmed enrolment is refused at the next sign-in', async () => {
+  await asAdmin(database.adminUrl, admin => admin.query("DELETE FROM request_limit; DELETE FROM verification WHERE identifier LIKE 'totp-used:%'"));
+  const third = await invite(owner.browser, owner.workspaceId, 'viewer');
+  const factor = await enableFactor(third);
+  // enableFactor confirms with the code of the previous step: that code is now spent.
+  const confirmed = totp(factor.secret, step() - 1);
+  const answer = await (await challenged(third)).browser.call('/api/auth/two-factor/verify-totp', { code: confirmed });
+  assert.deepEqual([answer.status, answer.body.error], [409, 'Wait for the next authenticator code, then try again.']);
 });
