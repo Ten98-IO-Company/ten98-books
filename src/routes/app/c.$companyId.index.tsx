@@ -4,13 +4,12 @@ import { useEffect, useState } from 'react'
 import { KeyboardMenu, type KeyboardMenuGroup } from '../../components/KeyboardMenu'
 import { KeymapPrompt } from '../../components/KeymapChoice'
 import { DialogKeys, useAppCommand } from '../../components/KeyboardShell'
-import { loadDefaults } from '../../components/reports/navigation'
 import { useApp, useCompany } from '../../lib/app-context'
 import { commands, type CommandId } from '../../lib/commands'
 import { baseCurrencies, financialYearOf } from '../../lib/company'
 import { longDate } from '../../lib/reports'
-import { entryDateLabel, entryDateText, parseEntryDate } from '../../lib/voucher-entry'
-import { readWorkingDate, sessionStore, startingWorkingDate, writeWorkingDate } from '../../lib/working-date'
+import { entryDateLabel, parseEntryDate } from '../../lib/voucher-entry'
+import { useWorkingDate } from '../../components/vouchers/useEntryReads'
 
 export const Route = createFileRoute('/app/c/$companyId/')({ component: CompanyHome })
 
@@ -47,7 +46,7 @@ function CompanyHome() {
   const [active, setActive] = useState<CommandId>(() => lastOpened.get(company.id) ?? offered[0].command)
   const [focusRequest, setFocusRequest] = useState(0)
   const year = financialYearOf(company.financialYearStart, companyToday(company.timeZone))
-  const working = useWorkingDate(company.id)
+  const [working, setWorking] = useWorkingDate(company)
   const [dateOpen, setDateOpen] = useState(false)
   useAppCommand('app.working-date', () => setDateOpen(true), { enabled: working !== null })
 
@@ -77,24 +76,8 @@ function CompanyHome() {
       </Card>
     </Grid>
     {working && <WorkingDateDialog open={dateOpen} current={working} booksBeginning={company.booksBeginning} onClose={() => { setDateOpen(false); setFocusRequest(value => value + 1) }}
-      onChange={date => setWorking(company.id, date)} />}
+      onChange={setWorking} />}
   </Stack>
-}
-
-const workingListeners = new Set<() => void>()
-const setWorking = (companyId: string, date: string) => { writeWorkingDate(sessionStore, companyId, date); for (const listener of workingListeners) listener() }
-
-/** The tab's working date (src/lib/working-date.ts): the kept one, else the last voucher date from the report defaults. */
-function useWorkingDate(companyId: string): string | null {
-  const [date, setDate] = useState(() => readWorkingDate(sessionStore, companyId))
-  useEffect(() => {
-    let live = true
-    const listener = () => setDate(readWorkingDate(sessionStore, companyId))
-    workingListeners.add(listener)
-    if (readWorkingDate(sessionStore, companyId) === null) loadDefaults(companyId).then(found => { if (live) setDate(startingWorkingDate(found)) }).catch(() => undefined)
-    return () => { live = false; workingListeners.delete(listener) }
-  }, [companyId])
-  return date
 }
 
 /**
@@ -104,11 +87,11 @@ function useWorkingDate(companyId: string): string | null {
 function WorkingDateDialog({ open, current, booksBeginning, onChange, onClose }: { open: boolean; current: string; booksBeginning: string; onChange: (date: string) => void; onClose: () => void }) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string>()
-  useEffect(() => { if (open) { setText(entryDateText(current)); setError(undefined) } }, [open, current])
+  useEffect(() => { if (open) { setText(longDate(current)); setError(undefined) } }, [open, current])
   const apply = () => {
     const parsed = parseEntryDate(text, current)
     if ('error' in parsed) { setError(parsed.error); return }
-    if (parsed.value < booksBeginning) { setError(`Date cannot be before the books begin, ${entryDateText(booksBeginning)}.`); return }
+    if (parsed.value < booksBeginning) { setError(`Date cannot be before the books begin, ${longDate(booksBeginning)}.`); return }
     onChange(parsed.value)
     onClose()
   }

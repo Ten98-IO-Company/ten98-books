@@ -268,7 +268,7 @@ The voucher screen (`/vouchers`, menu letter `V`, writers only) follows the obse
 - **Date**, `F2`: opens the date field from any field or cell; Enter takes a typed date, Escape clears it and a second Escape closes it unchanged; either way the cursor returns to where it was and a ledger cell reopens its list.
 - **Lines**: `Ctrl+D` removes the line with the cursor in its ledger cell (nothing in an amount cell); Backspace in an empty header field goes back one field; Down on an empty Account goes to the first line.
 - **Bill panel**: Enter walks each row (method, bill or name, credit period, amount, side); Enter on a row's last cell adds a row for the rest, or closes the panel when the rows cover the line; `Ctrl+A` accepts with the rest on account; Escape keeps the line's earlier rows. Enter on an unchanged bill-wise amount opens the panel again.
-- **Not built in slice 1**: `Ctrl+Enter` in a ledger lookup (alter the highlighted ledger) and `Alt+C` (create one in place) are claimed and do nothing yet; see VOUCHERS.md, "Gaps".
+- **Not built in slice 1**: altering the highlighted ledger from a lookup (`Ctrl+Enter` there saves the voucher, as everywhere, until it is built) and creating one in place (`Alt+C`, claimed and doing nothing); see VOUCHERS.md, "Gaps".
 
 ## Rules the tests enforce
 

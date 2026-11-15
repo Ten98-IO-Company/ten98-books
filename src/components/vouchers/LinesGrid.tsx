@@ -3,7 +3,7 @@ import { useMemo, type Ref } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import { useAppCommand } from '../KeyboardShell'
 import {
-  balanceText, groupedAmount, kindTitles, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
+  amountText, balanceText, kindTitles, ledgerOptions, lineTotals, minorOf, parseEntryAmount, particularsTotal,
   type EntryKind, type EntryLayout, type EntryLedger, type EntryLine, type LedgerLists,
 } from '../../lib/voucher-entry'
 import type { Side } from '../../lib/ledger'
@@ -51,9 +51,9 @@ export function LinesGrid({ kind, layout, number, lines, ledgers, balances, expo
   ], [layout, locked, lines[0]?.key, lists, exponent])
   const rows = useMemo(() => toGridRows(lines, balances, exponent), [lines, balances, exponent])
   const footer = useMemo(() => {
-    if (layout === 'single') return { amount: groupedAmount(particularsTotal(lines, exponent), exponent) }
+    if (layout === 'single') return { amount: amountText(particularsTotal(lines, exponent), exponent) }
     const { debit, credit } = lineTotals(lines, exponent)
-    return { amount: `Dr ${groupedAmount(debit, exponent)} · Cr ${groupedAmount(credit, exponent)}` }
+    return { amount: `Dr ${amountText(debit, exponent)} · Cr ${amountText(credit, exponent)}` }
   }, [layout, lines, exponent])
   return <EntryGrid label={`Lines of ${kindTitles[kind].toLowerCase()}${number === null ? '' : ` ${number}`}`} columns={columns} rows={rows}
     onRowsChange={next => onLines(fromGridRows(next))} createRow={current => { const line = createRow(fromGridRows(current)); return toGridRows([line], balances, exponent)[0] }}

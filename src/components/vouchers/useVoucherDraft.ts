@@ -13,7 +13,7 @@ export type SaveOutcome =
   /** No answer (network, timeout): the outcome is unknown, so the fields stay locked until a retry or a discard. */
   | { kind: 'unknown'; message: string }
 
-const draftKey = (companyId: string) => `voucherDraft:${companyId}`
+const draftKey = (userId: string, companyId: string) => `voucherDraft:${userId}:${companyId}`
 type StoredDraft = { state: DraftState; key: string; savedAt: string }
 const newKey = () => `voucher-${crypto.randomUUID()}`
 
@@ -24,7 +24,7 @@ const newKey = () => `voucher-${crypto.randomUUID()}`
  * On a lost session the draft is kept in this tab (`voucherDraft:<companyId>`) with its key, and offered back after
  * signing in; it is cleared on save and on discard.
  */
-export function useVoucherDraft(companyId: string, start: { kind: EntryKind; layout: EntryLayout; date: string }, exponent: MoneyExponent) {
+export function useVoucherDraft(userId: string, companyId: string, start: { kind: EntryKind; layout: EntryLayout; date: string }, exponent: MoneyExponent) {
   const { unauthorized } = useApp()
   const [state, dispatch] = useReducer(draftReducer, undefined, () => blankDraft(start.kind, start.layout, start.date))
   const key = useRef(newKey())
@@ -32,7 +32,7 @@ export function useVoucherDraft(companyId: string, start: { kind: EntryKind; lay
   const [unknown, setUnknown] = useState<string | null>(null)
   const flying = useRef(false)
   const [restorable, setRestorable] = useState<StoredDraft | null>(() => {
-    const stored = readStored(sessionStore, draftKey(companyId))
+    const stored = readStored(sessionStore, draftKey(userId, companyId))
     try { return stored ? JSON.parse(stored) as StoredDraft : null } catch { return null }
   })
 
@@ -44,11 +44,11 @@ export function useVoucherDraft(companyId: string, start: { kind: EntryKind; lay
       const answer = await api<{ voucher: Wire<Voucher>; warnings: Wire<BillWarning>[]; replayed: boolean }>(`/api/companies/${companyId}/vouchers`, { method: 'POST', body })
       key.current = newKey()
       setUnknown(null)
-      writeStored(sessionStore, draftKey(companyId), '')
+      writeStored(sessionStore, draftKey(userId, companyId), '')
       return { kind: 'saved', ...answer }
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) {
-        writeStored(sessionStore, draftKey(companyId), JSON.stringify({ state: current, key: key.current, savedAt: new Date().toISOString() } satisfies StoredDraft))
+        writeStored(sessionStore, draftKey(userId, companyId), JSON.stringify({ state: current, key: key.current, savedAt: new Date().toISOString() } satisfies StoredDraft))
         unauthorized()
         return null
       }
@@ -57,17 +57,17 @@ export function useVoucherDraft(companyId: string, start: { kind: EntryKind; lay
       setUnknown(message)
       return { kind: 'unknown', message }
     } finally { flying.current = false; setBusy(false) }
-  }, [companyId, exponent, unauthorized])
+  }, [userId, companyId, exponent, unauthorized])
 
   /** Takes the draft kept from before a sign-in, with its key, so a resend after a committed save is a replay. */
   const restore = useCallback(() => {
     if (!restorable) return
     key.current = restorable.key
     dispatch({ type: 'restore', state: restorable.state })
-    writeStored(sessionStore, draftKey(companyId), '')
+    writeStored(sessionStore, draftKey(userId, companyId), '')
     setRestorable(null)
-  }, [restorable, companyId])
-  const dropRestorable = useCallback(() => { writeStored(sessionStore, draftKey(companyId), ''); setRestorable(null) }, [companyId])
+  }, [restorable, userId, companyId])
+  const dropRestorable = useCallback(() => { writeStored(sessionStore, draftKey(userId, companyId), ''); setRestorable(null) }, [userId, companyId])
   /**
    * Unlocks the fields after a save whose outcome is unknown. The key is kept: if that save did commit, sending a changed
    * voucher under it answers `idempotency_mismatch` ("may already be saved") instead of posting it twice.

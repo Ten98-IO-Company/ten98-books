@@ -1,6 +1,7 @@
 import { Field, FormGrid, Input, Stack, Text } from '@ten98/ui'
 import { LookupField } from '../masters/LookupField'
-import { entryDateLabel, entryDateText, type LedgerOption } from '../../lib/voucher-entry'
+import { longDate } from '../../lib/reports'
+import { entryDateLabel, type LedgerOption } from '../../lib/voucher-entry'
 
 /**
  * The voucher's header fields: the date (reached with the date key, not a stop on the way through) and, in single
@@ -27,15 +28,15 @@ export function VoucherHeader({ date, dateText, dateError, onDateText, account, 
     <Stack data-voucher-field='date'>
       <Field label='Date' error={dateError} description={dateText === null ? 'Change it with the date key, from any field or line.' : 'Day first: 9, 10-8, 12 sep or 15-10-2026. Enter takes it, Escape clears it, a second Escape keeps the date.'}>
         <Input value={dateText ?? entryDateLabel(date)} readOnly={locked} dir='ltr' autoComplete='off' tabIndex={dateText === null ? -1 : 0}
-          onFocus={event => { if (dateText === null && !locked) { onDateText(entryDateText(date)); window.setTimeout(() => event.target.select(), 0) } }}
+          onFocus={event => { if (dateText === null && !locked) { onDateText(longDate(date)); window.setTimeout(() => event.target.select(), 0) } }}
           onChange={event => onDateText(event.target.value)} />
       </Field>
     </Stack>
     {account !== null && <Stack data-voucher-field='account' gap={1}>
       <LookupField label='Account' options={accountOptions} value={account} disabled={locked} error={accountError} required
-        description='Cash and bank ledgers. Down on an empty Account goes to the first line.' placeholder='Choose a cash or bank ledger' emptyMessage='No cash or bank ledger matches.'
+        description='Cash and bank ledgers. Down on an empty Account goes to the first line.' placeholder='Choose a cash or bank ledger…' emptyMessage='No cash or bank ledger matches.'
         onValueChange={onAccount} onTypedEnter={onAccountTyped} />
-      {accountBalance !== null && <Text size='sm' tone={accountNegative ? 'danger' : 'muted'} aria-live='polite'>Current balance <span dir='ltr'>{accountBalance}</span></Text>}
+      {accountBalance !== null && <Text size='sm' tone={accountNegative ? 'danger' : 'muted'} aria-live='polite'>Current balance <Text as='span' dir='ltr'>{accountBalance}</Text></Text>}
     </Stack>}
   </FormGrid>
 }

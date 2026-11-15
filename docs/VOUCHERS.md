@@ -1,0 +1,61 @@
+# Voucher entry
+
+The voucher entry screen, slice 1: payment, receipt, contra and journal, created by keyboard, in single or double entry, with the bill panel, the working date and the number and balance previews. Altering, voids, deletes, duplicates, optional and post-dated vouchers (slice 3) and the invoice types (slice 2) are not built. Keys are in [KEYBOARD.md](KEYBOARD.md), "Voucher entry"; the reads the screen calls are in [LEDGER.md](LEDGER.md), "Voucher entry reads".
+
+Code: the route `src/routes/app/c.$companyId.vouchers.tsx`, the screen in `src/components/vouchers/`, and every decision as a pure function in `src/lib/voucher-entry/` (amounts and dates, layouts and lists, bills, the body and its checks, the Enter path and the draft, refusals) and `src/lib/working-date.ts` (tested in `tests/voucher-entry.test.ts`); bodies and the pending-bill order are tested over HTTP in `tests/voucher-entry.integration.ts`.
+
+## Opening and types
+
+- Company menu `V` (writers only; viewers do not get the item, and the route tells a viewer who opens it that viewers cannot enter vouchers) opens the type last used in this tab, payment the first time. `?type=` opens a type.
+- The type is in the page header with the expected number ("No. 6 (expected)"); it is not a field. The type keys switch it in place. The date, lines and narration are kept and laid out again, not cleared and not re-checked (observed); the new type's rules apply at saving.
+- **How a switch lays the lines out** (`relayLines`). No line ever changes side or amount and no bill row is dropped; a switch that cannot keep that is refused, the voucher stays as it is, and the status line says why.
+  - Single entry to double entry of another type (observed): the Account first, on the new type's first-line side, with the total; the particulars keep their sides; a line on the short side follows when it does not balance. Observed: a payment of Bank, Expense 7 became a journal of Dr Bank 7, Dr Expense 7 and an empty Cr line.
+  - The layout key on the same type: the particulars, then the Account's line on the Account's own side with the total (the body's order), so switching back gives the same voucher.
+  - Double entry to single entry: the Account is the first line already on the new type's Account side whose ledger the Account field offers (cash or bank); every other line must be on the other side and add up to it. Otherwise (no such line, a second line on the Account's side, lines that do not balance, an unfinished line, or bill rows on the line that would become the Account) the switch is refused.
+  - Single entry to single entry when the two types put the Account on different sides (payment and receipt): the voucher is laid out in double entry of the new type, every side kept. Receipt and contra share their sides and stay in single entry.
+- Layouts: payment, receipt and contra open in single entry; the journal is double entry only. A layout chosen with the layout key holds for all three in this tab, for this user and company (`voucherMode:<userId>:<companyId>:cash` in session storage); blocked storage falls back to single entry. The type last used is kept the same way (`voucherType:<userId>:<companyId>`).
+
+## The Enter path
+
+- **Single entry**: Account (cash and bank only) → each line's ledger → amount → the bill panel on a bill-wise ledger → Enter on the blank line ends the list → Total, when the Account is not a cash-in-hand ledger → Narration → Enter asks to save. With a cash Account the blank line goes straight to Narration (observed in the key script: the total stop leads to the bank details, which a cash account does not have).
+- **Double entry**: each line's side (the first line's is fixed by the type: debit on payment, journal and contra, credit on receipt), ledger and amount. After an amount, Enter goes to Narration when the lines balance; otherwise a new line opens on the short side with the counter ledger of the last line's ledger from history (the most recently entered voucher of the type, read when that ledger is chosen) and the difference; a ledger with no history gets an empty line with the side proposed, and the difference comes once a ledger is chosen. Single entry proposes nothing (observed).
+- **Saving**: the question takes Enter or `Y` for yes and `N` or Escape for no, which returns to the Account (single entry) or the first line's ledger (double entry) with everything kept. The accept key saves from anywhere without asking. After saving, the next voucher has the same type, layout and date and nothing else, and the cursor is on its first field.
+- **Single-entry contra**: the Account is the receiving side (debited), the lines the giving side, as observed and as the starter dataset's lines are ordered (design revision 5 said credited; corrected).
+- **Cash or bank Account** is decided by the ledger's group as the server reports it: cash in hand is the seeded cash-in-hand group and its sub-groups (`cashInHandIds`), never a name. *Assumption, not observed*: a single-entry contra whose Account is cash while a bank ledger sits on a line (the reference may open that line's bank pop-up) follows the rule by the Account and goes straight to Narration.
+- **The new line's side** after an unbalanced amount is the short side: two of the four readings of the notes say so, and the other two read as debit; it is kept as designed until it is observed again.
+
+## Amounts, dates and numbers
+
+- Amounts are rounded half up to the company's places at entry; a value that rounds to zero empties the cell. Arabic-Indic digits and grouping commas are accepted. Signs and amounts beyond the stored range are errors in the cell.
+- Dates are typed day first: `9`, `10-8`, `11/9/26`, `14.6.26`, `15-10-2026`, `12 sep`, `18-dec`; missing parts come from the voucher's date, a two-digit year is 20yy, and `2026-01-31` is accepted too. Refused: `130526`, `35`, `31-2`, `sep 16`. A refused date keeps the field open with a short message (a kept difference: the reference shows none).
+- Bounds: not before the books begin, not inside the locked period, and not after the end of the financial year that holds the tab's working date.
+- **Working date**: per tab, user and company (`workingDate:<userId>:<companyId>` in session storage; a kept date before the books begin is ignored), starting from the last voucher date (the books beginning while there is none). It follows the company menu's working date key, the day the day book shows, the voucher date key (even without saving) and every saved voucher. A new voucher opens on it. The company menu shows it and sets it to any date from the books beginning, which is how a tab enters the next financial year.
+- The header shows the number the voucher is expected to take on its date; it is refreshed after a type or date change and after saving, and the saved message says so when another voucher took the number first.
+- **Balances**: under the Account, "Current balance" and, on every line, the ledger's resulting balance at the date with the draft applied, all from the server's preview; the screen adds nothing itself. A cash-in-hand ledger that the draft takes below zero raises a warning that never blocks; the Account's balance turns to the danger tone.
+
+## Bills
+
+A line on a bill-wise ledger opens the bill panel after its amount, also on Enter over an unchanged amount. The first row is "Against a bill" when the party has pending bills on the other side, else "On account" (observed; sales and purchase, later, start with a new bill). A picked bill proposes the lesser of what is left of the line and its pending amount; a larger amount, or a row on the other side, is accepted (the server warns `bill_over_settled`). Enter on a row's last cell adds a row for the rest, against a bill again while pending bills remain, or closes the panel when the rows cover the line. The accept key accepts with the rest on account; Escape keeps the line's earlier rows. A new bill takes a credit period (`30`, `30 days`, `2 weeks`, `1 month`, or a due date) with the due date shown as the database computes it. Pending bills are listed by name, case and hyphens ignored, as observed (10, 9, A-020, A-100, a2, B-050, B1, b3, B-300, C-200).
+
+## Escape, leaving and failures
+
+- Escape empties the focused field or line cell first, prefilled values included; the next Escape asks to leave when anything was entered, and No keeps the cursor where it was. The quit key asks at once when anything was entered. Both ask also in a balanced voucher, which the reference leaves silently: a kept difference, because that loses a complete voucher without warning. Leaving by any route (go-to, a link, the browser) asks the same.
+- One save at a time with one idempotency key per voucher, renewed only after a save. If the answer never arrives, the fields stay locked and "Check and retry" sends the same voucher again, which cannot save it twice; "Unlock and edit" keeps the key, so a changed voucher sent after a save that did commit is refused as possibly saved instead of posted twice.
+- On a lost session the draft is kept in the tab (`voucherDraft:<userId>:<companyId>`) with its key and offered back after signing in; it is cleared on save and on discard.
+- Before sending, the screen refuses what would otherwise be lost or refused (`bodyProblems`): a line with something in it but no ledger, amount or side; a bill row with no method, amount or bill, or with a credit period that does not parse; totals beyond the stored range; the server's own limits on lines and narration, checked with its schema; then the Account, balance, the cash and bank rule of payment, receipt and contra, and the date bounds. Server refusals are placed by their code (`refusalPlaces` in `src/lib/voucher-entry/refusals.ts`, total over the codes).
+- The leave and quit question is the application's confirmation, opening on its cancel button, so Enter keeps the voucher: Y and N do not answer it yet (a parity gap; the reference answers it with Y and N). The save question is the masters' inline question, which Enter and Y answer yes and N and Escape no.
+
+## Gaps
+
+Not built in slice 1, each a parity gap until built:
+
+- **Ledger in place**: altering the highlighted ledger from a lookup (`Ctrl+Enter` in classic, observed) and creating one there (`Alt+C`). Until then `Ctrl+Enter` saves the voucher there as everywhere (it is an accept key), and `Alt+C` is claimed and does nothing.
+- **Lookup matching in the lines**: a line's ledger cell matches with the design system's entry grid rule: typed text is found in a ledger's name or second-language name, ignoring letter case, names starting with it first, then names holding it anywhere; the first match is highlighted as one types, and Enter or Tab picks the highlighted ledger (its id); with nothing highlighted, Enter takes only text equal to a name, and leaving the cell takes only an exact name, else the cell says "Not in the list". What it does not do: ignore spaces and the punctuation the name match key ignores, so "hy phen" and "hyphen" do not find "Hy-Phen" in a line. The Account field matches under the name match key (`filterChoices`, `resolveTyped`, as the master forms do). The grid will take a matching function from the design system; then the lines use the shared key too.
+- **Lists opening on arrival**: the Account field (a header lookup) cannot open its list programmatically, so it opens on typing or Down; grid cells open theirs as observed. The resulting balance on a line cannot take the danger tone (the grid has no per-cell tone); the warning covers it.
+- **Bank allocations**: the reference opens a bank pop-up between the Total and the Narration of a voucher with a bank Account, and after a bank line; not built, so the bank path is blank line, Total, Narration.
+- **The quit question's letters**: Y and N do not answer it yet (see above).
+- Cost-centre allocations from the panel list, narration per line, the rate and per columns, and the item invoice.
+
+## Verified
+
+Unit and HTTP tests as listed above. The keyboard pass and the acceptance run are recorded in the coordinator's report for this slice, with what ran by real key events in a browser.

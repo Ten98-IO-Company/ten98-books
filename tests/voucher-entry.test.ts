@@ -7,8 +7,9 @@ import {
   blankDraft, cashModeKey, cashRuleProblem, creditPeriodText, defaultBillMethod, detailSteps, differenceText, draftDirty, draftReducer,
   entryDateLabel, entryDateProblem, entryKinds, escapeStep, layoutsOf, ledgerOptions, lineAccepts, listEnd, negativeCashWarning,
   nextBillRow, openBills, parseCreditPeriod, parseEntryAmount, parseEntryDate, proposedAmount, readLayout, refusalPlace, refusalPlaces,
-  relayLines, toVoucherBody, writeLayout, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
-} from '../src/lib/voucher-entry.ts';
+  relayLines, toVoucherBody, writeLayout, bodyProblems, billRowProblem, cashInHandIds, type BillDraft, type EntryLedger, type EntryLine, type PendingChoice,
+} from '../src/lib/voucher-entry/index.ts';
+import { MONEY_MAX, formatMoney } from '@ten98/runtime';
 import { readWorkingDate, startingWorkingDate, workingDateKey, writeWorkingDate, type KeyStore } from '../src/lib/working-date.ts';
 
 const line = { ledgerId: randomUUID().toUpperCase(), side: 'Dr', amount: '12.50' };
@@ -54,6 +55,14 @@ test('amounts round half up to the currency places at entry; zero empties the ce
   assert.deepEqual(parseEntryAmount('١٢٣٫٤٥', 2), { value: '123.45' }, 'Arabic-Indic digits and separator');
   assert.deepEqual(parseEntryAmount('7', 0), { value: '7' });
   for (const text of ['-5', '1.2.3', 'abc', '99999999999999999999']) assert.ok('error' in parseEntryAmount(text, 2), text);
+  // Review item 3: never throws; empty is empty; a long fraction rounds on its first cut digit; a long whole part is too large.
+  assert.deepEqual(parseEntryAmount('', 2), { value: '' });
+  assert.deepEqual(parseEntryAmount('   ', 2), { value: '' });
+  assert.deepEqual(parseEntryAmount(`1.${'4'.repeat(5000)}`, 2), { value: '1.44' });
+  assert.deepEqual(parseEntryAmount(`1.00${'5'.repeat(3000)}`, 2), { value: '1.01' });
+  assert.deepEqual(parseEntryAmount('9'.repeat(10000), 2), { error: 'This amount is too large.' });
+  assert.deepEqual(parseEntryAmount(formatMoney(MONEY_MAX, 2), 2), { value: formatMoney(MONEY_MAX, 2) }, 'the largest stored amount itself');
+  assert.ok('error' in parseEntryAmount(formatMoney(MONEY_MAX, 2) + '9', 2));
 });
 
 test('dates parse day first in the observed forms, missing parts from the voucher date; refused forms stay refused', () => {
@@ -64,50 +73,61 @@ test('dates parse day first in the observed forms, missing parts from the vouche
     ['٩', '2026-07-09'], ['3 September 2026', '2026-09-03'],
   ];
   for (const [text, value] of accepted) assert.deepEqual(parseEntryDate(text, current), { value }, text);
-  for (const text of ['130526', '35', '31-2', 'sep 16', '', '1-13', '29-2-2026', '1-1-202', '12 se']) assert.ok('error' in parseEntryDate(text, current), text);
-  assert.equal(entryDateLabel('2026-01-01'), 'Thursday, 1 Jan 2026');
+  // Review item 12: forms the notes do not list are refused too.
+  for (const text of ['130526', '35', '31-2', 'sep 16', '', '1-13', '29-2-2026', '1-1-202', '12 se', '-9', '9--7', '9-7-', '9-7/26', '9 -7']) assert.ok('error' in parseEntryDate(text, current), text);
+  assert.equal(entryDateLabel('2026-01-01'), 'Thursday, 1 January 2026');
 });
 
 test('date bounds: the books beginning, the locked period, and the end of the working date\'s financial year', () => {
   const rules = { booksBeginning: '2026-01-01', lockedThrough: null, financialYearStart: { month: 1, day: 1 } };
   assert.equal(entryDateProblem('2026-06-30', rules, '2026-01-31'), undefined);
-  assert.equal(entryDateProblem('2027-01-01', rules, '2026-01-31'), 'Date cannot be after the end of the current financial year, 31 Dec 2026.');
+  // Review item 11: both ends are inclusive.
+  assert.equal(entryDateProblem('2026-01-01', rules, '2026-01-31'), undefined, 'the books-beginning date itself');
+  assert.equal(entryDateProblem('2026-12-31', rules, '2026-01-31'), undefined, 'the year-end date itself');
+  assert.equal(entryDateProblem('2026-03-01', { ...rules, lockedThrough: '2026-02-28' }, '2026-03-01'), undefined, 'the first open date itself');
+  assert.equal(entryDateProblem('2027-01-01', rules, '2026-01-31'), 'Date cannot be after the end of the current financial year, 31 December 2026.');
   assert.equal(entryDateProblem('2027-01-01', rules, '2027-01-01'), undefined, 'a working date in the next year moves the bound');
-  assert.equal(entryDateProblem('2025-12-31', rules, '2026-01-31'), 'Date cannot be before the books begin, 1 Jan 2026.');
+  assert.equal(entryDateProblem('2025-12-31', rules, '2026-01-31'), 'Date cannot be before the books begin, 1 January 2026.');
   const midYear = { booksBeginning: '2026-10-15', lockedThrough: null, financialYearStart: { month: 4, day: 1 } };
-  assert.match(entryDateProblem('2026-10-14', midYear, '2026-10-15')!, /before the books begin, 15 Oct 2026/, 'books after the year start: the books bound');
-  assert.match(entryDateProblem('2027-04-01', midYear, '2026-10-15')!, /31 Mar 2027/);
-  assert.match(entryDateProblem('2026-02-10', { ...rules, lockedThrough: '2026-02-28' }, '2026-03-01')!, /locked period.*first open date is 1 Mar 2026/);
+  assert.match(entryDateProblem('2026-10-14', midYear, '2026-10-15')!, /before the books begin, 15 October 2026/, 'books after the year start: the books bound');
+  assert.match(entryDateProblem('2027-04-01', midYear, '2026-10-15')!, /31 March 2027/);
+  assert.match(entryDateProblem('2026-02-10', { ...rules, lockedThrough: '2026-02-28' }, '2026-03-01')!, /locked period.*first open date is 1 March 2026/);
 });
 
-test('the working date is per tab and company, starts from the last voucher, and survives blocked storage', () => {
+test('the working date is per tab, user and company, starts from the last voucher, and survives blocked storage', () => {
   const store = memory();
-  assert.equal(readWorkingDate(() => store, 'c1'), null);
-  writeWorkingDate(() => store, 'c1', '2026-01-12');
-  assert.equal(store.data.get(workingDateKey('c1')), '2026-01-12');
-  assert.equal(readWorkingDate(() => store, 'c1'), '2026-01-12');
-  assert.equal(readWorkingDate(() => store, 'c2'), null, 'another company has its own');
-  writeWorkingDate(() => store, 'c1', 'not a date');
-  assert.equal(readWorkingDate(() => store, 'c1'), '2026-01-12');
-  store.data.set(workingDateKey('c1'), '2026-02-30');
-  assert.equal(readWorkingDate(() => store, 'c1'), null, 'a kept value that is no date is ignored');
-  assert.equal(readWorkingDate(blocked, 'c1'), null);
-  assert.doesNotThrow(() => writeWorkingDate(blocked, 'c1', '2026-01-01'));
+  const read = (user = 'u1', company = 'c1') => readWorkingDate(() => store, user, company, '2026-01-01');
+  assert.equal(read(), null);
+  writeWorkingDate(() => store, 'u1', 'c1', '2026-01-12');
+  assert.equal(store.data.get(workingDateKey('u1', 'c1')), '2026-01-12');
+  assert.equal(read(), '2026-01-12');
+  assert.equal(read('u1', 'c2'), null, 'another company has its own');
+  assert.equal(read('u2', 'c1'), null, 'review item 10: another user in the same tab does not inherit it');
+  writeWorkingDate(() => store, 'u1', 'c1', 'not a date');
+  assert.equal(read(), '2026-01-12');
+  store.data.set(workingDateKey('u1', 'c1'), '2026-02-30');
+  assert.equal(read(), null, 'a kept value that is no date is ignored');
+  store.data.set(workingDateKey('u1', 'c1'), '2025-12-31');
+  assert.equal(read(), null, 'review item 10: a kept date before the books begin is ignored');
+  assert.equal(readWorkingDate(blocked, 'u1', 'c1', '2026-01-01'), null);
+  assert.doesNotThrow(() => writeWorkingDate(blocked, 'u1', 'c1', '2026-01-01'));
   assert.equal(startingWorkingDate({ lastVoucherDate: null, booksBeginning: '2026-01-01' }), '2026-01-01');
   assert.equal(startingWorkingDate({ lastVoucherDate: '2026-02-03', booksBeginning: '2026-01-01' }), '2026-02-03');
 });
 
-test('the cash family\'s layout is kept per tab and company; journal is double entry only; blocked storage gives the defaults', () => {
+test('the cash family\'s layout is kept per tab, user and company; journal is double entry only; blocked storage gives the defaults', () => {
   const session = memory();
-  assert.deepEqual(entryKinds.map(kind => readLayout(kind, () => session, 'c1')), ['single', 'single', 'single', 'double']);
-  writeLayout('receipt', 'double', () => session, 'c1');
-  assert.equal(session.data.get(cashModeKey('c1')), 'double');
-  assert.deepEqual(entryKinds.map(kind => readLayout(kind, () => session, 'c1')), ['double', 'double', 'double', 'double'], 'one choice for the family');
-  assert.equal(readLayout('payment', () => session, 'c2'), 'single');
-  writeLayout('journal', 'single', () => session, 'c1');
-  assert.equal(readLayout('journal', () => session, 'c1'), 'double');
-  assert.equal(readLayout('payment', blocked, 'c1'), 'single');
-  assert.doesNotThrow(() => writeLayout('payment', 'double', blocked, 'c1'));
+  const read = (kind: typeof entryKinds[number], user = 'u1', company = 'c1') => readLayout(kind, () => session, user, company);
+  assert.deepEqual(entryKinds.map(kind => read(kind)), ['single', 'single', 'single', 'double']);
+  writeLayout('receipt', 'double', () => session, 'u1', 'c1');
+  assert.equal(session.data.get(cashModeKey('u1', 'c1')), 'double');
+  assert.deepEqual(entryKinds.map(kind => read(kind)), ['double', 'double', 'double', 'double'], 'one choice for the family');
+  assert.equal(read('payment', 'u1', 'c2'), 'single');
+  assert.equal(read('payment', 'u2', 'c1'), 'single', 'review item 10: per user');
+  writeLayout('journal', 'single', () => session, 'u1', 'c1');
+  assert.equal(read('journal'), 'double');
+  assert.equal(readLayout('payment', blocked, 'u1', 'c1'), 'single');
+  assert.doesNotThrow(() => writeLayout('payment', 'double', blocked, 'u1', 'c1'));
   assert.deepEqual(layoutsOf('journal'), ['double']);
 });
 
@@ -154,18 +174,77 @@ test('the cash and bank rule is checked before sending, on the first line of the
   assert.equal(cashRuleProblem('journal', [{ side: 'Dr', ledger: 'l-wages' }, { side: 'Cr', ledger: 'l-cap' }], isCash), undefined);
 });
 
+const cashOrBank = (id: string) => id === 'l-cash' || id === 'l-bank';
+const keys = (start = 10) => { let serial = start; return () => `line-${serial++}`; };
+const draftOf = (kind: typeof entryKinds[number], layout: 'single' | 'double', account: string, lines: EntryLine[], bills: Record<string, BillDraft[]> = {}) => ({ kind, layout, account, lines, bills });
+const relaid = (result: ReturnType<typeof relayLines>) => { assert.ok(!('refused' in result), 'refused' in result ? result.refused : ''); return result as Exclude<typeof result, { refused: string }>; };
+
 test('a single-entry payment switched to a journal is re-laid as observed: Dr Bank 7, Dr Expense 7 and an empty Cr line', () => {
-  let serial = 10;
-  const key = () => `line-${serial++}`;
-  const relaid = relayLines({ kind: 'payment', layout: 'single', account: 'l-bank', lines: [ln('line-1', 'Dr', 'l-wages', '7.00'), ln('line-2', 'Dr', '', '')] }, { kind: 'journal', layout: 'double' }, 2, key);
-  assert.deepEqual(relaid, { account: '', lines: [ln('line-10', 'Dr', 'l-bank', '7.00'), ln('line-1', 'Dr', 'l-wages', '7.00'), ln('line-11', 'Cr', '', '')] });
-  const back = relayLines({ kind: 'journal', layout: 'double', account: '', lines: relaid.lines }, { kind: 'payment', layout: 'single' }, 2, key);
-  assert.deepEqual(back, { account: 'l-bank', lines: [ln('line-1', 'Dr', 'l-wages', '7.00')] });
-  const receipt = relayLines({ kind: 'payment', layout: 'single', account: 'l-bank', lines: [ln('line-1', 'Dr', 'l-wages', '7.00')] }, { kind: 'receipt', layout: 'single' }, 2, key);
-  assert.deepEqual(receipt, { account: 'l-bank', lines: [ln('line-1', 'Cr', 'l-wages', '7.00')] }, 'single to single: the new type\'s particulars side');
-  const state = draftReducer({ ...blankDraft('payment', 'single', '2026-01-01'), account: 'l-bank', lines: [ln('line-1', 'Dr', 'l-wages', '7.00')] }, { type: 'switch', kind: 'journal', layout: 'double', exponent: 2 });
+  const journal = relaid(relayLines(draftOf('payment', 'single', 'l-bank', [ln('line-1', 'Dr', 'l-wages', '7.00'), ln('line-2', 'Dr', '', '')]), { kind: 'journal', layout: 'double' }, 2, keys(), cashOrBank));
+  assert.deepEqual(journal, { kind: 'journal', layout: 'double', account: '', lines: [ln('line-10', 'Dr', 'l-bank', '7.00'), ln('line-1', 'Dr', 'l-wages', '7.00'), ln('line-11', 'Cr', '', '')] });
+  // Back to a single-entry payment: no credit line holds cash or bank, so nothing could become the Account without reversing a side.
+  assert.match((relayLines(draftOf('journal', 'double', '', journal.lines), { kind: 'payment', layout: 'single' }, 2, keys(20), cashOrBank) as { refused: string }).refused, /No credit line has a cash or bank ledger/);
+  const state = draftReducer({ ...blankDraft('payment', 'single', '2026-01-01'), account: 'l-bank', lines: [ln('line-1', 'Dr', 'l-wages', '7.00')] }, { type: 'relaid', relaid: journal });
   assert.deepEqual([state.kind, state.layout, state.lines.map(entry => `${entry.side} ${entry.ledger} ${entry.amount}`)], ['journal', 'double', ['Dr l-bank 7.00', 'Dr l-wages 7.00', 'Cr  ']]);
-  assert.equal(new Set(state.lines.map(entry => entry.key)).size, 3, 'keys stay unique');
+  assert.ok(state.serial > 11, 'keys stay unique after a switch');
+});
+
+test('review items 1 and 2: a layout switch never reverses a side, never changes an amount, never drops a bill row; what it cannot keep it refuses', () => {
+  // Toggle: the Account's line keeps its side and goes after the particulars (body order).
+  const toggled = relaid(relayLines(draftOf('payment', 'single', 'l-cash', [ln('line-1', 'Dr', 'l-wages', '100.00')]), { kind: 'payment', layout: 'double' }, 2, keys(), cashOrBank));
+  assert.deepEqual(toggled.lines, [ln('line-1', 'Dr', 'l-wages', '100.00'), ln('line-10', 'Cr', 'l-cash', '100.00')]);
+  // Double to single: the first line on the Account's side with a cash or bank ledger, never a reversed one.
+  const back = relaid(relayLines(draftOf('payment', 'double', '', [ln('line-1', 'Dr', 'l-cash', '100.00'), ln('line-2', 'Cr', 'l-bank', '100.00')]), { kind: 'payment', layout: 'single' }, 2, keys(), cashOrBank));
+  assert.deepEqual([back.account, back.lines], ['l-bank', [ln('line-1', 'Dr', 'l-cash', '100.00')]], 'Dr cash / Cr bank stays cash debited, bank credited');
+  const refused = (draft: ReturnType<typeof draftOf>, to: { kind: typeof entryKinds[number]; layout: 'single' | 'double' }) => (relayLines(draft, to, 2, keys(), cashOrBank) as { refused?: string }).refused;
+  const bill: BillDraft[] = [{ key: 'b1', method: 'new_ref', bill: '', name: 'A1', credit: '', amount: '5.00', side: 'Dr' }];
+  assert.match(refused(draftOf('journal', 'double', '', [ln('line-1', 'Dr', 'l-cust', '5.00'), ln('line-2', 'Cr', 'l-bank', '5.00')], { 'line-1': bill }), { kind: 'receipt', layout: 'single' })!, /No debit line/, 'the customer never becomes a receipt Account');
+  assert.match(refused(draftOf('payment', 'double', '', [ln('line-1', 'Dr', 'l-wages', '5.00'), ln('line-2', 'Cr', 'l-bank', '3.00'), ln('line-3', 'Cr', 'l-cash', '2.00')]), { kind: 'payment', layout: 'single' })!, /second credit/);
+  assert.match(refused(draftOf('payment', 'double', '', [ln('line-1', 'Dr', 'l-wages', '5.00'), ln('line-2', 'Cr', 'l-bank', '4.00')]), { kind: 'payment', layout: 'single' })!, /do not balance/);
+  assert.match(refused(draftOf('payment', 'double', '', [ln('line-1', 'Dr', '', '5.00'), ln('line-2', 'Cr', 'l-bank', '5.00')]), { kind: 'payment', layout: 'single' })!, /Finish or empty line 1/);
+  assert.match(refused(draftOf('payment', 'double', '', [ln('line-1', 'Dr', 'l-wages', '5.00'), ln('line-2', 'Cr', 'l-bank', '5.00')], { 'line-2': bill }), { kind: 'payment', layout: 'single' })!, /bill rows/);
+  // Single to single across sides (payment to receipt): laid out in double entry, every side kept.
+  const receipt = relaid(relayLines(draftOf('payment', 'single', 'l-bank', [ln('line-1', 'Dr', 'l-wages', '7.00')]), { kind: 'receipt', layout: 'single' }, 2, keys(), cashOrBank));
+  assert.deepEqual([receipt.layout, receipt.lines.map(line => `${line.side} ${line.ledger}`)], ['double', ['Dr l-wages', 'Cr l-bank']]);
+  const contra = relaid(relayLines(draftOf('receipt', 'single', 'l-bank', [ln('line-1', 'Cr', 'l-cash', '7.00')]), { kind: 'contra', layout: 'single' }, 2, keys(), cashOrBank));
+  assert.deepEqual([contra.layout, contra.account, contra.lines], ['single', 'l-bank', [ln('line-1', 'Cr', 'l-cash', '7.00')]], 'receipt and contra share their sides');
+  // A type switch keeps every bill row (review item 11).
+  const withBills = { ...blankDraft('journal', 'double', '2026-01-01'), lines: [ln('line-1', 'Dr', 'l-cust', '5.00'), ln('line-2', 'Cr', 'l-wages', '5.00')], bills: { 'line-1': bill } };
+  const payment = draftReducer(withBills, { type: 'relaid', relaid: relaid(relayLines(withBills, { kind: 'payment', layout: 'double' }, 2, keys(), cashOrBank)) });
+  assert.deepEqual(payment.bills, { 'line-1': bill });
+  const single = { ...blankDraft('receipt', 'single', '2026-01-01'), account: 'l-bank', lines: [ln('line-1', 'Cr', 'l-cust', '5.00')], bills: { 'line-1': bill } };
+  const double = draftReducer(single, { type: 'relaid', relaid: relaid(relayLines(single, { kind: 'receipt', layout: 'double' }, 2, keys(), cashOrBank)) });
+  assert.deepEqual(double.bills, { 'line-1': bill });
+  assert.deepEqual(draftReducer(double, { type: 'relaid', relaid: relaid(relayLines(double, { kind: 'receipt', layout: 'single' }, 2, keys(40), cashOrBank)) }).bills, { 'line-1': bill });
+});
+
+test('review item 2, property: single → double → single and double → single → double give the same body, or the refusal, with exact totals', () => {
+  let seed = 7;
+  const random = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const others = ['l-wages', 'l-cust', 'l-cap'];
+  const accounts = ['l-cash', 'l-bank'];
+  const amount = () => `${1 + random(99999)}.${String(random(100)).padStart(2, '0')}`;
+  const body = (draft: { kind: typeof entryKinds[number]; layout: 'single' | 'double'; account: string; lines: readonly EntryLine[] }) =>
+    toVoucherBody({ ...draft, idempotencyKey: 'key-12345678', voucherTypeId: 't', date: '2026-01-01', narration: '', bills: {} }, 2).lines.map(line => `${line.side} ${line.ledgerId} ${line.amount}`);
+  for (let round = 0; round < 300; round++) {
+    const kind = (['payment', 'receipt', 'contra'] as const)[random(3)];
+    const pool = kind === 'contra' ? accounts : others;
+    const lines = Array.from({ length: 1 + random(3) }, (_, index) => ln(`line-${index + 1}`, kind === 'payment' ? 'Dr' : 'Cr', pool[random(pool.length)], amount()));
+    const single = draftOf(kind, 'single', accounts[random(2)], lines);
+    const there = relaid(relayLines(single, { kind, layout: 'double' }, 2, keys(), cashOrBank));
+    const again = relaid(relayLines({ ...there, bills: {} }, { kind, layout: 'single' }, 2, keys(50), cashOrBank));
+    assert.deepEqual(body(again), body(single), `single round trip ${round}`);
+    // Double first: the Account somewhere among the lines, sometimes a second line on its side (refused).
+    const total = lines.reduce((sum, line) => sum + BigInt(line.amount.replace('.', '')), 0n);
+    const accountLine = ln('line-9', kind === 'payment' ? 'Cr' : 'Dr', accounts[random(2)], formatMoney(total, 2));
+    const position = random(lines.length + 1);
+    const doubled = [...lines.slice(0, position), accountLine, ...lines.slice(position)];
+    if (random(4) === 0) doubled.push(ln('line-8', accountLine.side, 'l-cash', '1.00'), ln('line-7', lines[0].side, pool[0], '1.00'));
+    const toSingle = relayLines(draftOf(kind, 'double', '', doubled), { kind, layout: 'single' }, 2, keys(60), cashOrBank);
+    if ('refused' in toSingle) { assert.ok(doubled.length > lines.length + 1, `only the second Account line is refused (${round})`); continue; }
+    const backToDouble = relaid(relayLines({ ...toSingle, bills: {} }, { kind, layout: 'double' }, 2, keys(70), cashOrBank));
+    assert.deepEqual(body(backToDouble).sort(), body(draftOf(kind, 'double', '', doubled)).sort(), `double round trip ${round}: the same lines, sides and amounts (the order becomes the body's)`);
+  }
 });
 
 test('the body: single entry sends the particulars then the Account for the total; double entry its complete lines; bills ride on their lines', () => {
@@ -276,6 +355,10 @@ test('credit periods: the typed forms, and due dates as the database computes th
   assert.deepEqual(parseCreditPeriod('15-3-2026', '2026-01-31'), { value: { dueDate: '2026-03-15' } });
   assert.deepEqual(parseCreditPeriod('', '2026-01-31'), { value: null });
   assert.ok('error' in parseCreditPeriod('soon', '2026-01-31'));
+  // Review items 4 and 11: an unparsed period, a negative one, a due date before the voucher and a period past the cap are errors.
+  for (const text of ['1 mo', '-5', '30-1-2026', '3651', '3651 days', '40000']) assert.ok('error' in parseCreditPeriod(text, '2026-01-31'), text);
+  assert.deepEqual(parseCreditPeriod('3650', '2026-01-31'), { value: { count: 3650, unit: 'day' } });
+  assert.deepEqual(parseCreditPeriod('31-1-2026', '2026-01-31'), { value: { dueDate: '2026-01-31' } }, 'due on the voucher date itself');
   assert.equal(billDueDate('2026-01-31', { count: 1, unit: 'month' }), '2026-02-28', 'observed month-end clamp');
   assert.equal(billDueDate('2026-01-31', { count: 2, unit: 'week' }), '2026-02-14', 'observed');
   assert.equal(billDueDate('2026-12-20', { count: 30, unit: 'day' }), '2027-01-19');
@@ -290,10 +373,44 @@ test('detail steps, the save refusal map (total over the codes) and the negative
   assert.deepEqual(detailSteps({ ledger: 'l-cust', amount: '' }, { billWise: true }), []);
   assert.deepEqual(detailSteps({ ledger: 'l-wages', amount: '5.00' }, { billWise: false }), []);
   assert.deepEqual(Object.keys(refusalPlaces).sort(), [...ledgerErrorCodes].sort(), 'every code has a place');
+  // Review item 11: every code's target.
+  assert.deepEqual(Object.fromEntries(ledgerErrorCodes.map(code => [code, refusalPlace(code)])), {
+    validation: 'alert', not_found: 'gone', stale_revision: 'stale', retry: 'retry', duplicate_name: 'master-form', in_use: 'master-form',
+    seeded_row: 'master-form', nature_fixed: 'master-form', family_rule: 'master-form', cycle: 'master-form', locked_period: 'date',
+    before_books_beginning: 'date', unbalanced: 'difference', posting_rule: 'cash-rule', voucher_state: 'status', idempotency_mismatch: 'maybe-saved',
+    not_set_up: 'setup', allocation_total: 'bills', bill_inactive: 'bills', feature_off: 'alert',
+  });
   assert.equal(refusalPlace('unbalanced'), 'difference');
   assert.equal(refusalPlace('posting_rule'), 'cash-rule');
   assert.equal(refusalPlace('something_new'), 'alert');
   assert.equal(refusalPlace(undefined), 'alert');
   assert.equal(negativeCashWarning('Cash', -8_000_000n, 2), 'Cash will be 80,000.00 Cr after this voucher.');
   assert.equal(negativeCashWarning('Cash', 0n, 2), null);
+});
+
+test('review items 4, 5 and 9: the accept path refuses incomplete lines, bad bill rows, totals beyond the range and the server\'s body limits', () => {
+  const input = (patch: Record<string, unknown>) => ({ kind: 'journal' as const, layout: 'double' as const, account: '', idempotencyKey: 'key-12345678', voucherTypeId: '01a1dd5a-c536-7bcb-b6a4-801c6418b118', date: '2026-01-31', narration: '', bills: {}, lines: [ln('line-1', 'Dr', '01a1dd5a-c536-7bcb-b6a4-801c6418b111', '5.00'), ln('line-2', 'Cr', '01a1dd5a-c536-7bcb-b6a4-801c6418b112', '5.00')], ...patch });
+  assert.deepEqual(bodyProblems(input({}), 2), []);
+  assert.deepEqual(bodyProblems(input({ lines: [ln('line-1', 'Dr', '', '5.00'), ln('line-2', 'Cr', 'x', '5.00')] }), 2)[0], { message: 'Line 1 has no ledger: complete it or empty it.', line: 'line-1', column: 'ledger' });
+  assert.equal(bodyProblems(input({ lines: [ln('line-1', '', 'x', '5.00'), ln('line-2', 'Cr', 'y', '5.00')] }), 2)[0].column, 'side');
+  assert.equal(bodyProblems(input({ layout: 'single', kind: 'payment', account: 'b', lines: [ln('line-1', 'Dr', 'x', '')] }), 2)[0].column, 'amount', 'a ledger without an amount');
+  const rows = (row: Partial<BillDraft>): BillDraft[] => [{ key: 'b1', method: 'new_ref', bill: '', name: 'A1', credit: '', amount: '5.00', side: 'Dr', ...row }];
+  assert.match(bodyProblems(input({ bills: { 'line-1': rows({ credit: '1 mo' }) } }), 2)[0].message, /^Line 1, bill row 1: “1 mo” is not a credit period/);
+  assert.match(bodyProblems(input({ bills: { 'line-1': rows({ method: 'against_ref' }) } }), 2)[0].message, /bill row 1: choose the bill it settles/);
+  assert.match(bodyProblems(input({ bills: { 'line-1': rows({ credit: '-5' }) } }), 2)[0].message, /not a credit period/);
+  assert.equal(billRowProblem({ key: 'b', method: '', bill: '', name: '', credit: '', amount: '', side: '' }, 0, '2026-01-31'), undefined, 'an empty row is left out, not refused');
+  const near = formatMoney(MONEY_MAX - 1n, 2);
+  assert.deepEqual(bodyProblems(input({ layout: 'single', kind: 'payment', account: 'b', lines: [ln('line-1', 'Dr', 'x', near), ln('line-2', 'Dr', 'y', near)] }), 2), [{ message: 'The total is too large to be stored.' }]);
+  assert.match(bodyProblems(input({ narration: 'n'.repeat(2001) }), 2)[0].message, /^The narration: /, 'the server\'s narration limit, from its schema');
+  const many = Array.from({ length: 501 }, (_, index) => ln(`line-${index + 1}`, index === 0 ? 'Cr' : 'Dr', '01a1dd5a-c536-7bcb-b6a4-801c6418b111', index === 0 ? '500.00' : '1.00'));
+  assert.match(bodyProblems(input({ lines: many }), 2)[0].message, /^The lines: /, 'the server\'s line limit, from its schema');
+});
+
+test('review item 6: cash in hand comes from the seeded group through the tree, never from a name; bank ledgers are not cash in hand', () => {
+  const groups = [
+    { id: 'g-cash', parentId: 'g-ca', systemKey: 'cash_in_hand' }, { id: 'g-petty', parentId: 'g-cash', systemKey: null }, { id: 'g-deep', parentId: 'g-petty', systemKey: null },
+    { id: 'g-bank', parentId: 'g-ca', systemKey: 'bank_accounts' }, { id: 'g-ca', parentId: null, systemKey: 'current_assets' },
+  ];
+  const ledgers = [{ id: 'cash', groupId: 'g-cash' }, { id: 'petty', groupId: 'g-deep' }, { id: 'bank', groupId: 'g-bank' }, { id: 'named-cash', groupId: 'g-ca' }, { id: 'pl', groupId: null }];
+  assert.deepEqual([...cashInHandIds(groups, ledgers)].sort(), ['cash', 'petty']);
 });

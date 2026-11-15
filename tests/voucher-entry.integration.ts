@@ -5,7 +5,7 @@ import { formatMoney, MONEY_MAX, parseMoney, subtractMoney } from '@ten98/runtim
 import { companyNotFound } from '../src/server/tenancy.ts';
 import { freshDatabase, type TestDatabase } from './helpers/database.ts';
 import { addLedger, asAdmin, browser, chart, createCompany, invite, post, setupOwner, type Chart, type Line, type Member } from './helpers/ledger.ts';
-import { toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry.ts';
+import { toVoucherBody, type BillDraft, type BodyInput, type EntryLine } from '../src/lib/voucher-entry/index.ts';
 
 /**
  * The voucher entry reads (docs/LEDGER.md, "Voucher entry reads"): the previewed next number, the balance preview and the

@@ -2,9 +2,10 @@ import { Alert, EntryGrid, Stack, StatusLine, Text, type EntryCommitEvent, type 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney, subtractMoney, type MoneyExponent } from '@ten98/runtime/browser'
 import { errMsg } from '../../lib/api'
+import { longDate } from '../../lib/reports'
 import type { BillKind, Side, VoucherKind } from '../../lib/ledger'
 import {
-  againstAmount, allocated, billDueDate, billKindOrder, billKindTitles, billsCover, entryDateText, nextBillRow,
+  againstAmount, allocated, billDueDate, billKindOrder, billKindTitles, billsCover, nextBillRow,
   parseCreditPeriod, parseEntryAmount, settleable, type BillDraft, type PendingChoice,
 } from '../../lib/voucher-entry'
 import { DialogKeys } from '../KeyboardShell'
@@ -16,7 +17,7 @@ const names = (method: string) => method === 'new_ref' || method === 'advance'
 
 const toRows = (drafts: readonly BillDraft[], date: string): EntryGridRow[] => drafts.map(draft => {
   const period = parseCreditPeriod(draft.credit, date)
-  const due = names(draft.method) && 'value' in period ? entryDateText(billDueDate(date, period.value)) : ''
+  const due = names(draft.method) && 'value' in period ? longDate(billDueDate(date, period.value)) : ''
   return { key: draft.key, values: { method: draft.method, bill: draft.bill, name: draft.name, credit: draft.credit, due, amount: draft.amount, side: draft.side } }
 })
 const fromRows = (rows: readonly EntryGridRow[]): BillDraft[] => rows.map(row => ({
@@ -66,7 +67,7 @@ export function BillPanel({ companyId, kind, date, line, previous, creditDefault
 
   const billOptions = useMemo(() => (pending ? settleable(pending, line.side) : []).map(bill => ({
     value: bill.billId, label: bill.name,
-    description: `Dated ${bill.billDate ? entryDateText(bill.billDate) : 'at the opening'}${bill.dueDate ? `, due ${entryDateText(bill.dueDate)}` : ''}, pending ${formatMoney(bill.pending < 0n ? -bill.pending : bill.pending, exponent)} ${bill.pending < 0n ? 'Cr' : 'Dr'}`,
+    description: `Dated ${bill.billDate ? longDate(bill.billDate) : 'at the opening'}${bill.dueDate ? `, due ${longDate(bill.dueDate)}` : ''}, pending ${formatMoney(bill.pending < 0n ? -bill.pending : bill.pending, exponent)} ${bill.pending < 0n ? 'Cr' : 'Dr'}`,
   })), [pending, line.side, exponent])
 
   const columns = useMemo<EntryGridColumn[]>(() => [

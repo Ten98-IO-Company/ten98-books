@@ -2,14 +2,16 @@ import { Alert, Button, Field, Inline, Input, PageHeader, Stack, StatusLine, Tex
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
 import type { Company } from '../../lib/company'
-import { descendantIds, type GroupRow, type LedgerRow } from '../../lib/masters'
+import type { GroupRow, LedgerRow } from '../../lib/masters'
 import type { CreditPeriod, VoucherType } from '../../lib/ledger'
 import { resolveTyped } from '../../lib/lookup-entry'
+import { longDate } from '../../lib/reports'
+import { useApp } from '../../lib/app-context'
 import {
-  afterDate, afterDeclinedAccept, appendedLine, balanceText, bodyLines, cashRuleProblem, creditPeriodText, detailSteps, differenceText,
-  draftDirty, entryDateLabel, entryDateProblem, entryDateText, groupedAmount, isBlankLine, isCompleteLine, kindTitles, layoutTitles, ledgerOptions,
+  afterDate, afterDeclinedAccept, amountText, appendedLine, balanceText, bodyLines, bodyProblems, cashInHandIds, cashRuleProblem, creditPeriodText,
+  detailSteps, differenceText, draftDirty, entryDateLabel, entryDateProblem, isBlankLine, isCompleteLine, kindTitles, layoutTitles, ledgerOptions,
   lineKey, listEnd, minorOf, negativeCashWarning, parseEntryDate, particularsSide, particularsTotal, proposedAmount, readLayout, refusalPlace,
-  writeLayout, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
+  relayLines, writeLayout, type EntryFocus, type EntryKind, type EntryLayout, type EntryLine, type FocusOrigin,
 } from '../../lib/voucher-entry'
 import { sessionStore, writeStored } from '../../lib/working-date'
 import { useAppCommand } from '../KeyboardShell'
@@ -26,7 +28,7 @@ import { useVoucherDraft } from './useVoucherDraft'
 import { VoucherHeader } from './VoucherHeader'
 
 type Field = 'date' | 'account' | 'total' | 'narration'
-export const lastTypeKey = (companyId: string) => `voucherType:${companyId}`
+export const lastTypeKey = (userId: string, companyId: string) => `voucherType:${userId}:${companyId}`
 
 const controlOf = (root: HTMLElement | null, field: Field) =>
   root?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-voucher-field="${field}"] input:not([type="hidden"]), [data-voucher-field="${field}"] textarea`) ?? null
@@ -49,7 +51,8 @@ export function VoucherEntryScreen({ company, ledgers, groups, types, start, wor
 
 function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingDate }: Parameters<typeof VoucherEntryScreen>[0]) {
   const exponent = company.currencyMinorUnits as MoneyExponent
-  const draft = useVoucherDraft(company.id, { kind: start.kind, layout: readLayout(start.kind, sessionStore, company.id), date: start.date }, exponent)
+  const userId = useApp().me.user.id
+  const draft = useVoucherDraft(userId, company.id, { kind: start.kind, layout: readLayout(start.kind, sessionStore, userId, company.id), date: start.date }, exponent)
   const { state, dispatch, locked } = draft
   // The latest state, for commands and grid events that run before React renders the last change.
   const latest = useRef(state)
@@ -63,11 +66,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const entryLedgers = useMemo(() => ledgers.map(ledger => ({ id: ledger.id, name: ledger.name, secondLanguageName: ledger.secondLanguageName, cashOrBank: ledger.cashOrBank })), [ledgers])
   const ledgerById = useMemo(() => new Map(ledgers.map(ledger => [ledger.id, ledger])), [ledgers])
   // Cash-in-hand ledgers (not bank): a credit taking one below zero warns (observed).
-  const cashInHand = useMemo(() => {
-    const ids = new Set<string>()
-    for (const group of groups) if (group.systemKey === 'cash_in_hand') { ids.add(group.id); for (const id of descendantIds(groups, group.id)) ids.add(id) }
-    return new Set(ledgers.filter(ledger => ledger.groupId !== null && ids.has(ledger.groupId)).map(ledger => ledger.id))
-  }, [groups, ledgers])
+  const cashInHand = useMemo(() => cashInHandIds(groups, ledgers), [groups, ledgers])
   const typeOf = (kind: EntryKind) => types.find(type => type.kind === kind && type.systemKey !== null) ?? types.find(type => type.kind === kind)
   const voucherType = typeOf(state.kind)
 
@@ -191,7 +190,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   const lineSide = (line: EntryLine) => (latest.current.layout === 'single' ? particularsSide(latest.current.kind) : line.side || 'Dr')
   const panel: EntryGridPanel = {
-    title: row => { const ledger = ledgerById.get(row.values.ledger ?? ''); return `Bills of ${ledger?.name ?? 'the line'}, up to ${groupedAmount(minorOf(row.values.amount ?? '', exponent), exponent)} ${lineSide(fromGridRows([row])[0])}` },
+    title: row => { const ledger = ledgerById.get(row.values.ledger ?? ''); return `Bills of ${ledger?.name ?? 'the line'}, up to ${amountText(minorOf(row.values.amount ?? '', exponent), exponent)} ${lineSide(fromGridRows([row])[0])}` },
     render: (row, close) => {
       const line = fromGridRows([row])[0]
       const ledger = ledgerById.get(line.ledger)
@@ -226,7 +225,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       : latest.current.layout === 'single' ? { field: 'account' } : { cell: { row: latest.current.lines[0]?.key ?? '', column: 'ledger' } }
     if (inGrid) grid.current?.commit()
     setDateError(undefined)
-    setDateText(entryDateText(latest.current.date))
+    setDateText(longDate(latest.current.date))
     const control = controlOf(root.current, 'date')
     control?.focus()
     window.setTimeout(() => control?.select(), 0)
@@ -245,24 +244,30 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
 
   // ---- Type and layout ----
 
-  function switchTo(kind: EntryKind, layout: EntryLayout) {
+  /** A type or layout switch, re-laid by `relayLines`; one that would reverse a side or drop a row is refused and said why. */
+  function switchTo(kind: EntryKind, layout: EntryLayout): boolean {
     grid.current?.commit()
-    const next = { ...latest.current, kind, layout }
-    dispatch({ type: 'switch', kind, layout, exponent })
-    writeStored(sessionStore, lastTypeKey(company.id), kind)
     setTypeList(false); setModeList(false); setPrompt(false); setFailure(null)
+    const relaid = relayLines(latest.current, { kind, layout }, exponent, nextKey, ledgerId => ledgerById.get(ledgerId)?.cashOrBank === true)
+    if ('refused' in relaid) { setAnnounced(relaid.refused); return false }
+    latest.current = { ...latest.current, ...relaid }
+    dispatch({ type: 'relaid', relaid })
+    writeStored(sessionStore, lastTypeKey(userId, company.id), kind)
     // The cursor goes to line 1's ledger with its list open (observed); single entry starts on the Account.
-    window.setTimeout(() => focus(layout === 'single' ? { field: 'account' } : { cell: { row: latest.current.lines[0]?.key ?? '', column: 'ledger', open: true } }), 0)
-    latest.current = next
+    window.setTimeout(() => focus(firstField()), 0)
+    return true
   }
-  const switchType = (kind: EntryKind) => switchTo(kind, readLayout(kind, sessionStore, company.id))
-  function switchLayout(layout: EntryLayout) { writeLayout(latest.current.kind, layout, sessionStore, company.id); switchTo(latest.current.kind, layout) }
+  const switchType = (kind: EntryKind) => switchTo(kind, readLayout(kind, sessionStore, userId, company.id))
+  function switchLayout(layout: EntryLayout) { if (switchTo(latest.current.kind, layout)) writeLayout(latest.current.kind, layout, sessionStore, userId, company.id) }
 
   // ---- Accept and save ----
 
   function problemBeforeSave(): { message: string; focus: EntryFocus } | null {
     const current = latest.current
     const lines = bodyLines(current, exponent)
+    const problems = bodyProblems({ ...current, idempotencyKey: 'check-only', voucherTypeId: voucherType?.id ?? '' }, exponent)
+    const incomplete = problems.find(problem => problem.line && problem.column)
+    if (incomplete?.line && incomplete.column) return { message: incomplete.message, focus: { cell: { row: incomplete.line, column: incomplete.column, edit: true } } }
     if (current.layout === 'single' && current.account === '') return { message: 'Choose the Account: the cash or bank ledger of this voucher.', focus: { field: 'account' } }
     if (!lines.length || (current.layout === 'double' && lines.length < 2)) return { message: 'Enter the lines of the voucher: a ledger and an amount on each.', focus: firstLine() }
     if (current.layout === 'double') {
@@ -277,6 +282,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     }
     const date = entryDateProblem(current.date, company, workingDate)
     if (date) return { message: date, focus: { field: 'date' } }
+    if (problems[0]) return { message: problems[0].message, focus: firstField() }
     return null
   }
 
@@ -295,7 +301,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
       const { voucher, warnings } = outcome
       const differs = expected !== null && voucher.number !== expected ? ` (No. ${expected} was shown; another voucher took it first)` : ''
       const notes = warnings.length ? ` ${warnings.length === 1 ? 'Note' : 'Notes'}: ${warnings.map(warning => warning.code.replaceAll('_', ' ')).join(', ')}.` : ''
-      setSaved(`Saved ${kindTitles[current.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${entryDateText(voucher.date)}${differs}.${notes}`)
+      setSaved(`Saved ${kindTitles[current.kind].toLowerCase()} No. ${voucher.number ?? 'none'} dated ${longDate(voucher.date)}${differs}.${notes}`)
       onWorkingDate(voucher.date)
       dispatch({ type: 'next' })
       setRefresh(value => value + 1)
@@ -307,7 +313,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     const place = refusalPlace(outcome.code)
     const message = place === 'maybe-saved' ? 'This voucher may already be saved under its key. Open the day book on its date to check before entering it again.' : outcome.message
     setFailure({ message })
-    if (place === 'date') { setDateText(entryDateText(current.date)); setDateError(outcome.message); window.setTimeout(() => controlOf(root.current, 'date')?.focus(), 0) }
+    if (place === 'date') { setDateText(longDate(current.date)); setDateError(outcome.message); window.setTimeout(() => controlOf(root.current, 'date')?.focus(), 0) }
     else if (place === 'difference') { const last = [...current.lines].reverse().find(isCompleteLine); if (last) focusSoon({ cell: { row: last.key, column: 'amount', edit: true } }) }
     else if (place === 'cash-rule') focusSoon(current.layout === 'single' ? { field: 'account' } : firstLine())
   }
@@ -392,7 +398,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
   const difference = state.layout === 'double' ? differenceText(state.lines, exponent) : null
   const accountBalance = state.account && balances.has(state.account) ? balanceText(balances.get(state.account)!, exponent) : null
   const title = kindTitles[state.kind]
-  const summary = `${title} dated ${entryDateText(state.date)}${state.layout === 'single' ? `, ${groupedAmount(total, exponent)} ${state.kind === 'payment' ? 'from' : 'into'} ${ledgerById.get(state.account)?.name ?? 'the account'}` : ''}, ${bodyLines(state, exponent).length} lines.`
+  const summary = `${title} dated ${longDate(state.date)}${state.layout === 'single' ? `, ${amountText(total, exponent)} ${state.kind === 'payment' ? 'from' : 'into'} ${ledgerById.get(state.account)?.name ?? 'the account'}` : ''}, ${bodyLines(state, exponent).length} lines.`
 
   return <Stack gap={5} ref={root as never}>
     <PageHeader eyebrow={`Voucher entry · ${layoutTitles[state.layout]}`} title={title}
@@ -414,7 +420,7 @@ function Entry({ company, ledgers, groups, types, start, workingDate, onWorkingD
     <LinesGrid kind={state.kind} layout={state.layout} number={number} lines={state.lines} ledgers={entryLedgers} balances={balances} exponent={exponent}
       locked={locked} apiRef={grid} panel={panel} onLines={setLines} createRow={createRow} onEnd={onEnd} onCellCommit={onCellCommit} announce={setAnnounced} />
     {state.layout === 'single' && <Stack data-voucher-field='total'>
-      <Field label='Total' description='Enter goes on to the narration.'><Input readOnly value={groupedAmount(total, exponent)} dir='ltr' /></Field>
+      <Field label='Total' description='Enter goes on to the narration.'><Input readOnly value={amountText(total, exponent)} dir='ltr' /></Field>
     </Stack>}
     <Stack data-voucher-field='narration'>
       <Field label='Narration' description='Enter asks to save; Shift+Enter starts a new line.'>
