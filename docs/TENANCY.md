@@ -7,7 +7,7 @@ How companies, teams and roles map onto the Ten98 workspace mechanism, and how c
 - A company is a workspace from `@ten98/runtime`'s team mechanism (`createWorkspaceTeam` over the shared `workspace`, `membership` and `workspace_invitation` tables). Its id is the workspace id, its name is the workspace name, and its team is the workspace's members.
 - The books settings (base currency and its minor units, financial-year start, books beginning, time zone, locked-through date) are the `company` row whose `company_id` is the workspace id. Every accounting table carries that `company_id` through composite foreign keys.
 - A workspace without a `company` row is a company that is **not set up yet**. First-user setup creates one; its owner is led straight to the company settings form, and its books exist only once that form is saved.
-- A person with several companies is a member of several workspaces. Changing company is changing workspace: the company switcher in the sidebar, or the "Change company" command (`F3` in the classic keymap, `Alt+K` in web-safe).
+- A person with several companies is a member of several workspaces. Changing company is changing workspace: the company switcher in the sidebar (the design system's workspace switcher: a select with the person's role under it, and a "Create company" link; with no company it says "No companies yet" beside that link), or the "Change company" command (`F3` in the classic keymap, `Alt+K` in web-safe).
 - Accounting projects (a job, site or engagement inside one company) are a later milestone (M2, with cost centres). The `project` table is dormant until then: it holds no rows, the application role has no privileges on it, and accounting projects will add a `company_id` with composite keys and forced row-level security to it like every other accounting table.
 
 ## Roles
@@ -34,6 +34,15 @@ A company comes into being in exactly two ways: first-user setup (which creates 
 | `/api/companies/<id>/...` | member | Masters, vouchers and reports ([LEDGER.md](LEDGER.md), [REPORTS.md](REPORTS.md)). |
 
 A user who is not a member of the company gets the same 404 "not found" as for a company that does not exist, on every route. A member of a company that is not set up yet gets 409 with code `not_set_up` on every company and books route (settings, masters, vouchers, reports and exports) that the member's role may use: reads for every member, writes for owners, admins and editors. The role is checked first, so a viewer's write gets the same 404 "not found" as on a set-up company. The ledger and reports answer it from the one place they load the company (`ledgerContext`); the code is in `ledgerErrorCodes` (`src/lib/ledger.ts`).
+
+## Theme in this browser
+
+The account's saved theme (light, dark or system, set on the account page) is applied to the page by the design system's `useTheme`, called once in the signed-in shell (`src/lib/account-presentation.tsx`). The hook also keeps the last theme in this browser's `localStorage` (key `ten98-theme`, the theme value only: no name, email or other preference), and a script in the document head (`createThemeScript`, `src/routes/__root.tsx`) applies it before the first paint, so a dark theme does not flash light. In production the script runs under the nonce the content security policy already issues (`src/router.tsx`); the policy has no `'unsafe-inline'` for scripts. Known until `@ten98/ui` 0.39.2 (the script will then act once per document): the router can run the script again on client navigations, so with blocked browser storage or a stale cached value the theme can change for a frame on some page changes, before the account's value is applied again. Seen on the production build (a page change from Home to Masters logged `system`, then `dark`); the app has no workaround of its own.
+
+- Until the signed-in user's account has loaded, the cached theme applies, then the account's value wins.
+- After sign-out the sign-in screen keeps the last theme seen in this browser (it no longer returns to the system setting).
+- A different user on the same browser sees the previous user's theme until their account loads.
+- A browser that blocks storage shows the system setting until the account loads.
 
 ## Isolation
 

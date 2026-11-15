@@ -1,5 +1,5 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router';
-import { AuthFrameProvider, ToastProvider } from '@ten98/ui';
+import { AuthFrameProvider, createThemeScript, ToastProvider } from '@ten98/ui';
 import { AppBrand } from '@ten98/ui/app';
 import appTokens from '@ten98/ui/app-tokens.css?url';
 import styles from '@ten98/ui/styles.css?url';
@@ -12,6 +12,10 @@ export const Route = createRootRoute({
   head: () => ({
     meta: [{ charSet: 'utf-8' }, { name: 'viewport', content: 'width=device-width, initial-scale=1' }, { title: 'Books' }],
     links: [appTokens, styles, appStyles, productStyles].map(href => ({ rel: 'stylesheet', href })),
+    // Sets the cached theme before the first paint. TanStack Start gives head scripts the response's nonce, so the policy below needs no
+    // 'unsafe-inline'. Until the package acts once per document (@ten98/ui 0.39.2), the router can run this script again on client
+    // navigations: with blocked storage or a stale cached value the theme can change for a frame on some page changes.
+    scripts: [{ children: createThemeScript() }],
   }),
   // Server-rendered documents only: the nonce exists in production SSR (src/router.tsx), server routes answer with
   // their own Response, and the client build deletes this option together with the getConfig import.
@@ -24,5 +28,6 @@ export const Route = createRootRoute({
     'cache-control': 'no-store',
     ...(getConfig().appUrl.startsWith('https:') ? { 'strict-transport-security': 'max-age=31536000' } : {}),
   } : {},
-  component: () => <html lang='en'><head><HeadContent /></head><body><ToastProvider><AuthFrameProvider brand={<AppBrand product='Books' />} aside={authStory}><Outlet /></AuthFrameProvider></ToastProvider><Scripts /></body></html>,
+  // suppressHydrationWarning: the theme script sets data-theme on <html> before React hydrates, which the server markup lacks.
+  component: () => <html lang='en' suppressHydrationWarning><head><HeadContent /></head><body><ToastProvider><AuthFrameProvider brand={<AppBrand product='Books' />} aside={authStory}><Outlet /></AuthFrameProvider></ToastProvider><Scripts /></body></html>,
 });

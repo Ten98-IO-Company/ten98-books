@@ -1,5 +1,6 @@
 import { Button, Dialog, SelectableList } from '@ten98/ui'
 import type { CompanySummary } from '../lib/app-context'
+import { roleLabels } from '../lib/company'
 import { DialogKeys } from './KeyboardShell'
 
 /** Changes company from the keyboard: arrow keys move, Enter opens. Each company is its own workspace (D-03). */
@@ -26,4 +27,3 @@ const listLabel = 'Companies'
 /** The list's tab stop (the current company, else the first): focus starts there when the dialog opens. */
 const listStop = { get current() { return document.querySelector<HTMLElement>(`dialog[open] [role="listbox"][aria-label="${listLabel}"] [role="option"][tabindex="0"]`) } }
 
-export const roleLabels: Record<CompanySummary['role'], string> = { owner: 'Owner', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' }
