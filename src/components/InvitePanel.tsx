@@ -1,4 +1,4 @@
-import { InvitationAcceptFlow } from '@ten98/ui';
+import { DisplayFormatProvider, InvitationAcceptFlow, useDisplayFormat } from '@ten98/ui';
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, errMsg } from '../lib/api';
 
@@ -7,12 +7,6 @@ type AcceptResult = { workspaceId: string; created: boolean; email: string };
 
 function is401(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
-}
-
-function formatDate(value: string | Date): string {
-  const iso = String(value);
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString();
 }
 
 type InvitePanelProps = {
@@ -26,10 +20,12 @@ type InvitePanelProps = {
 };
 
 export function InvitePanel(props: InvitePanelProps) {
-  return <InvitePanelContent key={`${props.token}:${props.signedInEmail ?? ''}`} {...props} />;
+  // Signed out: no saved preferences, so dates read in the browser's own locale and time zone.
+  return <DisplayFormatProvider><InvitePanelContent key={`${props.token}:${props.signedInEmail ?? ''}`} {...props} /></DisplayFormatProvider>;
 }
 
 function InvitePanelContent(props: InvitePanelProps) {
+  const { date: formatDate } = useDisplayFormat();
   const { token, signedInEmail, onSignIn, onCancel } = props;
   const [info, setInfo] = useState<InspectInfo | null>(null);
   const [loading, setLoading] = useState(true);

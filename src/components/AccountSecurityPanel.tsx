@@ -1,9 +1,9 @@
-import { Alert, Button, PasswordChangeFlow, SessionListFlow, Stack, StatusLine, TwoFactorSetupFlow } from '@ten98/ui'
+import { Alert, Button, DisplayFormatProvider, PasswordChangeFlow, SessionListFlow, Stack, StatusLine, TwoFactorSetupFlow, useDisplayFormat } from '@ten98/ui'
 import type { PasswordChangeValues, TwoFactorSetupStage } from '@ten98/ui'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, errMsg } from '../lib/api'
 import { useAccountPresentation } from '../lib/account-presentation'
-import { accountLocaleMapping, accountPreferencesDefaults } from '../lib/account-preferences'
+import { accountLocaleMapping, accountPreferencesDefaults, canonicalAccountTimeZone } from '../lib/account-preferences'
 
 type SessionInfo = { id: string; createdAt: string; expiresAt: string; userAgent: string | null; current: boolean }
 type SecurityData = { user: { id: string; name: string; email: string; twoFactorEnabled: boolean }; sessions: SessionInfo[]; hasPassword: boolean }
@@ -17,9 +17,13 @@ const setupKey = (uri: string): string => { try { return new URL(uri).searchPara
  * Request adapter around the shared password, two-factor and session flows. Secrets (setup URI, recovery codes) stay
  * in memory only and are dropped on any failure, reload or sign-out; the server contract is account-security.ts.
  */
-export function AccountSecurityPanel({ expectedUserId, onUnauthorized }: { expectedUserId: string; onUnauthorized: () => void }) {
-  const presentation = useAccountPresentation(), preferences = presentation?.data?.user.id === expectedUserId ? presentation.data.preferences : accountPreferencesDefaults
-  const formatDate = (value: string | Date) => { const date = new Date(value); if (Number.isNaN(date.getTime())) return String(value); try { return new Intl.DateTimeFormat(accountLocaleMapping(preferences.locale).formatLocale, { timeZone: preferences.timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(date) } catch { return String(value) } }
+export function AccountSecurityPanel(props: { expectedUserId: string; onUnauthorized: () => void }) {
+  const presentation = useAccountPresentation(), preferences = presentation?.data?.user.id === props.expectedUserId ? presentation.data.preferences : accountPreferencesDefaults
+  return <DisplayFormatProvider locale={accountLocaleMapping(preferences.locale).formatLocale} timeZone={canonicalAccountTimeZone(preferences.timeZone) ?? 'UTC'}><AccountSecurityContent {...props} /></DisplayFormatProvider>
+}
+
+function AccountSecurityContent({ expectedUserId, onUnauthorized }: { expectedUserId: string; onUnauthorized: () => void }) {
+  const { dateTime: formatDate } = useDisplayFormat()
   const [data, setData] = useState<SecurityData | null>(null)
   const [loadErr, setLoadErr] = useState('')
   const [busy, setBusy] = useState<Op | null>(null)

@@ -96,7 +96,7 @@ export function parentChoices(centres: readonly CostCentreRow[], categoryId: str
   const eligible = centres.filter(centre => centre.id !== existing?.id && !below.has(centre.id) && (centre.categoryId === categoryId || centre.id === existing?.parentId));
   const rows = eligible.map(centre => ({ centre, path: centrePath(centres, centre.id) })).sort((left, right) => collator.compare(left.path.join(' › '), right.path.join(' › ')));
   return [
-    { value: topLevelChoice, label: 'Top level', description: 'Not under another centre' },
+    { value: topLevelChoice, label: 'Top level', description: 'Not under another centre', builtIn: true },
     ...rows.map(({ centre, path }) => ({ value: centre.id, label: centre.name, description: `${path.length > 1 ? `Under ${path.slice(0, -1).join(' › ')} · ` : ''}${centre.categoryName}` })),
   ];
 }

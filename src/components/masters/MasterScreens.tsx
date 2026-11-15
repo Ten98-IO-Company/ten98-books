@@ -1,4 +1,4 @@
-import { Alert, Button, DataTable, EmptyState, PageHeader, Stack, StatusLine, Text } from '@ten98/ui'
+import { Alert, Button, DataTable, DisplayFormatProvider, EmptyState, PageHeader, Stack, StatusLine, Text, useDisplayFormat } from '@ten98/ui'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useState } from 'react'
 import type { MoneyExponent } from '@ten98/runtime/browser'
@@ -82,10 +82,16 @@ export function MasterHistory({ kind, id }: { kind: MasterKind; id: string }) {
  * when and what, newest first. `name` is the master's present name when the screen knows it; a deleted one is named from
  * its last entry. Escape (the shell's go-back command, the only Escape command here) returns to the row it was opened from.
  */
-export function RevisionHistory({ noun, path, name, back, describe }: {
-  noun: string; path: string; name?: string; back: { to: string; params: Record<string, string> }; describe: (row: RevisionRow) => string[]
-}) {
+export function RevisionHistory(props: HistoryProps) {
   const company = useCompany()
+  return <DisplayFormatProvider locale='en-GB' timeZone={company.timeZone}><RevisionTable {...props} /></DisplayFormatProvider>
+}
+
+type HistoryProps = { noun: string; path: string; name?: string; back: { to: string; params: Record<string, string> }; describe: (row: RevisionRow) => string[] }
+
+function RevisionTable({ noun, path, name, back, describe }: HistoryProps) {
+  const company = useCompany()
+  const { dateTime } = useDisplayFormat()
   const { me, unauthorized } = useApp()
   const leave = useLeave(back)
   const [revisions, setRevisions] = useState<RevisionRow[] | null>(null)
@@ -102,7 +108,6 @@ export function RevisionHistory({ noun, path, name, back, describe }: {
   }, [company.id, path])
 
   const shownName = name ?? ((revisions?.at(-1)?.after ?? revisions?.at(-1)?.before) as { name?: string } | null | undefined)?.name
-  const formatter = useMemo(() => new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: company.timeZone }), [company.timeZone])
   const rows = useMemo(() => [...(revisions ?? [])].reverse(), [revisions])
 
   return <Stack gap={4}>
@@ -114,7 +119,7 @@ export function RevisionHistory({ noun, path, name, back, describe }: {
     {revisions && <DataTable<RevisionRow> ariaLabel={`History of this ${noun}`} rows={rows} rowKey={row => row.id} searchable={false} sortable={false} pagination={false} density='compact' responsive='stack'
       emptyTitle='No history yet' emptyDescription={`Nothing has changed this ${noun}.`}
       columns={[
-        { key: 'when', header: 'When', render: row => <Text as='time' dateTime={row.at}>{formatter.format(new Date(row.at))}</Text>, wrap: true },
+        { key: 'when', header: 'When', render: row => <Text as='time' dateTime={row.at}>{dateTime(row.at)}</Text>, wrap: true },
         // The server names every member; `actorName` is null once that user no longer exists.
         { key: 'who', header: 'Who', render: row => actorLabel(row.actorId, row.actorName, me.user), wrap: true },
         { key: 'action', header: 'What happened', render: row => actionTitles[row.action] },

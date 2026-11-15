@@ -1,4 +1,6 @@
+import { useMemo, useState } from 'react'
 import { chordFromEvent, Combobox, Stack, useShortcutCommands, type ComboboxProps } from '@ten98/ui'
+import { filterChoices } from '../../lib/lookup-entry'
 import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
 
 /**
@@ -6,7 +8,8 @@ import { isChoice, lookupKeyAction, type Choice } from '../../lib/masters'
  * Enter it closes its list and drops typed text that no row was highlighted for, without a word. Here anything that is
  * not an enabled option is ignored, and Enter on typed text with no highlighted row goes to `onTypedEnter` first (the
  * form picks the one choice the text names, or shows an error on this field).
- * What the text means is also decided when the field is left or the form is saved (`resolveLookup` in src/lib/masters.ts).
+ * What the text means is also decided when the field is left or the form is saved (`resolveTyped` in src/lib/lookup-entry.ts).
+ * The list is filtered here, not by the combobox, because names compare under the name match key (`filterChoices`).
  *
  * The stock combobox also keeps every Escape to itself, even with its list closed, and a list that is open swallows the
  * keys the form binds to accept, so what each key does is decided by `lookupKeyAction` (src/lib/masters.ts) and handed on
@@ -20,6 +23,8 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
   onTypedEnter?: (text: string, advance: boolean) => 'picked' | 'error' | 'unchanged'
 }) {
   const registered = useShortcutCommands()
+  const [typed, setTyped] = useState('')
+  const listed = useMemo(() => filterChoices(options, typed), [options, typed])
   return <Stack as='div' onKeyDownCapture={event => {
     const input = event.target as HTMLInputElement
     if (input.getAttribute('role') !== 'combobox') return
@@ -37,7 +42,7 @@ export function LookupField({ options, onValueChange, onTypedEnter, ...rest }: O
     window.setTimeout(() => accept?.run(), 0)
   }}>
     {/* allowCustom is true only so the field's own `error` shows (the stock combobox hides it for closed lists unless its own check fails); the guard below keeps free text from ever becoming a value. */}
-    <Combobox {...rest} options={[...options]} allowCustom
+    <Combobox {...rest} options={[...listed]} valueLabel={options.find(option => option.value === rest.value)?.label} filter={false} onInputChange={setTyped} allowCustom
       // The combobox reports typed text and a picked row's value alike, and a picked row's value can equal what was typed (a typed
       // "no" for the value no), so a value is taken whenever it is an enabled option's.
       onValueChange={value => { if (isChoice(options, value)) onValueChange(value) }} />
